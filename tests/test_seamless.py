@@ -8,7 +8,7 @@ from app.patterns.dot import DotPattern
 from app.patterns.herringbone import HerringbonePattern
 from app.patterns.stripe import StripePattern
 from app.render.svg import render_document
-from app.validate.seamless import seamless_diff
+from app.validate.seamless import edge_seam, seamless_diff
 
 SVG_NS = "{http://www.w3.org/2000/svg}"
 
@@ -46,6 +46,21 @@ def test_seamless_diff_detects_vertical_discontinuity():
     tile[8:, :] = 255
     _, seam_y = seamless_diff(tile)
     assert seam_y > 100
+
+
+# --- edge_seam (strict opposite-edge metric) ------------------------------
+
+def test_edge_seam_zero_when_opposite_edges_match():
+    tile = np.zeros((8, 8, 4), dtype=np.uint8)
+    tile[:, 3:5] = 200  # interior feature; col 0 and col -1 both empty
+    assert edge_seam(tile) == (0.0, 0.0)
+
+
+def test_edge_seam_detects_mismatched_edges():
+    tile = np.zeros((8, 8, 4), dtype=np.uint8)
+    tile[:, -1] = 255  # right edge differs from left
+    seam_x, _ = edge_seam(tile)
+    assert seam_x > 100
 
 
 # --- repeat lattice -------------------------------------------------------

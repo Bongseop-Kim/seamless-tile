@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.api.schemas.common import RepeatMode, validate_colors
+from app.api.schemas.common import RepeatMode, validate_colors, validate_texture
 
 
 class DotRequest(BaseModel):
@@ -11,6 +11,7 @@ class DotRequest(BaseModel):
     texture: str | None = None
 
     _colors = field_validator("colors")(validate_colors)
+    _texture = field_validator("texture")(validate_texture)
 
     @model_validator(mode="after")
     def _radius_fits(self) -> "DotRequest":

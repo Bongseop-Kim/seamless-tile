@@ -7,18 +7,21 @@ PREVIEW_REPEATS = 4
 _PATTERN_ID = "tile"
 
 
-def render_document(pattern: Pattern, doc_mm: float | None = None) -> str:
+def document_size_mm(pattern: Pattern, doc_mm: float | None = None) -> float:
+    if doc_mm is not None:
+        return doc_mm
     cell_w, cell_h = pattern.base_size()
-    if doc_mm is None:
-        size = max(cell_w, cell_h) * PREVIEW_REPEATS
-    else:
-        size = doc_mm
-    pattern_def = pattern.to_pattern_def(_PATTERN_ID)
+    return max(cell_w, cell_h) * PREVIEW_REPEATS
+
+
+def render_document(pattern: Pattern, doc_mm: float | None = None) -> str:
+    size = document_size_mm(pattern, doc_mm)
+    defs = pattern.texture_filter_def(_PATTERN_ID) + pattern.to_pattern_def(_PATTERN_ID)
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{fmt(size)}mm" height="{fmt(size)}mm" '
         f'viewBox="0 0 {fmt(size)} {fmt(size)}">'
-        f"<defs>{pattern_def}</defs>"
+        f"<defs>{defs}</defs>"
         f'<rect width="{fmt(size)}" height="{fmt(size)}" fill="url(#{_PATTERN_ID})"/>'
         "</svg>"
     )

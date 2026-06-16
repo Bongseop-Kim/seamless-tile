@@ -1,5 +1,6 @@
 """Pattern definition endpoints: create (per type) and fetch as SVG."""
 
+import copy
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,23 +8,28 @@ from fastapi.responses import Response
 
 from app.api.deps import get_store
 from app.api.schemas.check import CheckRequest
+from app.api.schemas.colorway import ColorwayRequest
 from app.api.schemas.dot import DotRequest
 from app.api.schemas.herringbone import HerringboneRequest
 from app.api.schemas.stripe import StripeRequest
-from app.domain.colorway import Colorway
+from app.domain.colorway import Colorway, resolve_palette
 from app.domain.pattern import Pattern
 from app.patterns.check import CheckPattern
 from app.patterns.dot import DotPattern
 from app.patterns.herringbone import HerringbonePattern
 from app.patterns.stripe import StripePattern
 from app.render.svg import render_document
+from app.texture import texture_from_name
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
 
 SVG_MEDIA_TYPE = "image/svg+xml"
 
 
-def _store_and_respond(pattern: Pattern, store) -> dict[str, str]:
+def _store_and_respond(
+    pattern: Pattern, store, texture: str | None = None
+) -> dict[str, str]:
+    pattern.texture = texture_from_name(texture)
     pattern_id = uuid.uuid4().hex
     store[pattern_id] = pattern
     return {"id": pattern_id, "svg": render_document(pattern)}
@@ -37,7 +43,7 @@ def create_stripe(req: StripeRequest, store=Depends(get_store)) -> dict[str, str
         widths_mm=req.widths_mm,
         angle=req.angle,
     )
-    return _store_and_respond(pattern, store)
+    return _store_and_respond(pattern, store, req.texture)
 
 
 @router.post("/check")
@@ -48,7 +54,7 @@ def create_check(req: CheckRequest, store=Depends(get_store)) -> dict[str, str]:
         widths_mm=req.widths_mm,
         opacity=req.opacity,
     )
-    return _store_and_respond(pattern, store)
+    return _store_and_respond(pattern, store, req.texture)
 
 
 @router.post("/dot")
@@ -59,7 +65,7 @@ def create_dot(req: DotRequest, store=Depends(get_store)) -> dict[str, str]:
         colorway=Colorway(req.colors),
         repeat=req.repeat,
     )
-    return _store_and_respond(pattern, store)
+    return _store_and_respond(pattern, store, req.texture)
 
 
 @router.post("/herringbone")
@@ -72,7 +78,23 @@ def create_herringbone(
         stroke_mm=req.stroke_mm,
         pitch_mm=req.pitch_mm,
     )
-    return _store_and_respond(pattern, store)
+    return _store_and_respond(pattern, store, req.texture)
+
+
+@router.post("/{pattern_id}/colorway")
+def recolor_pattern(
+    pattern_id: str, req: ColorwayRequest, store=Depends(get_store)
+) -> dict[str, str]:
+    """Recolor an existing pattern into a new colorway, reusing its geometry."""
+    pattern = store.get(pattern_id)
+    if pattern is None:
+        raise HTTPException(status_code=404, detail="pattern not found")
+    colors = req.colors if req.colors is not None else list(resolve_palette(req.palette))
+    recolored = copy.copy(pattern)  # shallow: same geometry, new colorway
+    recolored.colorway = Colorway(colors)
+    new_id = uuid.uuid4().hex
+    store[new_id] = recolored
+    return {"id": new_id, "svg": render_document(recolored)}
 
 
 @router.get("/{pattern_id}")

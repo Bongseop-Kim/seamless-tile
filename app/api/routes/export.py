@@ -1,12 +1,16 @@
-"""Export endpoint with format negotiation. Phase 1 serves SVG only;
-png/tiff return 501 until the resvg raster pipeline lands (Phase 2)."""
+"""Export endpoint with format negotiation: SVG (vector) or PNG/TIFF raster.
 
-from fastapi import APIRouter, Depends, HTTPException
+Raster goes through resvg (renders SVG filters faithfully) then Pillow stamps
+physical DPI. Returns 503 if no renderer binary is installed."""
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.api.deps import get_store
 from app.api.schemas.common import ExportFormat
-from app.render.svg import render_document
+from app.core.config import get_settings
+from app.render import raster
+from app.render.svg import document_size_mm, render_document
 
 router = APIRouter(prefix="/patterns", tags=["export"])
 
@@ -17,19 +21,39 @@ SVG_MEDIA_TYPE = "image/svg+xml"
 def export_pattern(
     pattern_id: str,
     format: ExportFormat = ExportFormat.svg,
-    dpi: int = 300,
-    width_mm: float | None = None,
+    dpi: int = Query(300, ge=10, le=4000),
+    width_mm: float | None = Query(None, gt=0),
     store=Depends(get_store),
 ) -> Response:
     pattern = store.get(pattern_id)
     if pattern is None:
         raise HTTPException(status_code=404, detail="pattern not found")
 
+    svg = render_document(pattern, doc_mm=width_mm)
     if format is ExportFormat.svg:
-        svg = render_document(pattern, doc_mm=width_mm)
         return Response(content=svg, media_type=SVG_MEDIA_TYPE)
 
-    raise HTTPException(
-        status_code=501,
-        detail=f"{format.value} export is not implemented yet (Phase 2: resvg)",
-    )
+    settings = get_settings()
+    if dpi > settings.max_dpi:
+        raise HTTPException(
+            status_code=422, detail=f"dpi exceeds max_dpi ({settings.max_dpi})"
+        )
+    if width_mm is not None and width_mm > settings.max_tile_mm:
+        raise HTTPException(
+            status_code=422,
+            detail=f"width_mm exceeds max_tile_mm ({settings.max_tile_mm})",
+        )
+    binary = raster.find_renderer(settings.renderer_bin)
+    if not binary:
+        raise HTTPException(
+            status_code=503,
+            detail="no SVG renderer installed; run: brew install librsvg",
+        )
+    size_mm = document_size_mm(pattern, width_mm)
+    try:
+        data, media_type = raster.rasterize(
+            svg, format.value, dpi, size_mm, binary=binary
+        )
+    except raster.RasterError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=data, media_type=media_type)

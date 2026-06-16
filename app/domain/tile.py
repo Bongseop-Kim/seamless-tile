@@ -10,11 +10,14 @@ def build_pattern_def(
     tile_h: float,
     placements,
     pattern_transform: str | None = None,
+    group_filter: str | None = None,
 ) -> str:
     groups = "".join(
         f'<g transform="translate({fmt(dx)},{fmt(dy)})">{motif_svg}</g>'
         for dx, dy in placements
     )
+    if group_filter:
+        groups = f'<g filter="url(#{group_filter})">{groups}</g>'
     transform_attr = (
         f' patternTransform="{pattern_transform}"' if pattern_transform else ""
     )

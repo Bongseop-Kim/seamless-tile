@@ -1,10 +1,14 @@
 import xml.etree.ElementTree as ET
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.render.raster import find_renderer
 
 client = TestClient(app)
+
+HAS_RENDERER = find_renderer() is not None
 
 SVG_NS = "{http://www.w3.org/2000/svg}"
 
@@ -43,12 +47,30 @@ def test_get_unknown_pattern_404():
     assert client.get("/api/v1/patterns/does-not-exist").status_code == 404
 
 
-def test_export_svg_ok_raster_not_implemented():
+def test_export_svg_ok():
     data = _create("dot", DOT)
-    pid = data["id"]
-    assert client.get(f"/api/v1/patterns/{pid}/export?format=svg").status_code == 200
-    assert client.get(f"/api/v1/patterns/{pid}/export?format=png").status_code == 501
-    assert client.get(f"/api/v1/patterns/{pid}/export?format=tiff").status_code == 501
+    resp = client.get(f"/api/v1/patterns/{data['id']}/export?format=svg")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg+xml")
+
+
+@pytest.mark.skipif(not HAS_RENDERER, reason="no SVG renderer (brew install librsvg)")
+def test_export_png_and_tiff():
+    pid = _create("dot", DOT)["id"]
+    png = client.get(f"/api/v1/patterns/{pid}/export?format=png&dpi=150&width_mm=40")
+    assert png.status_code == 200, png.text
+    assert png.headers["content-type"] == "image/png"
+    assert png.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    tiff = client.get(f"/api/v1/patterns/{pid}/export?format=tiff&dpi=150&width_mm=40")
+    assert tiff.status_code == 200, tiff.text
+    assert tiff.headers["content-type"] == "image/tiff"
+
+
+def test_export_dpi_over_max_rejected():
+    pid = _create("dot", DOT)["id"]
+    resp = client.get(f"/api/v1/patterns/{pid}/export?format=png&dpi=5000")
+    assert resp.status_code == 422
 
 
 def test_invalid_color_rejected():

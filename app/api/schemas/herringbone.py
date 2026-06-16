@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.api.schemas.common import MAX_REPEATS, is_multiple, validate_colors
+from app.api.schemas.common import (
+    MAX_REPEATS,
+    is_multiple,
+    validate_colors,
+    validate_texture,
+)
 
 
 class HerringboneRequest(BaseModel):
@@ -11,6 +16,7 @@ class HerringboneRequest(BaseModel):
     texture: str | None = None
 
     _colors = field_validator("colors")(validate_colors)
+    _texture = field_validator("texture")(validate_texture)
 
     @model_validator(mode="after")
     def _commensurate(self) -> "HerringboneRequest":

@@ -9,6 +9,24 @@ def is_hex_color(value: str) -> bool:
     return bool(_HEX.match(value))
 
 
+# Named textile palettes for quick recoloring.
+PALETTES: dict[str, tuple[str, ...]] = {
+    "mono": ("#ffffff", "#1a1a1a"),
+    "navy": ("#f4f4f0", "#1f3a5f"),
+    "earth": ("#e8ddcb", "#8b5e3c", "#3e2f1c"),
+    "pastel": ("#fce4ec", "#b3e5fc", "#c8e6c9"),
+}
+
+
+def resolve_palette(name: str) -> tuple[str, ...]:
+    try:
+        return PALETTES[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown palette: {name!r}; choose one of {sorted(PALETTES)}"
+        ) from None
+
+
 class Colorway:
     def __init__(self, colors):
         colors = tuple(colors)
