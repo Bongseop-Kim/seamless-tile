@@ -162,6 +162,108 @@ app/
 tests/                      # pytest
 ```
 
+## 복잡한 SVG seamless 래핑 테스트
+
+외부에서 만든 복잡한 SVG도 `viewBox` 크기만큼 3x3으로 복제하고 원래 타일 영역으로 clip 하면
+경계를 넘어간 도형이 반대편에서 이어지는지 확인할 수 있다. 배경은 한 번만 깔고 실제 motif만
+반복 복제한다.
+
+펠리컨 자전거 SVG 예시:
+
+```bash
+.venv/bin/python scripts/periodic_svg_wrap.py \
+  /Users/duegosystem/Downloads/a-white-pelican-riding-a-bicycle--side-view--flat-.svg \
+  examples/pelican-periodic.svg
+
+.venv/bin/python scripts/periodic_svg_wrap.py \
+  /Users/duegosystem/Downloads/a-white-pelican-riding-a-bicycle--side-view--flat-.svg \
+  examples/pelican-periodic-shifted.svg \
+  --shift-x 320 --shift-y 260
+```
+
+결과 확인:
+
+```bash
+open examples/pelican-periodic-shifted.svg
+```
+
+`pelican-periodic.svg`는 원본 위치 그대로 감싼 버전이고, `pelican-periodic-shifted.svg`는 motif를
+일부러 오른쪽/아래로 밀어서 경계에서 잘린 부분이 반대편에 나타나는지 보는 데모다. SVG 렌더러가
+있으면 PNG로도 확인할 수 있다.
+
+```bash
+rsvg-convert examples/pelican-periodic-shifted.svg -o /private/tmp/pelican-periodic-shifted.png
+open /private/tmp/pelican-periodic-shifted.png
+```
+
+이 방식은 path, rect, circle 같은 순수 벡터 도형에는 구조적으로 잘 맞는다. `filter`, `blur`,
+`mask`, 외부 `image`가 있는 SVG는 경계 밖으로 퍼지는 픽셀이나 외부 리소스 자체도 함께 고려해야 한다.
+
+### 꽃 산포형 seamless 예시
+
+펠리컨 예시는 SVG 전체를 하나의 motif로 보고 반복한 데모다. 산포형 패턴은 보통 객체마다 좌표를
+따로 잡고, 각 객체의 bbox가 타일 경계를 넘는 경우에만 반대편 복제본을 추가한다.
+
+```txt
+if x - radius < 0: draw copy at x + tile_width
+if x + radius > tile_width: draw copy at x - tile_width
+if y - radius < 0: draw copy at y + tile_height
+if y + radius > tile_height: draw copy at y - tile_height
+```
+
+꽃/잎 객체를 흩뿌린 예시 생성:
+
+```bash
+.venv/bin/python scripts/generate_flower_scatter.py
+```
+
+결과 확인:
+
+```bash
+open examples/flower-scatter-seamless.svg
+open examples/flower-scatter-repeat-preview.svg
+```
+
+`flower-scatter-seamless.svg`는 실제 1024x1024 타일이고, `flower-scatter-repeat-preview.svg`는 같은
+타일을 2x2로 반복한 확인용 문서다. preview의 가운데 연한 십자선은 seam이 아니라 타일 경계를
+보여주기 위한 가이드다.
+
+PNG 렌더링 확인:
+
+```bash
+rsvg-convert examples/flower-scatter-seamless.svg -o /private/tmp/flower-scatter-seamless.png
+rsvg-convert examples/flower-scatter-repeat-preview.svg -o /private/tmp/flower-scatter-repeat-preview.png
+open /private/tmp/flower-scatter-repeat-preview.png
+```
+
+### Stripe + dot + motif 예시
+
+대각 스트라이프 위에 빨간 점선 edge line과 금색 벌 motif를 올린 예시다. 남색 직물 바탕 질감,
+대각 밴드, 점선, 벌 motif를 모두 같은 대각 주기 좌표계에 맞춰 생성한다.
+
+```bash
+.venv/bin/python scripts/generate_stripe_dot_bee.py
+```
+
+결과 확인:
+
+```bash
+open examples/stripe-dot-bee-seamless.svg
+open examples/stripe-dot-bee-repeat-preview.svg
+```
+
+`stripe-dot-bee-seamless.svg`는 실제 1024x1024 타일이고,
+`stripe-dot-bee-repeat-preview.svg`는 2x2 반복 확인용 문서다. preview의 가운데 연한 십자선은
+seam이 아니라 타일 경계 가이드다.
+
+PNG 렌더링 확인:
+
+```bash
+rsvg-convert examples/stripe-dot-bee-seamless.svg -o /private/tmp/stripe-dot-bee-seamless.png
+rsvg-convert examples/stripe-dot-bee-repeat-preview.svg -o /private/tmp/stripe-dot-bee-repeat-preview.png
+open /private/tmp/stripe-dot-bee-repeat-preview.png
+```
+
 ## 테스트
 
 ```bash
