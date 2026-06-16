@@ -21,17 +21,13 @@ from app.patterns.herringbone import HerringbonePattern
 from app.patterns.stripe import StripePattern
 from app.patterns.stripe_dot import StripeDotPattern
 from app.render.svg import render_document
-from app.texture import texture_from_name
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
 
 SVG_MEDIA_TYPE = "image/svg+xml"
 
 
-def _store_and_respond(
-    pattern: Pattern, store, texture: str | None = None
-) -> dict[str, str]:
-    pattern.texture = texture_from_name(texture)
+def _store_and_respond(pattern: Pattern, store) -> dict[str, str]:
     pattern_id = uuid.uuid4().hex
     store[pattern_id] = pattern
     return {"id": pattern_id, "svg": render_document(pattern)}
@@ -45,7 +41,7 @@ def create_stripe(req: StripeRequest, store=Depends(get_store)) -> dict[str, str
         widths_mm=req.widths_mm,
         angle=req.angle,
     )
-    return _store_and_respond(pattern, store, req.texture)
+    return _store_and_respond(pattern, store)
 
 
 @router.post("/stripe-dot")
@@ -57,7 +53,7 @@ def create_stripe_dot(req: StripeDotRequest, store=Depends(get_store)) -> dict[s
         dot_layers=req.dot_layers,
         angle=req.angle,
     )
-    return _store_and_respond(pattern, store, req.texture)
+    return _store_and_respond(pattern, store)
 
 
 @router.post("/check")
@@ -68,7 +64,7 @@ def create_check(req: CheckRequest, store=Depends(get_store)) -> dict[str, str]:
         widths_mm=req.widths_mm,
         opacity=req.opacity,
     )
-    return _store_and_respond(pattern, store, req.texture)
+    return _store_and_respond(pattern, store)
 
 
 @router.post("/dot")
@@ -79,7 +75,7 @@ def create_dot(req: DotRequest, store=Depends(get_store)) -> dict[str, str]:
         colorway=Colorway(req.colors),
         repeat=req.repeat,
     )
-    return _store_and_respond(pattern, store, req.texture)
+    return _store_and_respond(pattern, store)
 
 
 @router.post("/herringbone")
@@ -92,7 +88,7 @@ def create_herringbone(
         stroke_mm=req.stroke_mm,
         pitch_mm=req.pitch_mm,
     )
-    return _store_and_respond(pattern, store, req.texture)
+    return _store_and_respond(pattern, store)
 
 
 @router.post("/{pattern_id}/colorway")

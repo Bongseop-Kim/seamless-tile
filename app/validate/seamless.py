@@ -23,9 +23,9 @@ def edge_seam(tile_rgba: np.ndarray) -> tuple[float, float]:
     """Mean per-channel difference between opposite edges of one tile.
 
     When the tile repeats, column -1 abuts the next tile's column 0 (and row -1
-    abuts row 0). Small values mean the seam is invisible. Suited to textures
-    applied over a uniform field; hard-edged flat patterns legitimately differ
-    here, so verify those by construction instead.
+    abuts row 0). Small values mean the seam is invisible. Hard-edged flat
+    patterns can legitimately differ here, so verify those by construction
+    instead.
     """
     arr = np.asarray(tile_rgba).astype(np.int16)
     seam_x = float(np.abs(arr[:, 0] - arr[:, -1]).mean())

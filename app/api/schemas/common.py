@@ -6,14 +6,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.domain.colorway import is_hex_color
 from app.domain.repeat import RepeatMode
-from app.texture import KNOWN_TEXTURES
 
 __all__ = [
     "RepeatMode",
     "ExportFormat",
     "BandPatternRequest",
     "validate_colors",
-    "validate_texture",
     "is_multiple",
 ]
 
@@ -35,14 +33,6 @@ def validate_colors(colors: list[str]) -> list[str]:
     return colors
 
 
-def validate_texture(value: str | None) -> str | None:
-    if value is not None and value not in KNOWN_TEXTURES:
-        raise ValueError(
-            f"unknown texture: {value!r}; choose one of {sorted(KNOWN_TEXTURES)}"
-        )
-    return value
-
-
 def is_multiple(total: float, unit: float, tol: float = 1e-6) -> bool:
     if unit <= 0:
         return False
@@ -54,13 +44,13 @@ class BandPatternRequest(BaseModel):
     """Base for band-based patterns (stripe, gingham): equal-width colour bands
     that tile seamlessly when tile_mm is an integer multiple of the band period."""
 
+    model_config = {"extra": "forbid"}
+
     widths_mm: list[float] = Field(..., min_length=1)
     colors: list[str]
     tile_mm: float = Field(50.0, gt=0)
-    texture: str | None = None
 
     _colors = field_validator("colors")(validate_colors)
-    _texture = field_validator("texture")(validate_texture)
 
     @field_validator("widths_mm")
     @classmethod

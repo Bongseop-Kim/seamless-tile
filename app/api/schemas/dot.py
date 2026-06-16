@@ -1,10 +1,11 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.api.schemas.common import RepeatMode, validate_colors, validate_texture
+from app.api.schemas.common import RepeatMode, validate_colors
 
 
 class DotRequest(BaseModel):
     model_config = {
+        "extra": "forbid",
         "json_schema_extra": {
             "examples": [
                 {
@@ -21,10 +22,8 @@ class DotRequest(BaseModel):
     spacing_mm: float = Field(..., gt=0)
     colors: list[str]
     repeat: RepeatMode = RepeatMode.half_drop
-    texture: str | None = None
 
     _colors = field_validator("colors")(validate_colors)
-    _texture = field_validator("texture")(validate_texture)
 
     @model_validator(mode="after")
     def _radius_fits(self) -> "DotRequest":

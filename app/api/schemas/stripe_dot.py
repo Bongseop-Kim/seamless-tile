@@ -6,7 +6,6 @@ from app.api.schemas.common import (
     MAX_REPEATS,
     is_multiple,
     validate_colors,
-    validate_texture,
 )
 
 
@@ -87,6 +86,7 @@ class DotLayer(BaseModel):
 
 class StripeDotRequest(BaseModel):
     model_config = {
+        "extra": "forbid",
         "json_schema_extra": {
             "examples": [
                 {
@@ -126,12 +126,10 @@ class StripeDotRequest(BaseModel):
     tile_mm: float = Field(..., gt=0)
     angle: float = 0.0
     background_color: str
-    texture: str | None = None
     stripes: list[StripeBand] = Field(..., min_length=1)
     dot_layers: list[DotLayer] = Field(default_factory=list)
 
     _background_color = field_validator("background_color")(_validate_color)
-    _texture = field_validator("texture")(validate_texture)
 
     @model_validator(mode="after")
     def _fits_tile_and_repeat_guard(self) -> "StripeDotRequest":

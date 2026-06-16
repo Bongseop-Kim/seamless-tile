@@ -124,6 +124,12 @@ def test_invalid_color_rejected():
     assert client.post("/api/v1/patterns/stripe", json=body).status_code == 422
 
 
+def test_removed_texture_option_rejected():
+    for kind, body in CASES:
+        resp = client.post(f"/api/v1/patterns/{kind}", json={**body, "texture": "noise"})
+        assert resp.status_code == 422
+
+
 def test_stripe_tile_must_be_multiple_of_period():
     body = dict(STRIPE, tile_mm=25)  # period 20, 25 not a multiple
     assert client.post("/api/v1/patterns/stripe", json=body).status_code == 422

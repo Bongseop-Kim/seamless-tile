@@ -28,10 +28,9 @@ app/
 │   ├── units.py            # mm<->px, SVG number formatting
 │   ├── colorway.py         # Colorway (hex, cyclic) + named PALETTES
 │   ├── repeat.py           # RepeatMode + placements() (2x-tile trick)
-│   ├── tile.py             # <pattern> assembly + optional group filter
-│   └── pattern.py          # Pattern ABC: motif() + to_pattern_def() + texture hook
+│   ├── tile.py             # <pattern> assembly
+│   └── pattern.py          # Pattern ABC: motif() + to_pattern_def()
 ├── patterns/               # Stripe / Check (gingham) / Dot / Herringbone
-├── texture/                # SVG <filter> textures: weave / linen / noise (+ registry)
 ├── render/
 │   ├── svg.py              # standalone mm-unit SVG document
 │   └── raster.py           # rsvg-convert|resvg subprocess -> Pillow (PNG/TIFF + DPI)
@@ -45,8 +44,8 @@ app/
 ## Request flow
 
 1. `POST /api/v1/patterns/{type}` validates a typed Pydantic body, builds a
-   `Pattern` (geometry + `Colorway` + optional `Texture`), stores it as
-   `id -> Pattern`, and returns `{id, svg}`.
+   `Pattern` (geometry + `Colorway`), stores it as `id -> Pattern`, and returns
+   `{id, svg}`.
 2. `GET /patterns/{id}` re-renders the stored `Pattern` to SVG on demand.
 3. `GET /patterns/{id}/export` negotiates `format` (svg|png|tiff), `dpi`, `width_mm`.
    Raster goes through `render/raster.py`.
@@ -76,23 +75,9 @@ SVG → PNG via a CLI subprocess (SVG fed on stdin), then Pillow re-encodes to e
 physical DPI (PNG `pHYs`; TIFF `XResolution`/`YResolution` + LZW). The pixel size is
 computed explicitly from `width_mm × dpi`, so embedded DPI is consistent metadata.
 
-Renderer preference: **rsvg-convert (librsvg) → resvg**. librsvg honours
-`feTurbulence stitchTiles="stitch"`, so textured tiles stay seamless (~2/255 edge
-diff). resvg 0.47 ignores stitchTiles (~48/255), so textures show a seam under it
-while pattern geometry remains seamless. Guards: `dpi ≤ max_dpi`,
+Renderer preference: **rsvg-convert (librsvg) → resvg**. Guards: `dpi ≤ max_dpi`,
 `width_mm ≤ max_tile_mm`, and a hard pixel-dimension cap.
-
-## Textures (`texture/`)
-
-Each `Texture` emits an SVG `<filter>` pinned to the tile box in user space and
-applied to the motif group inside the `<pattern>`:
-
-- **weave**: anisotropic `feTurbulence` + `feDisplacementMap` (directional weave).
-- **linen**: low-frequency fractal `feTurbulence` + small displacement.
-- **noise**: `feTurbulence` grain overlaid via `feComponentTransfer` + `feMerge`.
 
 ## Known limitations
 
 - In-memory store: ids are lost on restart and not shared across worker processes.
-- Texture seamlessness depends on the renderer honouring `stitchTiles` (librsvg yes,
-  resvg no).

@@ -4,12 +4,12 @@ from app.api.schemas.common import (
     MAX_REPEATS,
     is_multiple,
     validate_colors,
-    validate_texture,
 )
 
 
 class HerringboneRequest(BaseModel):
     model_config = {
+        "extra": "forbid",
         "json_schema_extra": {
             "examples": [
                 {
@@ -26,10 +26,8 @@ class HerringboneRequest(BaseModel):
     pitch_mm: float = Field(..., gt=0)
     colors: list[str]
     tile_mm: float = Field(50.0, gt=0)
-    texture: str | None = None
 
     _colors = field_validator("colors")(validate_colors)
-    _texture = field_validator("texture")(validate_texture)
 
     @model_validator(mode="after")
     def _commensurate(self) -> "HerringboneRequest":

@@ -26,7 +26,7 @@ def document_dimensions_mm(
 
 def render_document(pattern: Pattern, doc_mm: float | None = None) -> str:
     width, height = document_dimensions_mm(pattern, doc_mm)
-    defs = pattern.texture_filter_def(_PATTERN_ID) + pattern.to_pattern_def(_PATTERN_ID)
+    defs = pattern.to_pattern_def(_PATTERN_ID)
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{fmt(width)}mm" height="{fmt(height)}mm" '

@@ -1,8 +1,7 @@
-"""Rasterize SVG to PNG/TIFF via an external renderer (resvg, or rsvg-convert
-as fallback) then re-encode with Pillow to stamp physical DPI.
+"""Rasterize SVG to PNG/TIFF via an external renderer, then re-encode with
+Pillow to stamp physical DPI.
 
-A CLI subprocess is used deliberately: it renders SVG filters (feTurbulence,
-feDisplacementMap) faithfully and is immune to Python-version wheel breakage.
+A CLI subprocess is used deliberately to avoid Python-version wheel breakage.
 """
 
 import io
@@ -26,8 +25,6 @@ class RasterError(RuntimeError):
 def find_renderer(preferred: str | None = None) -> str | None:
     if preferred:
         return shutil.which(preferred) or (preferred if os.path.exists(preferred) else None)
-    # Prefer rsvg-convert: it honours feTurbulence stitchTiles, so textured
-    # tiles stay seamless. resvg is the fallback (no stitch support).
     return shutil.which("rsvg-convert") or shutil.which("resvg")
 
 

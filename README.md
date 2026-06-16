@@ -75,7 +75,6 @@ curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: applica
 - 단위는 **mm**. 래스터화 시 `px = round(mm / 25.4 × dpi)`로 변환하고 DPI를 파일에 기록한다(인쇄 300, 웹 72).
 - `tile_mm`은 줄 주기(스트라이프/체크) 또는 `pitch_mm`(헤링본)의 정수배여야 한다.
 - 색상은 `#rgb` / `#rrggbb` hex.
-- `texture`(옵션): `weave` | `linen` | `noise`.
 
 ## 구조
 
@@ -94,7 +93,6 @@ app/
 │   ├── repeat.py           # block / half_drop / brick 배치(2배 타일 트릭)
 │   └── colorway.py
 ├── patterns/               # stripe / check / dot / herringbone
-├── texture/                # SVG <filter> 기반 질감 (feTurbulence + 변위)
 ├── render/
 │   ├── svg.py              # standalone SVG 문서 조립
 │   └── raster.py           # resvg 서브프로세스 → Pillow 재인코딩(PNG/TIFF + DPI)
@@ -108,21 +106,7 @@ tests/                      # pytest
 .venv/bin/python -m pytest
 ```
 
-래스터/텍스처 테스트는 resvg가 없으면 자동으로 건너뛴다(skip).
-
-## 래스터러와 텍스처 이음매
-
-텍스처 필터는 `stitchTiles="stitch"`를 emit한다. 렌더러별 실측(노이즈 텍스처 타일의 반대편 경계
-픽셀 차이, 0–255 평균):
-
-| 렌더러 | 경계 차이 | 텍스처 seamless |
-|--------|----------|------------------|
-| **rsvg-convert (librsvg)** | ~2 (거의 0) | ✅ 기본값 |
-| resvg 0.47 | ~48 | ❌ (stitchTiles 미반영) |
-
-따라서 librsvg를 기본 래스터러로 쓴다. resvg만 있는 환경에서는 패턴 도형은 정상이지만 turbulence
-질감의 타일 경계가 보일 수 있다. 패턴 도형 자체(선·도형)는 렌더러와 무관하게 격자 lattice로 이음매가
-보장된다.
+래스터 테스트는 SVG 렌더러가 없으면 자동으로 건너뛴다(skip).
 
 ## 알려진 한계
 
