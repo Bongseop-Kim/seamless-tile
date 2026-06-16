@@ -58,12 +58,72 @@ DPI/크기 협상: `dpi`는 `max_dpi`(기본 1200), `width_mm`은 `max_tile_mm`(
 
 요청 예시:
 
+### 대각 스트라이프
+
+`/patterns/stripe`는 항상 대각선 스트라이프를 만든다. `angle` 기본값은 `-45`이고, `0`, `90`,
+`180`처럼 가로/세로 축에 정렬되는 각도는 422로 거부한다.
+
+기본 대각 스트라이프:
+
 ```bash
 curl -X POST localhost:8000/api/v1/patterns/stripe -H 'content-type: application/json' \
-  -d '{"widths_mm":[10,10],"colors":["#ffffff","#00aa33"],"tile_mm":20}'
+  -d '{"widths_mm":[10,10],"colors":["#ffffff","#00aa33"],"tile_mm":20,"angle":-45}'
 ```
 
-복합 스트라이프/도트 요청 예시:
+넓은 바탕 밴드와 가는 포인트 밴드를 반복:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/stripe -H 'content-type: application/json' \
+  -d '{"tile_mm":40,"angle":-45,"background_color":"#f6f2e8","stripes":[{"offset_mm":4,"width_mm":18,"color":"#1f3a5f"},{"offset_mm":26,"width_mm":3,"color":"#b23a48"},{"offset_mm":32,"width_mm":1,"color":"#1f3a5f"}]}'
+```
+
+두꺼운 밴드, 점선 edge line, 가는 중심선 조합:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/stripe -H 'content-type: application/json' \
+  -d '{"tile_mm":48,"angle":-32,"background_color":"#10243a","stripes":[{"offset_mm":6,"width_mm":18,"color":"#0a1a2b","edge_lines":[{"position":"start","width_mm":0.8,"color":"#e02b22","style":"dotted","dot_length_mm":1.2,"gap_mm":1.2,"dot_shape":"circle"},{"position":"center","width_mm":0.4,"color":"#f0f2ee","style":"solid"}]},{"offset_mm":30,"width_mm":6,"color":"#526a89","opacity":0.65}]}'
+```
+
+핀스트라이프 느낌의 얇은 선 조합:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/stripe -H 'content-type: application/json' \
+  -d '{"tile_mm":24,"angle":-38,"background_color":"#202225","stripes":[{"offset_mm":4,"width_mm":0.6,"color":"#d7d2c4"},{"offset_mm":8,"width_mm":1.2,"color":"#7aa0c4"},{"offset_mm":14,"width_mm":0.4,"color":"#c94f4f"},{"offset_mm":19,"width_mm":0.8,"color":"#d7d2c4"}]}'
+```
+
+### 도트
+
+기본 폴카 도트:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/dot -H 'content-type: application/json' \
+  -d '{"radius_mm":3,"spacing_mm":12,"colors":["#1a1a1a","#ffffff"],"repeat":"half_drop"}'
+```
+
+작고 촘촘한 원형 도트:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/dot -H 'content-type: application/json' \
+  -d '{"tile_mm":24,"background_color":"#fbf7ef","layers":[{"shape":"circle","size_mm":1.2,"color":"#22314d","spacing_x_mm":4,"spacing_y_mm":4}]}'
+```
+
+큰 원형 도트와 작은 다이아몬드 도트 조합:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/dot -H 'content-type: application/json' \
+  -d '{"tile_mm":48,"background_color":"#f7f3eb","layers":[{"shape":"circle","size_mm":4,"color":"#16233f","spacing_x_mm":12,"spacing_y_mm":12,"repeat":"half_drop"},{"shape":"diamond","size_mm":2,"color":"#b23a48","spacing_x_mm":24,"spacing_y_mm":24,"offset_x_mm":6,"offset_y_mm":6}]}'
+```
+
+물방울 도트 레이어:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/dot -H 'content-type: application/json' \
+  -d '{"tile_mm":48,"background_color":"#eef4ef","layers":[{"shape":"teardrop","size_mm":3,"color":"#277a6f","spacing_x_mm":16,"spacing_y_mm":16,"offset_x_mm":8,"offset_y_mm":8},{"shape":"circle","size_mm":1.5,"color":"#16233f","spacing_x_mm":8,"spacing_y_mm":8}]}'
+```
+
+### 스트라이프 + 도트
+
+대각 스트라이프 위에 작은 도트 레이어를 올린 복합 패턴:
 
 ```bash
 curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: application/json' \
@@ -74,6 +134,8 @@ curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: applica
 
 - 단위는 **mm**. 래스터화 시 `px = round(mm / 25.4 × dpi)`로 변환하고 DPI를 파일에 기록한다(인쇄 300, 웹 72).
 - `tile_mm`은 줄 주기(스트라이프/체크) 또는 `pitch_mm`(헤링본)의 정수배여야 한다.
+- 조합형 스트라이프의 점선 pitch(`dot_length_mm + gap_mm`)와 레이어드 도트의 각 간격은 `tile_mm`의 정수 약수여야 한다.
+- 도트 레이어의 `shape`는 `circle`, `square`, `diamond`, `teardrop`을 지원한다.
 - 색상은 `#rgb` / `#rrggbb` hex.
 
 ## 구조

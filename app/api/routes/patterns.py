@@ -15,6 +15,7 @@ from app.api.schemas.stripe import StripeRequest
 from app.api.schemas.stripe_dot import StripeDotRequest
 from app.domain.colorway import Colorway, resolve_palette
 from app.domain.pattern import Pattern
+from app.domain.repeat import RepeatMode
 from app.patterns.check import CheckPattern
 from app.patterns.dot import DotPattern
 from app.patterns.herringbone import HerringbonePattern
@@ -35,12 +36,22 @@ def _store_and_respond(pattern: Pattern, store) -> dict[str, str]:
 
 @router.post("/stripe")
 def create_stripe(req: StripeRequest, store=Depends(get_store)) -> dict[str, str]:
-    pattern = StripePattern(
-        tile_mm=req.tile_mm,
-        colorway=Colorway(req.colors),
-        widths_mm=req.widths_mm,
-        angle=req.angle,
-    )
+    if req.stripes:
+        pattern = StripeDotPattern(
+            tile_mm=req.tile_mm,
+            background_color=req.background_color,
+            stripes=req.stripes,
+            dot_layers=[],
+            angle=req.angle,
+        )
+    else:
+        assert req.widths_mm is not None and req.colors is not None
+        pattern = StripePattern(
+            tile_mm=req.tile_mm,
+            colorway=Colorway(req.colors),
+            widths_mm=req.widths_mm,
+            angle=req.angle,
+        )
     return _store_and_respond(pattern, store)
 
 
@@ -69,12 +80,27 @@ def create_check(req: CheckRequest, store=Depends(get_store)) -> dict[str, str]:
 
 @router.post("/dot")
 def create_dot(req: DotRequest, store=Depends(get_store)) -> dict[str, str]:
-    pattern = DotPattern(
-        spacing_mm=req.spacing_mm,
-        radius_mm=req.radius_mm,
-        colorway=Colorway(req.colors),
-        repeat=req.repeat,
-    )
+    if req.layers:
+        assert req.tile_mm is not None
+        pattern = DotPattern(
+            spacing_mm=None,
+            radius_mm=None,
+            colorway=Colorway(
+                [req.background_color] + [layer.color for layer in req.layers]
+            ),
+            repeat=RepeatMode.block,
+            tile_mm=req.tile_mm,
+            layers=req.layers,
+        )
+    else:
+        assert req.spacing_mm is not None and req.radius_mm is not None
+        assert req.colors is not None
+        pattern = DotPattern(
+            spacing_mm=req.spacing_mm,
+            radius_mm=req.radius_mm,
+            colorway=Colorway(req.colors),
+            repeat=req.repeat,
+        )
     return _store_and_respond(pattern, store)
 
 

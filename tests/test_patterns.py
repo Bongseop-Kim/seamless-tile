@@ -16,7 +16,12 @@ HAS_RENDERER = find_renderer() is not None
 
 SVG_NS = "{http://www.w3.org/2000/svg}"
 
-STRIPE = {"widths_mm": [10, 10], "colors": ["#ffffff", "#00aa33"], "angle": 0, "tile_mm": 20}
+STRIPE = {
+    "widths_mm": [10, 10],
+    "colors": ["#ffffff", "#00aa33"],
+    "angle": -45,
+    "tile_mm": 20,
+}
 CHECK = {"widths_mm": [5, 5], "colors": ["#cc2222"], "tile_mm": 20}
 DOT = {"radius_mm": 3, "spacing_mm": 10, "colors": ["#102030", "#ffffff"]}
 HERRINGBONE = {"stroke_mm": 2, "pitch_mm": 10, "colors": ["#222222"], "tile_mm": 40}
@@ -54,6 +59,68 @@ STRIPE_DOT = {
             "spacing_x_mm": 8,
             "spacing_y_mm": 8,
         }
+    ],
+}
+COMPOSED_STRIPE = {
+    "tile_mm": 48,
+    "angle": -32,
+    "background_color": "#10243a",
+    "stripes": [
+        {
+            "offset_mm": 6,
+            "width_mm": 18,
+            "color": "#0a1a2b",
+            "edge_lines": [
+                {
+                    "position": "start",
+                    "width_mm": 0.8,
+                    "color": "#e02b22",
+                    "style": "dotted",
+                    "dot_length_mm": 1.2,
+                    "gap_mm": 1.2,
+                    "dot_shape": "circle",
+                },
+                {
+                    "position": "center",
+                    "width_mm": 0.4,
+                    "color": "#f0f2ee",
+                    "style": "solid",
+                },
+            ],
+        },
+        {"offset_mm": 30, "width_mm": 6, "color": "#526a89", "opacity": 0.65},
+    ],
+}
+LAYERED_DOT = {
+    "tile_mm": 48,
+    "background_color": "#f7f3eb",
+    "layers": [
+        {
+            "shape": "circle",
+            "size_mm": 4,
+            "color": "#16233f",
+            "spacing_x_mm": 12,
+            "spacing_y_mm": 12,
+            "repeat": "half_drop",
+        },
+        {
+            "shape": "diamond",
+            "size_mm": 2,
+            "color": "#b23a48",
+            "spacing_x_mm": 24,
+            "spacing_y_mm": 24,
+            "offset_x_mm": 6,
+            "offset_y_mm": 6,
+        },
+        {
+            "shape": "teardrop",
+            "size_mm": 3,
+            "color": "#277a6f",
+            "spacing_x_mm": 16,
+            "spacing_y_mm": 16,
+            "offset_x_mm": 8,
+            "offset_y_mm": 8,
+        },
     ],
 }
 
@@ -135,6 +202,11 @@ def test_stripe_tile_must_be_multiple_of_period():
     assert client.post("/api/v1/patterns/stripe", json=body).status_code == 422
 
 
+def test_stripe_angle_must_be_diagonal():
+    body = dict(STRIPE, angle=0)
+    assert client.post("/api/v1/patterns/stripe", json=body).status_code == 422
+
+
 def test_dot_radius_must_fit_spacing():
     body = dict(DOT, radius_mm=8)  # spacing 10 -> max 5
     assert client.post("/api/v1/patterns/dot", json=body).status_code == 422
@@ -159,6 +231,45 @@ def test_stripe_dot_schema_example_is_accepted():
     example = StripeDotRequest.model_config["json_schema_extra"]["examples"][0]
     resp = client.post("/api/v1/patterns/stripe-dot", json=example)
     assert resp.status_code == 200, resp.text
+
+
+def test_composed_stripe_supports_mixed_width_and_dotted_lines():
+    data = _create("stripe", COMPOSED_STRIPE)
+    pattern = ET.fromstring(data["svg"]).find(f"{SVG_NS}defs/{SVG_NS}pattern")
+    assert pattern is not None
+    fills = {el.get("fill") for el in pattern.iter() if el.get("fill")}
+    strokes = {el.get("stroke") for el in pattern.iter() if el.get("stroke")}
+    assert {"#10243a", "#e02b22"} <= fills
+    assert {"#0a1a2b", "#526a89", "#f0f2ee"} <= strokes
+    assert len(pattern.findall(f".//{SVG_NS}circle")) >= 1
+    assert len(pattern.findall(f".//{SVG_NS}line")) >= 2
+
+
+def test_dot_layers_support_spacing_size_and_shapes():
+    data = _create("dot", LAYERED_DOT)
+    pattern = ET.fromstring(data["svg"]).find(f"{SVG_NS}defs/{SVG_NS}pattern")
+    assert pattern is not None
+    fills = {el.get("fill") for el in pattern.iter() if el.get("fill")}
+    assert {"#f7f3eb", "#16233f", "#b23a48", "#277a6f"} <= fills
+    assert len(pattern.findall(f".//{SVG_NS}circle")) >= 1
+    assert len(pattern.findall(f".//{SVG_NS}polygon")) >= 1
+    assert len(pattern.findall(f".//{SVG_NS}path")) >= 1
+
+
+def test_dot_layers_reject_size_larger_than_spacing():
+    body = {
+        "tile_mm": 20,
+        "layers": [
+            {
+                "shape": "diamond",
+                "size_mm": 12,
+                "color": "#111111",
+                "spacing_x_mm": 10,
+                "spacing_y_mm": 10,
+            }
+        ],
+    }
+    assert client.post("/api/v1/patterns/dot", json=body).status_code == 422
 
 
 def test_stripe_dot_dotted_line_requires_pitch():
