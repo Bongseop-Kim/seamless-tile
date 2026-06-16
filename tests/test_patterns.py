@@ -3,8 +3,12 @@ import xml.etree.ElementTree as ET
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.schemas.stripe_dot import StripeDotRequest
 from app.main import app
-from app.render.raster import find_renderer
+from app.patterns.stripe_dot import StripeDotPattern
+from app.render.raster import find_renderer, rasterize
+from app.render.svg import render_document
+from app.validate.seamless import edge_seam
 
 client = TestClient(app)
 
@@ -16,8 +20,50 @@ STRIPE = {"widths_mm": [10, 10], "colors": ["#ffffff", "#00aa33"], "angle": 0, "
 CHECK = {"widths_mm": [5, 5], "colors": ["#cc2222"], "tile_mm": 20}
 DOT = {"radius_mm": 3, "spacing_mm": 10, "colors": ["#102030", "#ffffff"]}
 HERRINGBONE = {"stroke_mm": 2, "pitch_mm": 10, "colors": ["#222222"], "tile_mm": 40}
+STRIPE_DOT = {
+    "tile_mm": 48,
+    "angle": -32,
+    "background_color": "#10243a",
+    "stripes": [
+        {
+            "offset_mm": 8,
+            "width_mm": 14,
+            "color": "#0a1a2b",
+            "edge_lines": [
+                {
+                    "position": "start",
+                    "width_mm": 0.7,
+                    "color": "#e02b22",
+                    "style": "dotted",
+                    "dot_length_mm": 1.2,
+                    "gap_mm": 1.2,
+                },
+                {
+                    "position": "end",
+                    "width_mm": 0.4,
+                    "color": "#f0f2ee",
+                    "style": "solid",
+                },
+            ],
+        }
+    ],
+    "dot_layers": [
+        {
+            "radius_mm": 0.5,
+            "color": "#33506c",
+            "spacing_x_mm": 8,
+            "spacing_y_mm": 8,
+        }
+    ],
+}
 
-CASES = [("stripe", STRIPE), ("check", CHECK), ("dot", DOT), ("herringbone", HERRINGBONE)]
+CASES = [
+    ("stripe", STRIPE),
+    ("check", CHECK),
+    ("dot", DOT),
+    ("herringbone", HERRINGBONE),
+    ("stripe-dot", STRIPE_DOT),
+]
 
 
 def _create(kind: str, body: dict) -> dict:
@@ -86,3 +132,94 @@ def test_stripe_tile_must_be_multiple_of_period():
 def test_dot_radius_must_fit_spacing():
     body = dict(DOT, radius_mm=8)  # spacing 10 -> max 5
     assert client.post("/api/v1/patterns/dot", json=body).status_code == 422
+
+
+def test_stripe_dot_emits_rotated_layers():
+    data = _create("stripe-dot", STRIPE_DOT)
+    pattern = ET.fromstring(data["svg"]).find(f"{SVG_NS}defs/{SVG_NS}pattern")
+    assert pattern is not None
+    assert pattern.get("patternTransform") is None
+    assert float(pattern.get("width")) > 48
+    assert float(pattern.get("height")) > 48
+    fills = {el.get("fill") for el in pattern.iter() if el.get("fill")}
+    strokes = {el.get("stroke") for el in pattern.iter() if el.get("stroke")}
+    assert {"#10243a", "#33506c"} <= fills
+    assert {"#0a1a2b", "#e02b22", "#f0f2ee"} <= strokes
+    assert len(pattern.findall(f".//{SVG_NS}circle")) >= 1
+    assert len(pattern.findall(f".//{SVG_NS}line")) >= 3
+
+
+def test_stripe_dot_schema_example_is_accepted():
+    example = StripeDotRequest.model_config["json_schema_extra"]["examples"][0]
+    resp = client.post("/api/v1/patterns/stripe-dot", json=example)
+    assert resp.status_code == 200, resp.text
+
+
+def test_stripe_dot_dotted_line_requires_pitch():
+    body = dict(STRIPE_DOT)
+    body["stripes"] = [
+        {
+            "offset_mm": 8,
+            "width_mm": 14,
+            "color": "#0a1a2b",
+            "edge_lines": [
+                {
+                    "position": "start",
+                    "width_mm": 0.7,
+                    "color": "#e02b22",
+                    "style": "dotted",
+                }
+            ],
+        }
+    ]
+    assert client.post("/api/v1/patterns/stripe-dot", json=body).status_code == 422
+
+
+def test_stripe_dot_rejects_excessive_dot_count():
+    body = dict(STRIPE_DOT)
+    body["dot_layers"] = [
+        {
+            "radius_mm": 0.01,
+            "color": "#33506c",
+            "spacing_x_mm": 0.1,
+            "spacing_y_mm": 0.1,
+        }
+    ]
+    assert client.post("/api/v1/patterns/stripe-dot", json=body).status_code == 422
+
+
+def test_stripe_dot_recolor_changes_colors_keeps_geometry():
+    pid = _create("stripe-dot", STRIPE_DOT)["id"]
+    original = client.get(f"/api/v1/patterns/{pid}").text
+    resp = client.post(
+        f"/api/v1/patterns/{pid}/colorway",
+        json={"colors": ["#000000", "#111111", "#222222", "#333333", "#444444"]},
+    )
+    assert resp.status_code == 200, resp.text
+    recolored = resp.json()["svg"]
+    assert "#444444" in recolored and "#e02b22" not in recolored
+    assert recolored.count("<rect") == original.count("<rect")
+    assert recolored.count("<circle") == original.count("<circle")
+
+
+@pytest.mark.skipif(not HAS_RENDERER, reason="no SVG renderer (brew install librsvg)")
+def test_stripe_dot_raster_edges_are_continuous():
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    req = StripeDotRequest.model_validate(STRIPE_DOT)
+    pattern = StripeDotPattern(
+        tile_mm=req.tile_mm,
+        background_color=req.background_color,
+        stripes=req.stripes,
+        dot_layers=req.dot_layers,
+        angle=req.angle,
+    )
+    width, height = pattern.tile_size()
+    svg = render_document(pattern, doc_mm=width)
+    data, _ = rasterize(svg, "png", dpi=180, width_mm=width, height_mm=height)
+    arr = np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"))
+    seam_x, seam_y = edge_seam(arr)
+    assert seam_x <= 6 and seam_y <= 6

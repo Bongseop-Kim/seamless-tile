@@ -30,6 +30,7 @@ brew install librsvg
 
 ```
 POST /api/v1/patterns/stripe        -> { "id": "...", "svg": "..." }
+POST /api/v1/patterns/stripe-dot
 POST /api/v1/patterns/check
 POST /api/v1/patterns/dot
 POST /api/v1/patterns/herringbone
@@ -52,13 +53,21 @@ curl -X POST localhost:8000/api/v1/patterns/{id}/colorway \
 ```
 
 DPI/크기 협상: `dpi`는 `max_dpi`(기본 1200), `width_mm`은 `max_tile_mm`(기본 2000mm)로 제한하고
-픽셀 예산을 초과하면 422를 반환한다(거대 래스터 방지). 문서는 정사각형으로 렌더된다.
+픽셀 예산을 초과하면 422를 반환한다(거대 래스터 방지). 대부분의 문서는 정사각형으로 렌더되며,
+대각 `stripe-dot`처럼 자연 반복 폭/높이가 다른 패턴은 해당 비율을 보존한다.
 
 요청 예시:
 
 ```bash
 curl -X POST localhost:8000/api/v1/patterns/stripe -H 'content-type: application/json' \
   -d '{"widths_mm":[10,10],"colors":["#ffffff","#00aa33"],"tile_mm":20}'
+```
+
+복합 스트라이프/도트 요청 예시:
+
+```bash
+curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: application/json' \
+  -d '{"tile_mm":48,"angle":-32,"background_color":"#10243a","stripes":[{"offset_mm":8,"width_mm":14,"color":"#0a1a2b","edge_lines":[{"position":"start","width_mm":0.7,"color":"#e02b22","style":"dotted","dot_length_mm":1.2,"gap_mm":1.2},{"position":"end","width_mm":0.4,"color":"#f0f2ee","style":"solid"}]}],"dot_layers":[{"radius_mm":0.5,"color":"#33506c","spacing_x_mm":8,"spacing_y_mm":8}]}'
 ```
 
 공통 규칙:

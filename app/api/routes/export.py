@@ -10,7 +10,7 @@ from app.api.deps import get_store
 from app.api.schemas.common import ExportFormat
 from app.core.config import get_settings
 from app.render import raster
-from app.render.svg import document_size_mm, render_document
+from app.render.svg import document_dimensions_mm, render_document
 
 router = APIRouter(prefix="/patterns", tags=["export"])
 
@@ -49,10 +49,10 @@ def export_pattern(
             status_code=503,
             detail="no SVG renderer installed; run: brew install librsvg",
         )
-    size_mm = document_size_mm(pattern, width_mm)
+    width, height = document_dimensions_mm(pattern, width_mm)
     try:
         data, media_type = raster.rasterize(
-            svg, format.value, dpi, size_mm, binary=binary
+            svg, format.value, dpi, width, height_mm=height, binary=binary
         )
     except raster.RasterError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
