@@ -7,6 +7,8 @@ from app.domain.colorway import PALETTES
 class ColorwayRequest(BaseModel):
     """Recolor an existing pattern. Provide exactly one of `colors` or `palette`."""
 
+    model_config = {"json_schema_extra": {"examples": [{"palette": "earth"}]}}
+
     colors: list[str] | None = None
     palette: str | None = None
 

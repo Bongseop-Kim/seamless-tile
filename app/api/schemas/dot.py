@@ -4,6 +4,19 @@ from app.api.schemas.common import RepeatMode, validate_colors, validate_texture
 
 
 class DotRequest(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "radius_mm": 3,
+                    "spacing_mm": 12,
+                    "colors": ["#1a1a1a", "#ffffff"],
+                    "repeat": "half_drop",
+                }
+            ]
+        }
+    }
+
     radius_mm: float = Field(..., gt=0)
     spacing_mm: float = Field(..., gt=0)
     colors: list[str]

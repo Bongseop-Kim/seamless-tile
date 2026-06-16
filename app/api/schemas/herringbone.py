@@ -9,6 +9,19 @@ from app.api.schemas.common import (
 
 
 class HerringboneRequest(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "stroke_mm": 2,
+                    "pitch_mm": 10,
+                    "colors": ["#3e2f1c"],
+                    "tile_mm": 40,
+                }
+            ]
+        }
+    }
+
     stroke_mm: float = Field(..., gt=0)
     pitch_mm: float = Field(..., gt=0)
     colors: list[str]
