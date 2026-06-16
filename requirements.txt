@@ -1,7 +1,5 @@
 fastapi
-uvicorn
-pillow
-numpy
+uvicorn[standard]
+pydantic-settings
 httpx
-python-multipart
-python-dotenv
+pytest
