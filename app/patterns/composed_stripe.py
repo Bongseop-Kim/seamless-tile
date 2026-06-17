@@ -1,15 +1,13 @@
-"""Layered stripe + geometric dot pattern for necktie fabric grounds."""
+"""Composed stripe grounds with optional edge lines."""
 
 import math
 
-from app.api.schemas.stripe_dot import (
-    DotLayer,
-    DotRepeat,
-    DotShape,
+from app.api.schemas.common import (
     LinePosition,
     LineStyle,
     StripeBand,
     StripeLine,
+    StripeLineDotShape,
 )
 from app.domain.colorway import Colorway
 from app.domain.pattern import Pattern
@@ -17,7 +15,7 @@ from app.domain.repeat import RepeatMode
 from app.domain.units import fmt
 
 
-class StripeDotPattern(Pattern):
+class ComposedStripePattern(Pattern):
     repeat_default = RepeatMode.block
     _EPSILON = 1e-9
 
@@ -26,14 +24,12 @@ class StripeDotPattern(Pattern):
         tile_mm: float,
         background_color: str,
         stripes: list[StripeBand],
-        dot_layers: list[DotLayer] | None = None,
         angle: float = 0.0,
     ):
         colors = [background_color]
         self._background_color_index = 0
         self._stripe_color_indexes: list[int] = []
         self._line_color_indexes: list[list[int]] = []
-        self._dot_color_indexes: list[int] = []
         for stripe in stripes:
             self._stripe_color_indexes.append(len(colors))
             colors.append(stripe.color)
@@ -42,12 +38,8 @@ class StripeDotPattern(Pattern):
                 line_indexes.append(len(colors))
                 colors.append(line.color)
             self._line_color_indexes.append(line_indexes)
-        for layer in dot_layers or []:
-            self._dot_color_indexes.append(len(colors))
-            colors.append(layer.color)
         super().__init__(tile_mm, Colorway(colors), RepeatMode.block)
         self.stripes = stripes
-        self.dot_layers = dot_layers or []
         self.angle = angle
         radians = math.radians(angle)
         self._nx = math.cos(radians)
@@ -110,7 +102,7 @@ class StripeDotPattern(Pattern):
         t = -self._line_length
         while t < self._line_length:
             segment = min(line.dot_length_mm, self._line_length - t)
-            if line.dot_shape == DotShape.circle:
+            if line.dot_shape == StripeLineDotShape.circle:
                 r = min(line.width_mm, segment) / 2
                 dot_cx = cx + self._dx * (t + segment / 2)
                 dot_cy = cy + self._dy * (t + segment / 2)
@@ -131,40 +123,12 @@ class StripeDotPattern(Pattern):
             t += pitch
         return "".join(parts)
 
-    def _dot_offsets(self, layer: DotLayer) -> list[tuple[float, float]]:
-        if layer.repeat == DotRepeat.half_drop:
-            return [(0.0, 0.0), (layer.spacing_x_mm / 2, layer.spacing_y_mm / 2)]
-        if layer.repeat == DotRepeat.brick:
-            return [(0.0, 0.0), (layer.spacing_x_mm / 2, layer.spacing_y_mm)]
-        return [(0.0, 0.0)]
-
-    def _dot_layer(self, layer: DotLayer, color: str) -> str:
-        parts = []
-        count_x = max(1, round(self._pattern_w / layer.spacing_x_mm))
-        count_y = max(1, round(self._pattern_h / layer.spacing_y_mm))
-        spacing_x = self._pattern_w / count_x
-        spacing_y = self._pattern_h / count_y
-        for dx, dy in self._dot_offsets(layer):
-            x = (layer.offset_x_mm + dx) % spacing_x - spacing_x
-            while x <= self._pattern_w + spacing_x + self._EPSILON:
-                y = (layer.offset_y_mm + dy) % spacing_y - spacing_y
-                while y <= self._pattern_h + spacing_y + self._EPSILON:
-                    parts.append(
-                        f'<circle cx="{fmt(x)}" cy="{fmt(y)}" '
-                        f'r="{fmt(layer.radius_mm)}" fill="{color}"/>'
-                    )
-                    y += spacing_y
-                x += spacing_x
-        return "".join(parts)
-
     def motif(self) -> str:
         background_color = self.colorway[self._background_color_index]
         parts = [
             f'<rect x="0" y="0" width="{fmt(self._pattern_w)}" '
             f'height="{fmt(self._pattern_h)}" fill="{background_color}"/>'
         ]
-        for i, layer in enumerate(self.dot_layers):
-            parts.append(self._dot_layer(layer, self.colorway[self._dot_color_indexes[i]]))
         for stripe_index, stripe in enumerate(self.stripes):
             stripe_color = self.colorway[self._stripe_color_indexes[stripe_index]]
             for phase in self._phase_centers(stripe.offset_mm + stripe.width_mm / 2):

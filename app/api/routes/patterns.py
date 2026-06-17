@@ -12,15 +12,14 @@ from app.api.schemas.colorway import ColorwayRequest
 from app.api.schemas.dot import DotRequest
 from app.api.schemas.herringbone import HerringboneRequest
 from app.api.schemas.stripe import StripeRequest
-from app.api.schemas.stripe_dot import StripeDotRequest
 from app.domain.colorway import Colorway, resolve_palette
 from app.domain.pattern import Pattern
 from app.domain.repeat import RepeatMode
 from app.patterns.check import CheckPattern
+from app.patterns.composed_stripe import ComposedStripePattern
 from app.patterns.dot import DotPattern
 from app.patterns.herringbone import HerringbonePattern
 from app.patterns.stripe import StripePattern
-from app.patterns.stripe_dot import StripeDotPattern
 from app.render.svg import render_document
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
@@ -37,11 +36,10 @@ def _store_and_respond(pattern: Pattern, store) -> dict[str, str]:
 @router.post("/stripe")
 def create_stripe(req: StripeRequest, store=Depends(get_store)) -> dict[str, str]:
     if req.stripes:
-        pattern = StripeDotPattern(
+        pattern = ComposedStripePattern(
             tile_mm=req.tile_mm,
             background_color=req.background_color,
             stripes=req.stripes,
-            dot_layers=[],
             angle=req.angle,
         )
     else:
@@ -52,18 +50,6 @@ def create_stripe(req: StripeRequest, store=Depends(get_store)) -> dict[str, str
             widths_mm=req.widths_mm,
             angle=req.angle,
         )
-    return _store_and_respond(pattern, store)
-
-
-@router.post("/stripe-dot")
-def create_stripe_dot(req: StripeDotRequest, store=Depends(get_store)) -> dict[str, str]:
-    pattern = StripeDotPattern(
-        tile_mm=req.tile_mm,
-        background_color=req.background_color,
-        stripes=req.stripes,
-        dot_layers=req.dot_layers,
-        angle=req.angle,
-    )
     return _store_and_respond(pattern, store)
 
 

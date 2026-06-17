@@ -2,8 +2,13 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.api.schemas.common import MAX_REPEATS, RepeatMode, is_multiple, validate_colors
-from app.api.schemas.stripe_dot import _validate_color
+from app.api.schemas.common import (
+    MAX_REPEATS,
+    RepeatMode,
+    is_multiple,
+    validate_color,
+    validate_colors,
+)
 
 
 class DotShape(str, Enum):
@@ -23,7 +28,7 @@ class DotLayer(BaseModel):
     offset_y_mm: float = 0.0
     repeat: RepeatMode = RepeatMode.block
 
-    _color = field_validator("color")(_validate_color)
+    _color = field_validator("color")(validate_color)
 
     @model_validator(mode="after")
     def _size_fits_spacing(self) -> "DotLayer":
@@ -78,7 +83,7 @@ class DotRequest(BaseModel):
     background_color: str = "#ffffff"
     layers: list[DotLayer] = Field(default_factory=list)
 
-    _background_color = field_validator("background_color")(_validate_color)
+    _background_color = field_validator("background_color")(validate_color)
 
     @field_validator("colors")
     @classmethod

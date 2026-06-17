@@ -49,28 +49,46 @@ POST /api/v1/generate
   body: {
     "prompt": "남색 바탕에 작은 코랄색 꽃을 흩뿌린 패턴",
     "reference_image": "<base64 또는 URL>",   # 선택. 있으면 image-to-image
-    "canvas": { ... }, "palette": [ ... ]       # 선택 힌트
+    "canvas": { ... }, "palette": [ ... ],      # 선택 힌트
+    "seed": 184231,                             # 선택. 재현용
+    "candidate_count": 4                        # 선택. 포괄 요청 기본값
   }
-  -> { "id": "...", "svg": "...", "intent": { ... } }
+  -> {
+       "request_id": "...",
+       "candidates": [
+         { "id": "...", "svg": "...", "intent": { ... }, "layout_id": "stripe_dot_motif" }
+       ]
+     }
 ```
 
 - `reference_image`가 **없으면 text → SVG**, **있으면 image → SVG**로 동작한다. 두 경로는
   LLM 입력만 다르고 같은 **의도 JSON**으로 수렴하므로 엔진·검증 루프를 100% 공유한다.
 - 참조 이미지는 스타일/모티프/색을 *해석*해 의도 JSON을 채우는 데만 쓰이고, 좌표·seamless는
   여전히 엔진이 보장한다.
+- `"꿀벌 디자인해줘"`처럼 포괄적인 text 요청은 단일 결과로 확정하지 않는다. 서버는 사전에
+  정의된 layout type 중 compatible 후보를 고르고, 각 layout 안에서 색상·간격·offset·밀도만
+  seed 기반으로 변주해 여러 SVG 후보를 반환한다.
+
+초기 text-to-image MVP의 대표 후보:
+
+1. `stripe_dot_motif`: 스트라이프 + 도트 + motif
+2. `stripe_motif`: 스트라이프 + motif
+3. `motif_periodic`: motif 단순 주기 배치
+4. `motif_scatter`: motif 산포 배치
 
 > **구현 현황**: `generate` API는 목표 제품 표면이며, 그 아래의 결정론적 엔진·래스터·seamless
-> 측정은 완성돼 있다. LLM 어댑터·의도 JSON 스키마·검증 루프는 구축 예정이다(ARCHITECTURE.md
-> "신규 레이어" 참고).
+> 측정은 완성돼 있다. LLM 어댑터·의도 JSON 스키마·layout catalog/recipe·motif registry·검증
+> 루프는 구축 예정이다(ARCHITECTURE.md "신규 레이어" 참고).
 
 ## 개발 확인용 엔드포인트
 
 아래 패턴 엔드포인트는 **단계별 개발 확인용 스캐폴딩**이다. 엔진·래스터·seamless를 개별
-검증하기 위해 의도 JSON을 거치지 않고 정밀 파라미터를 직접 받는다. 최종 제품 표면이 아니다.
+검증하기 위해 의도 JSON을 거치지 않고 정밀 파라미터를 직접 받는다. 최종 제품 표면이 아니며,
+`generate` 내부에서는 이들을 완성 패턴 타입으로 키우기보다 재사용 가능한 layer primitive의
+검증 출발점으로 본다.
 
 ```
 POST /api/v1/patterns/stripe        -> { "id": "...", "svg": "..." }
-POST /api/v1/patterns/stripe-dot
 POST /api/v1/patterns/check
 POST /api/v1/patterns/dot
 POST /api/v1/patterns/herringbone
@@ -94,7 +112,7 @@ curl -X POST localhost:8000/api/v1/patterns/{id}/colorway \
 
 DPI/크기 협상: `dpi`는 `max_dpi`(기본 1200), `width_mm`은 `max_tile_mm`(기본 2000mm)로 제한하고
 픽셀 예산을 초과하면 422를 반환한다(거대 래스터 방지). 대부분의 문서는 정사각형으로 렌더되며,
-대각 `stripe-dot`처럼 자연 반복 폭/높이가 다른 패턴은 해당 비율을 보존한다.
+대각 composed stripe처럼 자연 반복 폭/높이가 다른 패턴은 해당 비율을 보존한다.
 
 요청 예시:
 
@@ -161,15 +179,6 @@ curl -X POST localhost:8000/api/v1/patterns/dot -H 'content-type: application/js
   -d '{"tile_mm":48,"background_color":"#eef4ef","layers":[{"shape":"teardrop","size_mm":3,"color":"#277a6f","spacing_x_mm":16,"spacing_y_mm":16,"offset_x_mm":8,"offset_y_mm":8},{"shape":"circle","size_mm":1.5,"color":"#16233f","spacing_x_mm":8,"spacing_y_mm":8}]}'
 ```
 
-### 스트라이프 + 도트
-
-대각 스트라이프 위에 작은 도트 레이어를 올린 복합 패턴:
-
-```bash
-curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: application/json' \
-  -d '{"tile_mm":48,"angle":-32,"background_color":"#10243a","stripes":[{"offset_mm":8,"width_mm":14,"color":"#0a1a2b","edge_lines":[{"position":"start","width_mm":0.7,"color":"#e02b22","style":"dotted","dot_length_mm":1.2,"gap_mm":1.2},{"position":"end","width_mm":0.4,"color":"#f0f2ee","style":"solid"}]}],"dot_layers":[{"radius_mm":0.5,"color":"#33506c","spacing_x_mm":8,"spacing_y_mm":8}]}'
-```
-
 공통 규칙:
 
 - 단위는 **mm**. 래스터화 시 `px = round(mm / 25.4 × dpi)`로 변환하고 DPI를 파일에 기록한다(인쇄 300, 웹 72).
@@ -181,7 +190,9 @@ curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: applica
 ## 엔진 확인용 스크립트
 
 `generate` API가 사용할 결정론적 엔진(배치 + 경계 wrap)을 직접 확인하기 위한 스크립트다.
-산포(scatter)형 seamless가 어떻게 보장되는지 눈으로 검증한다.
+산포(scatter)형 seamless가 어떻게 보장되는지 눈으로 검증한다. 이 스크립트들은 제품 API에
+그대로 들어가는 구현이 아니라, layout recipe와 placement engine으로 승격할 알고리즘 reference
+fixture다.
 
 ### 복잡한 SVG seamless 래핑
 
@@ -260,7 +271,9 @@ open /private/tmp/flower-scatter-repeat-preview.png
 ### Stripe + dot + motif
 
 대각 스트라이프 위에 빨간 점선 edge line과 금색 벌 motif를 올린 예시다. 남색 직물 바탕,
-대각 밴드, 점선, 벌 motif를 모두 같은 대각 주기 좌표계에 맞춰 생성한다.
+대각 밴드, 점선, 벌 motif를 모두 같은 대각 주기 좌표계에 맞춰 생성한다. 이 예시는 단순히
+레이어를 쌓은 결과가 아니라, `stripe_dot_motif` layout type이 가져야 할 coordinated composition
+규칙의 기준이다.
 
 ```bash
 .venv/bin/python scripts/generate_stripe_dot_bee.py
@@ -296,5 +309,5 @@ open /private/tmp/stripe-dot-bee-repeat-preview.png
 ## 알려진 한계
 
 - **저장소**: 패턴은 인메모리 저장이라 재시작 시 사라지고 멀티워커 간 공유되지 않는다.
-- **미구현**: `generate` API의 LLM 어댑터·의도 JSON·검증 루프는 구축 예정이다. 현재는 결정론적
-  엔진과 seamless 측정까지 완성된 상태다.
+- **미구현**: `generate` API의 LLM 어댑터·의도 JSON·layout catalog/recipe·motif registry·검증
+  루프는 구축 예정이다. 현재는 결정론적 엔진과 seamless 측정까지 완성된 상태다.

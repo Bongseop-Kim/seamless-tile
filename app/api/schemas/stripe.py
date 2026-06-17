@@ -1,7 +1,13 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.api.schemas.common import MAX_REPEATS, is_multiple, validate_colors
-from app.api.schemas.stripe_dot import LineStyle, StripeBand, _validate_color
+from app.api.schemas.common import (
+    MAX_REPEATS,
+    LineStyle,
+    StripeBand,
+    is_multiple,
+    validate_color,
+    validate_colors,
+)
 
 AXIS_ALIGNED_ANGLE_TOLERANCE = 1e-6
 
@@ -63,7 +69,7 @@ class StripeRequest(BaseModel):
     background_color: str = "#ffffff"
     stripes: list[StripeBand] = Field(default_factory=list)
 
-    _background_color = field_validator("background_color")(_validate_color)
+    _background_color = field_validator("background_color")(validate_color)
 
     @field_validator("colors")
     @classmethod

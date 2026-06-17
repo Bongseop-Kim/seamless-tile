@@ -11,7 +11,13 @@ __all__ = [
     "RepeatMode",
     "ExportFormat",
     "BandPatternRequest",
+    "LinePosition",
+    "LineStyle",
+    "StripeLineDotShape",
+    "StripeLine",
+    "StripeBand",
     "validate_colors",
+    "validate_color",
     "is_multiple",
 ]
 
@@ -24,6 +30,22 @@ class ExportFormat(str, Enum):
     tiff = "tiff"
 
 
+class LinePosition(str, Enum):
+    start = "start"
+    end = "end"
+    center = "center"
+
+
+class LineStyle(str, Enum):
+    solid = "solid"
+    dotted = "dotted"
+
+
+class StripeLineDotShape(str, Enum):
+    rect = "rect"
+    circle = "circle"
+
+
 def validate_colors(colors: list[str]) -> list[str]:
     if not colors:
         raise ValueError("at least one color is required")
@@ -31,6 +53,11 @@ def validate_colors(colors: list[str]) -> list[str]:
         if not is_hex_color(c):
             raise ValueError(f"invalid hex color: {c!r}")
     return colors
+
+
+def validate_color(value: str) -> str:
+    validate_colors([value])
+    return value
 
 
 def is_multiple(total: float, unit: float, tol: float = 1e-6) -> bool:
@@ -69,3 +96,33 @@ class BandPatternRequest(BaseModel):
         if self.tile_mm / period > MAX_REPEATS:
             raise ValueError("too many band repeats; increase widths or reduce tile_mm")
         return self
+
+
+class StripeLine(BaseModel):
+    position: LinePosition
+    width_mm: float = Field(..., gt=0)
+    color: str
+    offset_mm: float = 0.0
+    style: LineStyle = LineStyle.solid
+    dot_length_mm: float | None = Field(None, gt=0)
+    gap_mm: float | None = Field(None, gt=0)
+    dot_shape: StripeLineDotShape = StripeLineDotShape.rect
+
+    _color = field_validator("color")(validate_color)
+
+    @model_validator(mode="after")
+    def _dotted_has_pitch(self) -> "StripeLine":
+        if self.style == LineStyle.dotted:
+            if self.dot_length_mm is None or self.gap_mm is None:
+                raise ValueError("dotted lines require dot_length_mm and gap_mm")
+        return self
+
+
+class StripeBand(BaseModel):
+    offset_mm: float = Field(..., ge=0)
+    width_mm: float = Field(..., gt=0)
+    color: str
+    opacity: float = Field(1.0, gt=0, le=1)
+    edge_lines: list[StripeLine] = Field(default_factory=list)
+
+    _color = field_validator("color")(validate_color)
