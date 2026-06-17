@@ -29,27 +29,6 @@ seamless 보장은 모두 결정론적 엔진이 담당한다.
   래스터 경계에서만 수행한다.
 - **외부 의존성 격리**: LLM, 저장소, CDN, Supabase 등은 코어 엔진 바깥 어댑터로 둔다.
 
-## 제거 방향
-
-기존 `patterns/stripe`, `patterns/dot`, `patterns/check`, `patterns/herringbone`처럼 각각이
-완성 SVG 패턴을 직접 만드는 구조는 정식 아키텍처에서 사용하지 않는다.
-
-정리 방향:
-
-- `/api/v1/patterns/*` 확인용 API 제거
-- `Pattern` ABC 기반 완성 패턴 클래스 제거
-- stripe 내부에서 dot/motif를 직접 그리는 구조 제거
-- 개발용 인메모리 pattern 저장소 제거
-- 기존 구현은 필요한 수학/렌더링 아이디어만 새 엔진으로 옮기고 폐기
-
-유지 가능한 자산:
-
-- mm 단위 변환과 SVG 숫자 포맷
-- 래스터 export
-- seam metric 검증
-- palette/colorway 유틸
-- 기존 예제 SVG는 시각 회귀 fixture로만 사용
-
 ## 목표 구조
 
 ```text
@@ -247,19 +226,6 @@ POST /api/v1/generate
 - 포괄 요청은 여러 compatible layout 후보를 반환한다.
 - 구체 요청은 `candidate_count=1`로 줄일 수 있다.
 - LLM adapter는 intent JSON을 만들 뿐, SVG 좌표나 raw SVG를 만들지 않는다.
-
-## 개발 순서
-
-1. **아키텍처 정리**: 기존 pattern API와 완성 패턴 클래스 제거 방향 확정.
-2. **Intent schema**: `canvas`, `layers`, `params`, `placement`, `seed`, `palette` 계약 정의.
-3. **PrimitiveFactory**: background, stripe, dot, motif primitive 구현.
-4. **Motif registry**: MVP motif로 `bee` 추가.
-5. **PlacementEngine**: periodic, grid, diagonal_lane 먼저 구현.
-6. **CompositionEngine**: layer 순서, SVG defs/use, opacity, clipping 합성.
-7. **SeamlessEngine**: period 검증, torus wrap, boundary clone 공통화.
-8. **Generate API**: 초기에는 LLM 없이 규칙 기반 intent builder로 연결.
-9. **검증**: SVG 구조 테스트, 2x2 repeat preview, seam metric 테스트.
-10. **어댑터**: storage, LLM, image-to-image는 엔진 계약 안정화 이후 추가.
 
 ## MVP 성공 기준
 
