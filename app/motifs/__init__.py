@@ -1,0 +1,2 @@
+"""Motif registry package."""
+

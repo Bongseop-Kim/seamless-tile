@@ -1,15 +1,4 @@
-"""Repeat layout: arrange a seamless base cell into a translational tile.
-
-block      : 1x1 grid, tile == cell.
-half_drop  : odd columns shifted down by H/2. The half-drop lattice has a
-             rectangular period of (2W, H) containing two motif positions
-             (0,0) and (W, H/2); the wrap copy (W, -H/2) completes the column.
-brick      : odd rows shifted right by W/2. Symmetric: period (W, 2H) with
-             stamps (0,0), (W/2, H) and the wrap copy (-W/2, H).
-
-Each function returns (tile_w, tile_h, [(dx, dy), ...]) so the resulting
-compound tile is a pure translational repeat and stays seamless.
-"""
+"""Repeat lattice utilities for seamless placement."""
 
 from enum import Enum
 

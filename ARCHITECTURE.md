@@ -1,92 +1,227 @@
 # 아키텍처 — AI Seamless SVG 생성기
 
 텍스트 또는 참조 이미지로부터 **이음매 없는(seamless) 텍스타일 패턴 SVG**를 생성하는
-서비스를 목표로 한다. 현재 구현은 LLM 없이도 검증 가능한 결정론적 SVG 엔진과 확인용 API에
-집중한다. LLM, 영속 저장소, 멀티모달 검증은 엔진 계약이 안정된 뒤 단계적으로 붙인다.
+서비스다. 엔진의 핵심은 완성 패턴 클래스를 많이 만드는 것이 아니라, 다음 네 단계를 분리하는
+것이다.
+
+```text
+Primitive 생성
++ Placement 계산
++ Layer 합성
++ Seamless 보장
+```
+
+LLM은 최종적으로 `prompt -> intent JSON` 변환만 담당한다. SVG 좌표, 반복, 배치, 합성,
+seamless 보장은 모두 결정론적 엔진이 담당한다.
 
 ## 핵심 원칙
 
-- **엔진은 LLM 비의존**: LLM은 최종적으로 `prompt -> intent JSON` 변환만 담당한다. raw SVG
-  좌표, 배치, seamless 보장은 결정론적 엔진이 맡는다.
-- **구조적 seamless**: 타일은 픽셀 보정이 아니라 반복 격자(repeat lattice), pattern
-  transform, 경계 토러스 wrap으로 seamless가 된다.
+- **Primitive 우선**: stripe, dot, motif, background는 완성 패턴이 아니라 재사용 가능한 SVG
+  primitive다.
+- **Placement 분리**: primitive는 자신이 어디에 놓일지 모른다. grid, scatter, periodic,
+  diagonal lane 같은 배치는 Placement engine이 계산한다.
+- **Layer 합성 분리**: 최종 SVG는 개별 primitive가 아니라 Composition engine이 layer 순서대로
+  합성한다.
+- **구조적 seamless**: 픽셀 보정이 아니라 repeat lattice, pattern transform, torus wrap,
+  boundary clone으로 경계 연속성을 보장한다.
 - **벡터 우선**: SVG가 단일 진실 공급원이다. PNG/TIFF는 SVG를 래스터화한 파생 산출물이다.
-- **mm 기반 단위**: 기하는 내부적으로 밀리미터로 다루고, `px = round(mm / 25.4 * dpi)` 변환은
+- **mm 기반 단위**: 기하는 내부적으로 밀리미터로 다룬다. `px = round(mm / 25.4 * dpi)` 변환은
   래스터 경계에서만 수행한다.
-- **생성과 반복의 분리**: motif 정의, placement, repeat mode, raster export를 분리한다.
-- **교체 가능한 외부 의존성**: 저장소와 LLM provider는 코어 엔진 바깥 어댑터로 둔다.
+- **외부 의존성 격리**: LLM, 저장소, CDN, Supabase 등은 코어 엔진 바깥 어댑터로 둔다.
 
-## 현재 구현
+## 제거 방향
 
-현재 API는 제품용 `generate`가 아니라 엔진 검증용 스캐폴딩이다.
+기존 `patterns/stripe`, `patterns/dot`, `patterns/check`, `patterns/herringbone`처럼 각각이
+완성 SVG 패턴을 직접 만드는 구조는 정식 아키텍처에서 사용하지 않는다.
 
-```text
-POST /api/v1/patterns/stripe
-POST /api/v1/patterns/check
-POST /api/v1/patterns/dot
-POST /api/v1/patterns/herringbone
-GET  /api/v1/patterns/{id}
-GET  /api/v1/patterns/{id}/export?format=svg|png|tiff
-POST /api/v1/patterns/{id}/colorway
-GET  /api/v1/palettes
-GET  /api/v1/health
-```
+정리 방향:
 
-이 API들은 정밀 파라미터를 직접 받아 SVG를 만들고, 엔진의 단위 기능을 확인한다. 최종 제품
-표면은 후속 단계에서 `POST /api/v1/generate`로 별도 추가한다.
+- `/api/v1/patterns/*` 확인용 API 제거
+- `Pattern` ABC 기반 완성 패턴 클래스 제거
+- stripe 내부에서 dot/motif를 직접 그리는 구조 제거
+- 개발용 인메모리 pattern 저장소 제거
+- 기존 구현은 필요한 수학/렌더링 아이디어만 새 엔진으로 옮기고 폐기
+
+유지 가능한 자산:
+
+- mm 단위 변환과 SVG 숫자 포맷
+- 래스터 export
+- seam metric 검증
+- palette/colorway 유틸
+- 기존 예제 SVG는 시각 회귀 fixture로만 사용
+
+## 목표 구조
 
 ```text
 app/
-├── main.py                 # FastAPI app, /api/v1 라우터 연결
-├── core/config.py          # renderer_bin, dpi, tile 크기 제한
-├── domain/
-│   ├── units.py            # mm <-> px 변환, SVG 숫자 포맷
-│   ├── colorway.py         # Colorway + 명명 팔레트
-│   ├── repeat.py           # block / half_drop / brick 배치
-│   ├── tile.py             # <pattern> 조립
-│   └── pattern.py          # 현재 패턴 ABC
-├── patterns/               # stripe / check / dot / herringbone 구현
+├── main.py
+├── core/
+│   └── config.py
+├── engine/
+│   ├── intent.py              # 엔진 입력 계약
+│   ├── units.py               # mm/px 변환, SVG 숫자 포맷
+│   ├── palette.py             # palette, colorway, 색상 검증
+│   ├── primitives/            # stripe, dot, motif, background primitive
+│   ├── placement/             # repeat, grid, periodic, scatter, diagonal_lane
+│   ├── composition.py         # layers[] -> SVG tile
+│   ├── seamless.py            # repeat lattice, torus wrap, boundary clone
+│   └── generate.py            # intent -> candidates
+├── motifs/
+│   └── registry.py            # bee, flower 등 SVG defs
 ├── render/
-│   ├── svg.py              # standalone SVG 문서 렌더링
-│   └── raster.py           # rsvg-convert|resvg -> PNG/TIFF + DPI metadata
-├── validate/seamless.py    # seam metric
+│   ├── svg.py
+│   └── raster.py
+├── validate/
+│   └── seamless.py
 └── api/
-    ├── routes/             # 확인용 API
-    ├── schemas/            # 확인용 request schema
-    └── deps.py             # 개발용 인메모리 저장소
+    ├── routes/generate.py
+    ├── routes/export.py
+    └── schemas/generate.py
 ```
 
-## 목표 엔진 계약
+## 엔진 데이터 흐름
 
-최종 `generate`는 직접 SVG를 요청하지 않고, LLM 또는 규칙 기반 어댑터가 만든 intent JSON을
-엔진에 전달한다. intent JSON은 좌표를 담지 않는다.
+```text
+GenerateRequest
+  -> IntentBuilder
+  -> Intent JSON
+  -> PrimitiveFactory
+  -> PlacementEngine
+  -> CompositionEngine
+  -> SeamlessEngine
+  -> SVG candidate
+  -> Validation/export/storage adapters
+```
+
+각 단계의 책임은 겹치면 안 된다.
+
+- **PrimitiveFactory**: stripe, dot, motif, background 같은 그릴 수 있는 SVG 조각을 만든다.
+- **PlacementEngine**: primitive instance들의 좌표, 회전, scale, 반복 위치를 계산한다.
+- **CompositionEngine**: layer 순서, opacity, blend, clipping, SVG defs/use를 조립한다.
+- **SeamlessEngine**: repeat mode와 torus wrap을 적용해 경계 연속성을 보장한다.
+
+## Intent 계약
+
+최종 제품 API는 SVG를 직접 요청하지 않는다. 사용자는 prompt, 참조 이미지, canvas, palette,
+seed 정도만 전달한다. 엔진은 이 입력을 intent JSON으로 변환해 실행한다.
 
 ```jsonc
 {
-  "canvas": { "tile_mm": 48 },
-  "subject": "bee",
-  "layout_id": "motif_scatter",
+  "canvas": {
+    "tile_mm": 48
+  },
   "seed": 184231,
   "palette": ["#10243a", "#ef8a7a", "#f5ca57"],
-  "motifs": [
-    { "id": "bee", "count": 12, "scale": 0.9, "rotation": "random" }
+  "layers": [
+    {
+      "id": "ground",
+      "type": "background",
+      "params": { "color": "#10243a" }
+    },
+    {
+      "id": "stripe_base",
+      "type": "stripe",
+      "params": {
+        "angle": -32,
+        "period_mm": 24,
+        "bands": [
+          { "offset_mm": 6, "width_mm": 12, "color": "#0a1a2b" }
+        ]
+      }
+    },
+    {
+      "id": "dot_on_stripe",
+      "type": "dot",
+      "params": {
+        "shape": "circle",
+        "size_mm": 1.4,
+        "color": "#ef8a7a"
+      },
+      "placement": {
+        "type": "diagonal_lane",
+        "host_layer": "stripe_base",
+        "lane": "center",
+        "spacing_mm": 6,
+        "phase_mm": 0
+      }
+    },
+    {
+      "id": "bee_on_stripe",
+      "type": "motif",
+      "params": {
+        "motif_id": "bee",
+        "size_mm": 5,
+        "color": "#f5ca57"
+      },
+      "placement": {
+        "type": "diagonal_lane",
+        "host_layer": "stripe_base",
+        "lane": "end",
+        "spacing_mm": 24,
+        "phase_mm": 12,
+        "rotation": "follow_lane"
+      }
+    }
   ]
 }
 ```
 
-엔진은 이 계약을 기준으로 다음 책임만 가진다.
+중요한 규칙:
 
-- **Layout catalog**: 검증된 layout recipe 목록에서 compatible layout을 선택한다.
-- **Layer primitives**: stripe, dot, check, herringbone 같은 기하 레이어를 재사용 가능한 조각으로
-  제공한다.
-- **Motif registry**: `bee`, `flower`, `pelican` 같은 motif SVG defs를 id로 제공한다.
-- **Placement engine**: grid, periodic, scatter, diagonal lane 배치를 seed 기반으로 결정한다.
-- **Composition engine**: background layer, helper layer, motif layer를 하나의 SVG로 합성한다.
-- **Seamless guarantee**: repeat mode와 torus wrap으로 경계 연속성을 보장한다.
+- `stripe`는 dot이나 motif를 직접 그리지 않는다.
+- `dot`은 자신이 어느 stripe 위에 올라가는지 모른다.
+- `motif`는 자신이 몇 개 배치되는지 직접 결정하지 않는다.
+- `placement.host_layer`가 layer 간 관계를 표현한다.
+- 같은 intent와 같은 seed는 같은 SVG를 생성해야 한다.
 
-## 제품 API 목표
+## Placement 모델
 
-최종 제품 표면은 하나로 좁힌다.
+Placement engine은 primitive instance 목록을 만든다.
+
+지원 목표:
+
+- **grid**: 정규 격자 배치
+- **periodic**: x/y 주기 기반 반복 배치
+- **scatter**: seed 기반 산포 배치
+- **diagonal_lane**: stripe 같은 host layer의 lane을 따라 배치
+
+`diagonal_lane`은 “선 위에 도트/모티프를 올리는” 핵심 모델이다. stripe primitive의 angle,
+period, band/lane 정보를 참조해 lane 중심선을 계산하고, `spacing_mm`, `phase_mm`, `lane`,
+`offset_mm`에 따라 instance를 만든다.
+
+## Layer 합성
+
+Layer는 다음 정보를 가진다.
+
+```text
+id
+type
+params
+placement
+z_order
+opacity
+clip
+```
+
+Composition engine은 layer를 `z_order` 순서로 정렬한 뒤 하나의 SVG tile로 합성한다. SVG defs와
+`<use>`는 Composition engine이 관리한다. primitive 구현이 최종 `<svg>` 문서를 직접 만들면 안 된다.
+
+## Seamless 보장
+
+Seamless는 각 primitive가 알아서 해결하는 문제가 아니다. 엔진 전체의 공통 책임이다.
+
+보장 방식:
+
+- tile 크기와 placement period를 commensurate하게 검증
+- repeat lattice 기반의 반복 가능한 좌표만 허용
+- bbox가 타일 경계를 넘는 instance는 반대편에 boundary clone 생성
+- scatter는 torus 좌표계에서 계산
+- diagonal lane은 tile 주기와 lane spacing의 정수배 조건을 검증
+- 최종 SVG는 seam metric으로 검증 가능해야 함
+
+## 제품 API
+
+최종 제품 표면은 하나다.
 
 ```text
 POST /api/v1/generate
@@ -107,58 +242,41 @@ POST /api/v1/generate
 ```
 
 - `reference_image`가 없으면 text-to-image 경로로 처리한다.
-- `reference_image`가 있으면 image-to-image 경로로 처리하되, 참조 이미지는 스타일/모티프/색을
+- `reference_image`가 있으면 image-to-image 경로로 처리하되, 참조 이미지는 스타일, 모티프, 색을
   intent JSON으로 해석하는 데만 사용한다.
 - 포괄 요청은 여러 compatible layout 후보를 반환한다.
 - 구체 요청은 `candidate_count=1`로 줄일 수 있다.
-- 같은 `seed`와 같은 intent는 같은 SVG를 재생성해야 한다.
+- LLM adapter는 intent JSON을 만들 뿐, SVG 좌표나 raw SVG를 만들지 않는다.
 
 ## 개발 순서
 
-1. **Intent schema**: LLM 없이도 손으로 호출 가능한 최소 intent JSON 스키마를 만든다.
-2. **Placement engine**: scatter와 periodic motif 배치를 1급 엔진 기능으로 올린다.
-3. **Motif registry**: MVP motif로 `bee`를 추가하고, `flower`/`pelican`은 fixture로 유지한다.
-4. **Layout recipe**: `stripe_dot_motif`, `stripe_motif`, `motif_periodic`, `motif_scatter`를
-   얇은 recipe로 구현한다.
-5. **Generate API**: `POST /api/v1/generate`를 추가하되, 초기에는 LLM 없이 규칙 기반 intent
-   builder로 연결한다.
-6. **Storage adapter**: 개발용 인메모리 저장소를 저장소 인터페이스 뒤로 숨기고, 산출물 저장은
-   Supabase Storage로 교체한다.
-7. **LLM adapter**: `prompt -> intent JSON` 어댑터를 붙인다. provider API는 이 단계 이후에
-   선택한다.
-8. **Validation loop**: seam metric 기반 검증을 먼저 자동화하고, 필요하면 멀티모달 LLM 피드백을
-   후속으로 붙인다.
+1. **아키텍처 정리**: 기존 pattern API와 완성 패턴 클래스 제거 방향 확정.
+2. **Intent schema**: `canvas`, `layers`, `params`, `placement`, `seed`, `palette` 계약 정의.
+3. **PrimitiveFactory**: background, stripe, dot, motif primitive 구현.
+4. **Motif registry**: MVP motif로 `bee` 추가.
+5. **PlacementEngine**: periodic, grid, diagonal_lane 먼저 구현.
+6. **CompositionEngine**: layer 순서, SVG defs/use, opacity, clipping 합성.
+7. **SeamlessEngine**: period 검증, torus wrap, boundary clone 공통화.
+8. **Generate API**: 초기에는 LLM 없이 규칙 기반 intent builder로 연결.
+9. **검증**: SVG 구조 테스트, 2x2 repeat preview, seam metric 테스트.
+10. **어댑터**: storage, LLM, image-to-image는 엔진 계약 안정화 이후 추가.
 
-## Seamless 반복
+## MVP 성공 기준
 
-`domain/repeat.py`의 `placements()`는 motif base cell을 순수 평행이동 반복 가능한 compound tile로
-배치한다.
+첫 MVP는 다음 intent를 LLM 없이 직접 넣어 생성할 수 있어야 한다.
 
-- **block**: `(W, H)`, `(0, 0)`.
-- **half_drop**: `(2W, H)`, `(0, 0)`, `(W, H/2)`, `(W, -H/2)`.
-- **brick**: `(W, 2H)`, `(0, 0)`, `(W/2, H)`, `(-W/2, H)`.
+```text
+background
++ diagonal stripe layer
++ stripe lane 위 dot layer
++ stripe lane 위 bee motif layer
+-> seamless SVG
+```
 
-scatter 계열은 셀 격자 대신 경계 토러스 wrap을 사용한다. 오브젝트 bbox가 타일 경계를 넘으면
-반대편에 복제본을 추가한다.
+성공 조건:
 
-## 래스터화
-
-`render/raster.py`는 SVG를 CLI 렌더러에 넘겨 PNG/TIFF로 변환한다.
-
-- 렌더러 우선순위: `rsvg-convert` -> `resvg`
-- PNG: `pHYs` DPI metadata 기록
-- TIFF: `XResolution`/`YResolution` + LZW
-- 가드: `dpi <= max_dpi`, `width_mm <= max_tile_mm`, 픽셀 치수 하드 캡
-
-## 현재 범위와 후속 단계
-
-- **저장소**: 현재는 개발 확인용 인메모리 저장소를 사용한다. 재시작 시 id가 사라지고 워커
-  프로세스 간 공유되지 않는다. 후속 단계에서 저장소 인터페이스를 만들고, SVG/PNG/TIFF 산출물은
-  Supabase Storage로 저장한다. 요청 이력, 후보 메타데이터, 사용자 소유권 같은 조회 데이터가
-  필요해지면 Supabase Postgres를 별도로 둔다.
-- **LLM 연결**: 현재 엔진은 LLM 없이 동작해야 한다. LLM은 후속 단계에서 intent JSON 생성
-  어댑터로 붙인다. 엔진은 provider 종류를 알지 않는다.
-- **image-to-image**: 참조 이미지는 후속 범위다. 추가되더라도 좌표와 seamless 보장은 엔진이
-  담당하고, 이미지 입력은 intent JSON 해석에만 사용한다.
-- **검증 루프**: 현재는 seam metric과 수동 확인을 기준으로 한다. 멀티모달 LLM 피드백 루프는
-  LLM 어댑터 이후 단계로 미룬다.
+- stripe primitive와 dot primitive가 서로 독립적으로 존재한다.
+- dot/motif는 stripe 내부 옵션이 아니라 `diagonal_lane` placement로 올라간다.
+- 최종 결과는 Composition engine이 하나의 SVG로 만든다.
+- 같은 seed와 같은 intent는 같은 SVG를 만든다.
+- raster seam metric을 통과한다.

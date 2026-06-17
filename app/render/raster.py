@@ -11,7 +11,7 @@ import subprocess
 
 from PIL import Image
 
-from app.domain.units import mm_to_px
+from app.engine.units import mm_to_px
 
 MAX_DIMENSION_PX = 20000  # guard against accidental multi-GB rasters
 

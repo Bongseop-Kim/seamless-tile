@@ -1,4 +1,4 @@
-"""Colorway: an ordered, validated set of hex colors with cyclic indexing."""
+"""Palette and color validation for generated textile SVGs."""
 
 import re
 
@@ -9,7 +9,6 @@ def is_hex_color(value: str) -> bool:
     return bool(_HEX.match(value))
 
 
-# Named textile palettes for quick recoloring.
 PALETTES: dict[str, tuple[str, ...]] = {
     "mono": ("#ffffff", "#1a1a1a"),
     "navy": ("#f4f4f0", "#1f3a5f"),
@@ -32,9 +31,9 @@ class Colorway:
         colors = tuple(colors)
         if not colors:
             raise ValueError("colorway must have at least one color")
-        for c in colors:
-            if not is_hex_color(c):
-                raise ValueError(f"invalid hex color: {c!r}")
+        for color in colors:
+            if not is_hex_color(color):
+                raise ValueError(f"invalid hex color: {color!r}")
         self.colors = colors
 
     def __len__(self) -> int:
