@@ -19,8 +19,7 @@ from pydantic import ValidationError
 from app.core.config import ALLOWED_DPI
 from app.engine.intent import Intent
 from app.engine.palette import ColorSlot, Colorway, Palette, out_of_gamut
-
-_TOL = 1e-6
+from app.engine.units import divides, snap_angle, stripe_tiles
 
 
 class IntentInvalid(Exception):
@@ -34,14 +33,6 @@ class ValidationResult:
     intent: Intent
     palette: Palette
     warnings: list[str] = field(default_factory=list)
-
-
-def _divides(whole: float, part: float, tol: float = _TOL) -> bool:
-    if part <= 0:
-        return False
-    ratio = whole / part
-    residue = round(ratio) * part - whole
-    return abs(residue) <= tol * max(1.0, abs(whole))
 
 
 def _fmt_err(err: dict) -> str:
@@ -139,11 +130,15 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                     f"layer {layer.id!r} references unknown color slot {slot_id!r}"
                 )
 
-        if layer.type == "stripe" and not _divides(tile, layer.params.period_mm):
-            errors.append(
-                f"layer {layer.id!r}: period_mm {layer.params.period_mm} does not "
-                f"divide tile_mm {tile}"
-            )
+        if layer.type == "stripe":
+            snapped = snap_angle(layer.params.angle, tile, layer.params.period_mm)
+            if not stripe_tiles(tile, layer.params.period_mm, snapped.p, snapped.q):
+                errors.append(
+                    f"layer {layer.id!r}: stripe (angle {layer.params.angle}, "
+                    f"period_mm {layer.params.period_mm}) is not tile-commensurate; a "
+                    f"stripe tiles only when tile_mm = k*period_mm*hypot(p, q) "
+                    f"(snapped slope {snapped.p}/{snapped.q})"
+                )
 
         placement = getattr(layer, "placement", None)
         if placement is not None:
@@ -159,7 +154,7 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                     )
             # spacing along the lane must repeat with the tile (simplified to tile
             # divisibility for session 1; session 4 enforces the lane-period geometry).
-            if placement.spacing_mm is not None and not _divides(tile, placement.spacing_mm):
+            if placement.spacing_mm is not None and not divides(tile, placement.spacing_mm):
                 errors.append(
                     f"layer {layer.id!r}: spacing_mm {placement.spacing_mm} does not "
                     f"divide tile_mm {tile}"
@@ -168,7 +163,7 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                 placement.path is not None
                 and placement.path.kind == "wave"
                 and placement.path.wavelength is not None
-                and not _divides(tile, placement.path.wavelength)
+                and not divides(tile, placement.path.wavelength)
             ):
                 errors.append(
                     f"layer {layer.id!r}: wave wavelength "

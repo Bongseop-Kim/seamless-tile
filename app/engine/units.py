@@ -87,3 +87,31 @@ def snap_angle(requested_deg: float, tile_mm: float, period_mm: float) -> Snappe
     p = sign * p_abs
     angle = math.degrees(math.atan2(p, q))
     return SnappedAngle(angle, p, q, _deviation(angle, requested_deg))
+
+
+def stripe_tiles(tile_mm: float, period_mm: float, p: int, q: int, tol: float = 1e-6) -> bool:
+    """True if a parallel-band stripe tiles a square ``tile_mm`` torus seamlessly.
+
+    A family of parallel bands at perpendicular spacing ``period_mm`` and snapped
+    slope ``(p, q)`` is invariant under the tile translations iff
+    ``tile_mm == k * period_mm * hypot(p, q)`` for a positive integer ``k``. For an
+    axis-aligned stripe (``hypot(p, q) == 1``) this reduces to ``period_mm | tile_mm``;
+    a diagonal therefore tiles only at the discrete periods ``tile_mm / (k*hypot(p, q))``
+    (so a non-Pythagorean slope, whose ``hypot`` is irrational, never tiles).
+    """
+    if period_mm <= 0:
+        return False
+    hypot = math.hypot(p, q)
+    if hypot == 0:
+        return False
+    k = tile_mm / (period_mm * hypot)
+    nearest = round(k)
+    return nearest >= 1 and abs(nearest - k) <= tol * max(1.0, k)
+
+
+def divides(whole: float, part: float, tol: float = 1e-6) -> bool:
+    """True if ``part`` divides ``whole`` into integer multiples (within tolerance)."""
+    if part <= 0:
+        return False
+    residue = round(whole / part) * part - whole
+    return abs(residue) <= tol * max(1.0, abs(whole))

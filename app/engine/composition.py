@@ -13,6 +13,7 @@ from app.engine.intent import Intent, Layer, MotifLayer
 from app.engine.palette import Palette
 from app.engine.placement import Instance, place
 from app.engine.primitives import build_primitive
+from app.engine.seamless import clone_instances
 from app.engine.units import fmt
 from app.motifs.registry import MotifDef, get_motif
 from app.render.svg import escape_attr, render_svg_document
@@ -94,8 +95,10 @@ def _render_motif_layer(
 
     color = escape_attr(palette.resolve_color(layer.params.color, colorway_id))
     size_mm = layer.params.size_mm
+    placed = place(layer, hosts[host_id], tile)
+    instances = clone_instances(placed, motif=motif, size_mm=size_mm, tile_mm=tile)
     uses: list[str] = []
-    for inst in place(layer, hosts[host_id], tile):
+    for inst in instances:
         transform = _instance_transform(motif, inst, size_mm)
         uses.append(
             f'<use href="#motif-{motif.id}" color="{color}" transform="{transform}"/>'

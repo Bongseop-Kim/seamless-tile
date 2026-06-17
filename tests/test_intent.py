@@ -34,9 +34,12 @@ def mvp_intent() -> dict:
                 "type": "stripe",
                 "z_order": 1,
                 "params": {
-                    "angle": -32,
-                    "period_mm": 24,
-                    "bands": [{"offset_mm": 6, "width_mm": 12, "color": "accent"}],
+                    # -36.87deg snaps to the 3-4-5 slope (p/q = -3/4); a diagonal
+                    # stripe tiles only at period_mm = tile_mm / (k*hypot(p, q)) =
+                    # 48 / (k*5), so period 9.6 (k=1) is seamless. width < period.
+                    "angle": -36.87,
+                    "period_mm": 9.6,
+                    "bands": [{"offset_mm": 0, "width_mm": 4.8, "color": "accent"}],
                 },
             },
             {

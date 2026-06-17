@@ -17,8 +17,11 @@ Primitive 생성
 ## 현재 상태
 
 기존 `/api/v1/patterns/*` 확인용 API와 완성 패턴 클래스 구조는 제거됐다. 새 엔진은
-`stripe`, `dot`, `motif`, `background`를 완성 패턴이 아닌 primitive로 만들고, placement와
-composition 단계에서 합성한다.
+`background`, `stripe`, `motif`(circle·bee 등 모든 형상은 motif로 통합)를 완성 패턴이 아닌
+primitive로 만들고, placement와 composition 단계에서 합성한다.
+
+엔진 `generate()` 파이프라인(intent → seamless SVG candidate)은 이미 동작한다: MVP 사선 타이
+intent를 `<pattern>` + `<symbol>`/`<use>` 단일 SVG로 합성하고, 구조적 seamless를 보장한다.
 
 현재 남아 있는 API:
 
@@ -27,7 +30,7 @@ GET /api/v1/health
 GET /api/v1/palettes
 ```
 
-`/api/v1/generate`는 새 engine 구조가 안정된 뒤 추가한다.
+HTTP `/api/v1/generate` 라우트는 이후 세션에서 추가한다.
 
 ## 설치
 
@@ -74,18 +77,19 @@ LLM은 intent JSON까지만 만든다. SVG 좌표, 반복, 배치, 합성, seaml
 ```text
 background
 + diagonal stripe layer
-+ stripe lane 위 dot layer
++ stripe lane 위 circle motif layer
 + stripe lane 위 bee motif layer
 -> seamless SVG
 ```
 
 핵심 규칙:
 
-- stripe primitive는 dot/motif를 직접 그리지 않는다.
-- dot/motif는 `diagonal_lane` placement로 stripe 위에 배치된다.
-- 최종 SVG는 Composition engine이 layer 순서대로 합성한다.
-- 같은 intent와 같은 seed는 같은 SVG를 생성한다.
-- 결과는 seam metric으로 검증 가능해야 한다.
+- stripe primitive는 motif를 직접 그리지 않는다.
+- circle·bee 같은 motif는 `path_following` placement로 stripe lane(`lanes()` 계약) 위에 배치된다.
+- 최종 SVG는 Composition engine이 layer 순서대로 `<pattern>` + `<symbol>`/`<use>`로 합성한다.
+- 같은 intent·seed·colorway는 바이트 동일 SVG를 생성한다.
+- seamless는 by-construction 불변식(commensurability·torus wrap·boundary clone)이 1차 보증이며,
+  타일링 연속성 raster 가드를 회귀 가드로 둔다.
 
 ## 테스트
 
