@@ -16,8 +16,8 @@ seamless 보장은 모두 결정론적 엔진이 담당한다.
 
 ## 핵심 원칙
 
-- **Primitive 우선**: stripe, dot, motif, background는 완성 패턴이 아니라 재사용 가능한 SVG
-  primitive다.
+- **Primitive 우선**: background, stripe, motif는 완성 패턴이 아니라 재사용 가능한 SVG
+  primitive다. dot/circle 같은 단순 도형은 별도 primitive가 아니라 built-in motif로 다룬다.
 - **Placement 분리**: primitive는 자신이 어디에 놓일지 모른다. grid, scatter, periodic,
   diagonal lane 같은 배치는 Placement engine이 계산한다.
 - **Layer 합성 분리**: 최종 SVG는 개별 primitive가 아니라 Composition engine이 layer 순서대로
@@ -40,13 +40,13 @@ app/
 │   ├── intent.py              # 엔진 입력 계약
 │   ├── units.py               # mm/px 변환, SVG 숫자 포맷
 │   ├── palette.py             # palette, colorway, 색상 검증
-│   ├── primitives/            # stripe, dot, motif, background primitive
+│   ├── primitives/            # background, stripe, motif primitive
 │   ├── placement/             # repeat, grid, periodic, scatter, diagonal_lane
 │   ├── composition.py         # layers[] -> SVG tile
 │   ├── seamless.py            # repeat lattice, torus wrap, boundary clone
 │   └── generate.py            # intent -> candidates
 ├── motifs/
-│   └── registry.py            # bee, flower 등 SVG defs
+│   └── registry.py            # circle, bee, flower 등 SVG defs
 ├── render/
 │   ├── svg.py
 │   └── raster.py
@@ -74,7 +74,7 @@ GenerateRequest
 
 각 단계의 책임은 겹치면 안 된다.
 
-- **PrimitiveFactory**: stripe, dot, motif, background 같은 그릴 수 있는 SVG 조각을 만든다.
+- **PrimitiveFactory**: background, stripe, motif 같은 그릴 수 있는 SVG 조각을 만든다.
 - **PlacementEngine**: primitive instance들의 좌표, 회전, scale, 반복 위치를 계산한다.
 - **CompositionEngine**: layer 순서, opacity, blend, clipping, SVG defs/use를 조립한다.
 - **SeamlessEngine**: repeat mode와 torus wrap을 적용해 경계 연속성을 보장한다.
@@ -109,10 +109,10 @@ seed 정도만 전달한다. 엔진은 이 입력을 intent JSON으로 변환해
       }
     },
     {
-      "id": "dot_on_stripe",
-      "type": "dot",
+      "id": "circle_on_stripe",
+      "type": "motif",
       "params": {
-        "shape": "circle",
+        "motif_id": "circle",
         "size_mm": 1.4,
         "color": "#ef8a7a"
       },
@@ -147,9 +147,9 @@ seed 정도만 전달한다. 엔진은 이 입력을 intent JSON으로 변환해
 
 중요한 규칙:
 
-- `stripe`는 dot이나 motif를 직접 그리지 않는다.
-- `dot`은 자신이 어느 stripe 위에 올라가는지 모른다.
+- `stripe`는 motif를 직접 그리지 않는다.
 - `motif`는 자신이 몇 개 배치되는지 직접 결정하지 않는다.
+- dot/circle 같은 단순 도형도 `motif_id`로 표현한다.
 - `placement.host_layer`가 layer 간 관계를 표현한다.
 - 같은 intent와 같은 seed는 같은 SVG를 생성해야 한다.
 
@@ -164,9 +164,9 @@ Placement engine은 primitive instance 목록을 만든다.
 - **scatter**: seed 기반 산포 배치
 - **diagonal_lane**: stripe 같은 host layer의 lane을 따라 배치
 
-`diagonal_lane`은 “선 위에 도트/모티프를 올리는” 핵심 모델이다. stripe primitive의 angle,
-period, band/lane 정보를 참조해 lane 중심선을 계산하고, `spacing_mm`, `phase_mm`, `lane`,
-`offset_mm`에 따라 instance를 만든다.
+`diagonal_lane`은 “선 위에 motif를 올리는” 핵심 모델이다. dot/circle 같은 단순 도형도
+motif instance로 취급한다. stripe primitive의 angle, period, band/lane 정보를 참조해 lane
+중심선을 계산하고, `spacing_mm`, `phase_mm`, `lane`, `offset_mm`에 따라 instance를 만든다.
 
 ## Layer 합성
 
@@ -234,15 +234,15 @@ POST /api/v1/generate
 ```text
 background
 + diagonal stripe layer
-+ stripe lane 위 dot layer
++ stripe lane 위 circle motif layer
 + stripe lane 위 bee motif layer
 -> seamless SVG
 ```
 
 성공 조건:
 
-- stripe primitive와 dot primitive가 서로 독립적으로 존재한다.
-- dot/motif는 stripe 내부 옵션이 아니라 `diagonal_lane` placement로 올라간다.
+- stripe primitive와 motif primitive가 서로 독립적으로 존재한다.
+- circle/dot/bee 같은 object는 stripe 내부 옵션이 아니라 `diagonal_lane` placement로 올라간다.
 - 최종 결과는 Composition engine이 하나의 SVG로 만든다.
 - 같은 seed와 같은 intent는 같은 SVG를 만든다.
 - raster seam metric을 통과한다.
