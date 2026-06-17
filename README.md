@@ -1,8 +1,22 @@
-# Seamless Textile Pattern Generator
+# seamless tile
 
-되고시스템(Duegosystem) 원단 텍스타일 패턴 생성 API. 스트라이프·체크(깅엄)·도트·헤링본을
-**seamless(이음매 없는 리피트) SVG**로 생성하고, 직물 질감(텍스처)을 입혀 인쇄용·웹용으로
-출력한다. FastAPI 기반, 벡터(SVG)가 단일 진실 공급원이며 래스터(PNG/TIFF)는 SVG에서 파생한다.
+**AI seamless SVG 생성** 서비스. 텍스트 또는 참조 이미지로부터
+**이음매 없는(seamless) 텍스타일 패턴 SVG**를 생성한다. LLM은 "의도"(무엇을, 몇 개, 어떤 색)만
+정하고, 좌표 배치와 seamless 보장 같은 정밀 작업은 결정론적 엔진이 책임진다. FastAPI 기반,
+벡터(SVG)가 단일 진실 공급원이며 래스터(PNG/TIFF)는 SVG에서 파생한다.
+
+설계 상세는 [ARCHITECTURE.md](ARCHITECTURE.md) 참고.
+
+## 동작 방식
+
+```
+입력(텍스트 / 텍스트+이미지) → LLM → 의도 JSON → 결정론적 엔진(배치 + wrap) → 검증 루프 → seamless SVG
+```
+
+- **LLM은 의도 JSON만 출력**한다(좌표 없음). 싼 모델로도 고품질, 출력이 짧아 비용이 낮다.
+- **seamless 100%는 엔진이 수학적으로 보장**한다(LLM 아님). 경계를 넘는 오브젝트는 반대편에
+  복제(torus wrap)하고, viewBox·팔레트는 고정된다.
+- **검증 루프**: 렌더 → 2x2 타일링으로 경계 확인 → 필요 시 멀티모달로 LLM에 피드백해 의도 수정.
 
 ## 설치
 
@@ -26,7 +40,33 @@ brew install librsvg
 - 문서(Swagger): `http://localhost:8000/docs`
 - 헬스: `http://localhost:8000/api/v1/health`
 
-## API
+## 제품 API
+
+**실제 제품 API는 단 하나다.**
+
+```
+POST /api/v1/generate
+  body: {
+    "prompt": "남색 바탕에 작은 코랄색 꽃을 흩뿌린 패턴",
+    "reference_image": "<base64 또는 URL>",   # 선택. 있으면 image-to-image
+    "canvas": { ... }, "palette": [ ... ]       # 선택 힌트
+  }
+  -> { "id": "...", "svg": "...", "intent": { ... } }
+```
+
+- `reference_image`가 **없으면 text → SVG**, **있으면 image → SVG**로 동작한다. 두 경로는
+  LLM 입력만 다르고 같은 **의도 JSON**으로 수렴하므로 엔진·검증 루프를 100% 공유한다.
+- 참조 이미지는 스타일/모티프/색을 *해석*해 의도 JSON을 채우는 데만 쓰이고, 좌표·seamless는
+  여전히 엔진이 보장한다.
+
+> **구현 현황**: `generate` API는 목표 제품 표면이며, 그 아래의 결정론적 엔진·래스터·seamless
+> 측정은 완성돼 있다. LLM 어댑터·의도 JSON 스키마·검증 루프는 구축 예정이다(ARCHITECTURE.md
+> "신규 레이어" 참고).
+
+## 개발 확인용 엔드포인트
+
+아래 패턴 엔드포인트는 **단계별 개발 확인용 스캐폴딩**이다. 엔진·래스터·seamless를 개별
+검증하기 위해 의도 JSON을 거치지 않고 정밀 파라미터를 직접 받는다. 최종 제품 표면이 아니다.
 
 ```
 POST /api/v1/patterns/stripe        -> { "id": "...", "svg": "..." }
@@ -138,31 +178,12 @@ curl -X POST localhost:8000/api/v1/patterns/stripe-dot -H 'content-type: applica
 - 도트 레이어의 `shape`는 `circle`, `square`, `diamond`, `teardrop`을 지원한다.
 - 색상은 `#rgb` / `#rrggbb` hex.
 
-## 구조
+## 엔진 확인용 스크립트
 
-```
-app/
-├── main.py                 # FastAPI 앱 (create_app)
-├── core/config.py          # 환경설정 (pydantic-settings), 렌더러/DPI 설정
-├── api/
-│   ├── routes/             # health, patterns, export, palettes
-│   ├── schemas/            # 패턴별 요청 검증 (Pydantic) + colorway
-│   └── deps.py             # 인메모리 패턴 저장소
-├── domain/                 # 프레임워크 비의존 코어
-│   ├── units.py            # mm↔px, SVG 숫자 포맷
-│   ├── pattern.py          # Pattern ABC
-│   ├── tile.py             # <pattern> 조립
-│   ├── repeat.py           # block / half_drop / brick 배치(2배 타일 트릭)
-│   └── colorway.py
-├── patterns/               # stripe / check / dot / herringbone
-├── render/
-│   ├── svg.py              # standalone SVG 문서 조립
-│   └── raster.py           # resvg 서브프로세스 → Pillow 재인코딩(PNG/TIFF + DPI)
-└── validate/seamless.py    # 경계 연속성 진단
-tests/                      # pytest
-```
+`generate` API가 사용할 결정론적 엔진(배치 + 경계 wrap)을 직접 확인하기 위한 스크립트다.
+산포(scatter)형 seamless가 어떻게 보장되는지 눈으로 검증한다.
 
-## 복잡한 SVG seamless 래핑 테스트
+### 복잡한 SVG seamless 래핑
 
 외부에서 만든 복잡한 SVG도 `viewBox` 크기만큼 3x3으로 복제하고 원래 타일 영역으로 clip 하면
 경계를 넘어간 도형이 반대편에서 이어지는지 확인할 수 있다. 배경은 한 번만 깔고 실제 motif만
@@ -172,11 +193,11 @@ tests/                      # pytest
 
 ```bash
 .venv/bin/python scripts/periodic_svg_wrap.py \
-  /Users/duegosystem/Downloads/a-white-pelican-riding-a-bicycle--side-view--flat-.svg \
+  ~/Downloads/a-white-pelican-riding-a-bicycle--side-view--flat-.svg \
   examples/pelican-periodic.svg
 
 .venv/bin/python scripts/periodic_svg_wrap.py \
-  /Users/duegosystem/Downloads/a-white-pelican-riding-a-bicycle--side-view--flat-.svg \
+  ~/Downloads/a-white-pelican-riding-a-bicycle--side-view--flat-.svg \
   examples/pelican-periodic-shifted.svg \
   --shift-x 320 --shift-y 260
 ```
@@ -199,7 +220,7 @@ open /private/tmp/pelican-periodic-shifted.png
 이 방식은 path, rect, circle 같은 순수 벡터 도형에는 구조적으로 잘 맞는다. `filter`, `blur`,
 `mask`, 외부 `image`가 있는 SVG는 경계 밖으로 퍼지는 픽셀이나 외부 리소스 자체도 함께 고려해야 한다.
 
-### 꽃 산포형 seamless 예시
+### 꽃 산포형 seamless
 
 펠리컨 예시는 SVG 전체를 하나의 motif로 보고 반복한 데모다. 산포형 패턴은 보통 객체마다 좌표를
 따로 잡고, 각 객체의 bbox가 타일 경계를 넘는 경우에만 반대편 복제본을 추가한다.
@@ -236,9 +257,9 @@ rsvg-convert examples/flower-scatter-repeat-preview.svg -o /private/tmp/flower-s
 open /private/tmp/flower-scatter-repeat-preview.png
 ```
 
-### Stripe + dot + motif 예시
+### Stripe + dot + motif
 
-대각 스트라이프 위에 빨간 점선 edge line과 금색 벌 motif를 올린 예시다. 남색 직물 바탕 질감,
+대각 스트라이프 위에 빨간 점선 edge line과 금색 벌 motif를 올린 예시다. 남색 직물 바탕,
 대각 밴드, 점선, 벌 motif를 모두 같은 대각 주기 좌표계에 맞춰 생성한다.
 
 ```bash
@@ -275,3 +296,5 @@ open /private/tmp/stripe-dot-bee-repeat-preview.png
 ## 알려진 한계
 
 - **저장소**: 패턴은 인메모리 저장이라 재시작 시 사라지고 멀티워커 간 공유되지 않는다.
+- **미구현**: `generate` API의 LLM 어댑터·의도 JSON·검증 루프는 구축 예정이다. 현재는 결정론적
+  엔진과 seamless 측정까지 완성된 상태다.
