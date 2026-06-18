@@ -122,10 +122,12 @@ def test_schema_invalid_request_returns_400():
     assert resp.status_code == 400
 
 
-def test_prompt_only_without_intent_returns_422():
+def test_prompt_only_without_client_returns_502():
+    # Session 7 wires the LLM adapter, but no client is configured by default, so a
+    # prompt-only request surfaces as a 5xx (external dependency unavailable), not 422.
     resp = client.post("/api/v1/generate", json={"prompt": "navy paisley tie"})
-    assert resp.status_code == 422
-    assert "session 7" in str(resp.json()["detail"])
+    assert resp.status_code == 502
+    assert "client" in str(resp.json()["detail"]).lower()
 
 
 def test_partial_success_when_count_exceeds_available():

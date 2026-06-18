@@ -17,41 +17,75 @@ from app.api.schemas.generate import (
     GenerateRequest,
     GenerateResponse,
 )
+from app.adapters.base import AdapterClientError
+from app.adapters.image import build_intent as image_build_intent
+from app.adapters.llm import build_intent as llm_build_intent
 from app.core.observability import get_request_id, log_metrics
-from app.engine.candidates import generate_candidates
+from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidates
 from app.validate.intent import IntentInvalid
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
-# Fields accepted on the product surface but not wired to behavior until session 7.
-_DEFERRED_FIELDS = ("prompt", "reference_image", "canvas", "palette")
+# Product-surface fields that are ignored when a raw `intent` is supplied directly
+# (the intent is then authoritative); they ARE honored on the prompt/image paths.
+_INTENT_DIRECT_IGNORED = ("prompt", "reference_image", "canvas", "palette")
+
+
+def _run_adapter(call):
+    """Invoke an adapter, mapping its failures to HTTP status: IntentInvalid -> 422
+    (semantic, after the adapter's own one re-prompt), client/decoding failure -> 502."""
+    try:
+        return call()
+    except IntentInvalid as exc:
+        raise HTTPException(status_code=422, detail=exc.errors) from None
+    except AdapterClientError as exc:
+        raise HTTPException(status_code=502, detail=[str(exc)]) from None
 
 
 @router.post("", response_model=GenerateResponse)
 def generate_candidate(request: GenerateRequest) -> GenerateResponse:
-    builder_warnings = [
-        f"{name} is accepted but not used until the session 7 adapter; ignored"
-        for name in _DEFERRED_FIELDS
-        if getattr(request, name) is not None
-    ]
+    # Resolve the intent: direct > reference_image > prompt. The adapters live outside
+    # the engine; they freeze/cache their (non-deterministic) output so the pipeline
+    # below stays deterministic. Adapter IntentInvalid -> 422 (after its own one-shot
+    # re-prompt); a missing/failed external client -> 5xx.
+    warnings: list[str] = []
+    source_fidelity = SOURCE_FIDELITY_VECTOR
 
-    # Stub builder: intent-direct only this session.
-    if request.intent is None:
+    if request.intent is not None:
+        intent_raw = request.intent
+        warnings += [
+            f"{name} ignored because `intent` was supplied directly"
+            for name in _INTENT_DIRECT_IGNORED
+            if getattr(request, name) is not None
+        ]
+    elif request.reference_image is not None:
+        adapted = _run_adapter(
+            lambda: image_build_intent(request.reference_image, canvas=request.canvas)
+        )
+        intent_raw, source_fidelity = adapted.intent, adapted.source_fidelity
+        warnings += adapted.warnings
+    elif request.prompt is not None:
+        adapted = _run_adapter(
+            lambda: llm_build_intent(
+                request.prompt, canvas=request.canvas, palette=request.palette
+            )
+        )
+        intent_raw, source_fidelity = adapted.intent, adapted.source_fidelity
+        warnings += adapted.warnings
+    else:
         raise HTTPException(
             status_code=422,
-            detail=[
-                "prompt->intent requires the LLM adapter (session 7); "
-                "supply `intent` directly for now"
-            ],
+            detail=["one of `intent`, `reference_image`, or `prompt` is required"],
         )
 
     started = time.perf_counter()
     try:
         result = generate_candidates(
-            request.intent,
+            intent_raw,
             candidate_count=request.candidate_count,
             seed=request.seed,
             colorway=request.colorway,
+            source_fidelity=source_fidelity,
         )
     except IntentInvalid as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from None
@@ -75,7 +109,7 @@ def generate_candidate(request: GenerateRequest) -> GenerateResponse:
         )
         for rc in result.candidates
     ]
-    warnings = builder_warnings + result.warnings
+    warnings = warnings + result.warnings
 
     distinct_layouts = len({rc.candidate.layout_id for rc in result.candidates})
     log_metrics(

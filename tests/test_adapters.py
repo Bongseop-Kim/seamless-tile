@@ -1,0 +1,373 @@
+"""Session-7 adapter tests. All external calls (LLM, VLM, vectorizer) are mocked —
+no network. Palette extraction runs for real against synthetic Pillow images."""
+
+import base64
+import io
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image
+
+import app.api.routes.generate as gen_route
+from app.adapters import image as image_adapter
+from app.adapters import llm as llm_adapter
+from app.adapters.base import AdapterResult
+from app.adapters.image import VectorResult, build_intent as image_build_intent, extract_palette
+from app.adapters.image import judge_vectorization
+from app.adapters.llm import LLMNotConfigured, build_intent as llm_build_intent
+from app.main import app
+from app.validate.intent import IntentInvalid, validate_intent
+from tests.test_intent import mvp_intent
+
+client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_caches():
+    llm_adapter.clear_intent_cache()
+    image_adapter.clear_intent_cache()
+    yield
+    llm_adapter.clear_intent_cache()
+    image_adapter.clear_intent_cache()
+
+
+# --- fakes -----------------------------------------------------------------
+
+
+class _ScriptedLLM:
+    """Returns canned completion strings in order (last one repeats)."""
+
+    def __init__(self, *responses: str) -> None:
+        self._responses = list(responses)
+        self.calls: list[str] = []
+
+    def complete(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        idx = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[idx]
+
+
+class _StubVLM:
+    def __init__(self, motif_id: str | None) -> None:
+        self._motif_id = motif_id
+
+    def describe(self, image_bytes: bytes) -> dict:
+        return {"motif_id": self._motif_id}
+
+
+class _FakeVectorizer:
+    def __init__(self, path_count: int, color_count: int) -> None:
+        self._r = VectorResult(path_count=path_count, color_count=color_count)
+        self.calls = 0
+
+    def trace(self, image_bytes: bytes) -> VectorResult:
+        self.calls += 1
+        return self._r
+
+
+class _UnhashableVLM:
+    """A misbehaving VLM whose motif_id is unhashable (would crash a naive `in MOTIFS`)."""
+
+    def describe(self, image_bytes: bytes) -> dict:
+        return {"motif_id": ["not", "a", "string"]}
+
+
+def _png_b64(*colors: tuple[int, int, int]) -> str:
+    """An 8x8 image split into vertical bands of the given RGB colors."""
+    img = Image.new("RGB", (8, 8), colors[0])
+    band = max(1, 8 // len(colors))
+    for i, c in enumerate(colors):
+        for x in range(i * band, min((i + 1) * band, 8)):
+            for y in range(8):
+                img.putpixel((x, y), c)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+# --- LLM adapter -----------------------------------------------------------
+
+
+def test_llm_adapter_builds_valid_intent():
+    llm = _ScriptedLLM(json.dumps(mvp_intent()))
+    res = llm_build_intent("navy diagonal club tie", client=llm, use_cache=False)
+    assert isinstance(res, AdapterResult)
+    assert res.source_fidelity == "vector"
+    assert res.intent["intent_version"] == 1
+    # the frozen intent is itself valid (engine will re-validate, idempotently)
+    validate_intent(res.intent)
+    assert len(llm.calls) == 1
+
+
+def test_llm_adapter_reprompts_once_then_succeeds():
+    bad = json.dumps({"intent_version": 1})  # missing canvas/palette/... -> invalid
+    good = json.dumps(mvp_intent())
+    llm = _ScriptedLLM(bad, good)
+    res = llm_build_intent("x", client=llm, use_cache=False)
+    assert len(llm.calls) == 2
+    # the re-prompt carried the validation errors back to the model
+    assert "FAILED stage-0 validation" in llm.calls[1]
+    assert res.intent["canvas"]["tile_mm"] == 48
+
+
+def test_llm_adapter_raises_after_failed_reprompt():
+    bad = json.dumps({"intent_version": 1})
+    llm = _ScriptedLLM(bad, bad)
+    with pytest.raises(IntentInvalid):
+        llm_build_intent("x", client=llm, use_cache=False)
+    assert len(llm.calls) == 2  # exactly one re-prompt, no more
+
+
+def test_llm_adapter_handles_non_json():
+    llm = _ScriptedLLM("not json at all", json.dumps(mvp_intent()))
+    res = llm_build_intent("x", client=llm, use_cache=False)
+    assert len(llm.calls) == 2
+    assert res.intent["intent_version"] == 1
+
+
+def test_llm_adapter_caches_frozen_intent():
+    first, second = mvp_intent(), mvp_intent()
+    second["seed"] = 424242  # a distinct response, so equality below is non-vacuous
+    llm = _ScriptedLLM(json.dumps(first), json.dumps(second))
+    a = llm_build_intent("a stable unique prompt", client=llm)
+    b = llm_build_intent("a stable unique prompt", client=llm)
+    assert len(llm.calls) == 1  # second call served from the freeze cache
+    assert a.intent == b.intent  # the FROZEN first result was replayed...
+    assert b.intent["seed"] == first["seed"]  # ...not the second scripted response
+
+
+def test_llm_cache_hit_replays_warnings():
+    intent = mvp_intent()
+    intent["canvas"]["dpi"] = 200  # not in {150,300,600} -> stage-0 clamp warning
+    llm = _ScriptedLLM(json.dumps(intent))
+    a = llm_build_intent("a warning-triggering prompt", client=llm)
+    b = llm_build_intent("a warning-triggering prompt", client=llm)
+    assert a.warnings  # the dpi clamp warning is surfaced
+    assert a.warnings == b.warnings  # and replayed identically on the cache hit
+    assert len(llm.calls) == 1
+
+
+def test_llm_cached_intent_is_isolated_from_caller_mutation():
+    llm = _ScriptedLLM(json.dumps(mvp_intent()))
+    a = llm_build_intent("isolation prompt", client=llm)
+    a.intent["canvas"]["tile_mm"] = 999  # must not corrupt the freeze
+    b = llm_build_intent("isolation prompt", client=llm)
+    assert b.intent["canvas"]["tile_mm"] == 48
+
+
+def test_llm_adapter_unconfigured_raises():
+    with pytest.raises(LLMNotConfigured):
+        llm_build_intent("x", use_cache=False)
+
+
+# --- image adapter ---------------------------------------------------------
+
+
+def test_extract_palette_is_deterministic_hex_slots():
+    b64 = _png_b64((16, 36, 58))  # solid navy
+    data = base64.b64decode(b64)
+    slots = extract_palette(data, num_colors=4)
+    assert slots[0]["hex"] == "#10243a"
+    assert len(slots) >= 2  # padded so there is always ground + accent
+    assert extract_palette(data, num_colors=4) == slots  # deterministic
+
+
+def test_image_adapter_builds_valid_intent_from_palette():
+    res = image_build_intent(_png_b64((16, 36, 58), (239, 138, 122)), use_cache=False)
+    assert res.source_fidelity == "vector"  # no vectorizer injected -> default vector
+    assert res.intent["palette"]["slots"]
+    validate_intent(res.intent)  # frozen intent passes stage-0
+
+
+def test_image_adapter_marks_unfit_texture_as_raster_hybrid():
+    res = image_build_intent(
+        _png_b64((16, 36, 58), (239, 138, 122)),
+        vectorizer=_FakeVectorizer(path_count=5000, color_count=200),
+        use_cache=False,
+    )
+    assert res.source_fidelity == "raster_hybrid"
+    assert any("unfit" in w for w in res.warnings)
+
+
+def test_image_adapter_marks_fit_texture_as_vector():
+    res = image_build_intent(
+        _png_b64((16, 36, 58), (239, 138, 122)),
+        vectorizer=_FakeVectorizer(path_count=120, color_count=8),
+        use_cache=False,
+    )
+    assert res.source_fidelity == "vector"
+
+
+def test_image_adapter_honors_registry_motif_hint():
+    res = image_build_intent(
+        _png_b64((16, 36, 58), (239, 138, 122)),
+        vlm=_StubVLM("bee"),
+        use_cache=False,
+    )
+    motif_ids = [
+        layer["params"]["motif_id"]
+        for layer in res.intent["layers"]
+        if layer["type"] == "motif"
+    ]
+    assert "bee" in motif_ids
+
+
+def test_image_adapter_ignores_unknown_motif_hint():
+    res = image_build_intent(
+        _png_b64((16, 36, 58), (239, 138, 122)),
+        vlm=_StubVLM("definitely-not-a-registered-motif"),
+        use_cache=False,
+    )
+    motif_ids = [
+        layer["params"]["motif_id"]
+        for layer in res.intent["layers"]
+        if layer["type"] == "motif"
+    ]
+    assert motif_ids == ["circle"]  # falls back to the always-present library motif
+
+
+def test_image_adapter_rejects_bad_base64():
+    with pytest.raises(IntentInvalid):
+        image_build_intent("!!! not base64 !!!", use_cache=False)
+
+
+def test_judge_vectorization_boundaries():
+    assert judge_vectorization(VectorResult(1500, 32)) == "vector"
+    assert judge_vectorization(VectorResult(1501, 32)) == "raster_hybrid"
+    assert judge_vectorization(VectorResult(1500, 33)) == "raster_hybrid"
+
+
+def test_image_adapter_caches_frozen_intent():
+    b64 = _png_b64((16, 36, 58), (239, 138, 122))
+    vec = _FakeVectorizer(path_count=5000, color_count=200)  # unfit -> raster_hybrid
+    a = image_build_intent(b64, vectorizer=vec)  # caching ON (default)
+    b = image_build_intent(b64, vectorizer=vec)
+    assert vec.calls == 1  # second call served from cache; vectorizer not re-run
+    assert a.intent == b.intent
+    assert a.source_fidelity == b.source_fidelity == "raster_hybrid"
+    assert a.warnings == b.warnings  # fidelity + warnings replayed on the hit
+
+
+def test_image_cached_intent_is_isolated_from_caller_mutation():
+    b64 = _png_b64((16, 36, 58), (239, 138, 122))
+    a = image_build_intent(b64)
+    a.intent["canvas"]["tile_mm"] = 999  # must not corrupt the freeze
+    b = image_build_intent(b64)
+    assert b.intent["canvas"]["tile_mm"] == 48.0
+
+
+def test_image_adapter_drops_motif_on_constrained_retry(monkeypatch):
+    real = image_adapter.validate_intent
+    state = {"n": 0}
+
+    def flaky(raw, **kwargs):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise IntentInvalid(["forced first-attempt failure"])  # triggers the retry
+        return real(raw, **kwargs)
+
+    monkeypatch.setattr(image_adapter, "validate_intent", flaky)
+    res = image_build_intent(_png_b64((16, 36, 58), (239, 138, 122)), use_cache=False)
+    assert state["n"] == 2  # initial attempt + one constrained retry
+    assert [l for l in res.intent["layers"] if l["type"] == "motif"] == []  # motif dropped
+
+
+def test_image_adapter_retry_exhausted_raises_intent_invalid(monkeypatch):
+    def always_fail(raw, **kwargs):
+        raise IntentInvalid(["always invalid"])
+
+    monkeypatch.setattr(image_adapter, "validate_intent", always_fail)
+    with pytest.raises(IntentInvalid):
+        image_build_intent(_png_b64((16, 36, 58), (239, 138, 122)), use_cache=False)
+
+
+def test_image_adapter_ignores_unhashable_motif_hint():
+    res = image_build_intent(
+        _png_b64((16, 36, 58), (239, 138, 122)), vlm=_UnhashableVLM(), use_cache=False
+    )
+    motif_ids = [
+        layer["params"]["motif_id"]
+        for layer in res.intent["layers"]
+        if layer["type"] == "motif"
+    ]
+    assert motif_ids == ["circle"]  # malformed hint ignored, no crash
+
+
+def test_image_adapter_rejects_data_uri_without_payload():
+    with pytest.raises(IntentInvalid):
+        image_build_intent("data:image/png;base64", use_cache=False)  # no comma
+
+
+# --- route wiring (monkeypatch the route's adapter bindings) ----------------
+
+
+def test_route_prompt_path_returns_candidates(monkeypatch):
+    def fake(prompt, **kwargs):
+        return AdapterResult(intent=mvp_intent(), source_fidelity="vector", warnings=[])
+
+    monkeypatch.setattr(gen_route, "llm_build_intent", fake)
+    resp = client.post("/api/v1/generate", json={"prompt": "navy club tie"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candidates"]
+    assert body["candidates"][0]["source_fidelity"] == "vector"
+
+
+def test_route_image_path_threads_source_fidelity(monkeypatch):
+    def fake(image_b64, **kwargs):
+        return AdapterResult(
+            intent=mvp_intent(), source_fidelity="raster_hybrid", warnings=["texture unfit"]
+        )
+
+    monkeypatch.setattr(gen_route, "image_build_intent", fake)
+    resp = client.post("/api/v1/generate", json={"reference_image": "ZmFrZQ=="})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candidates"]
+    assert all(c["source_fidelity"] == "raster_hybrid" for c in body["candidates"])
+    assert "texture unfit" in body["warnings"]
+
+
+def test_route_adapter_invalid_returns_422(monkeypatch):
+    def fake(prompt, **kwargs):
+        raise IntentInvalid(["bad intent after re-prompt"])
+
+    monkeypatch.setattr(gen_route, "llm_build_intent", fake)
+    resp = client.post("/api/v1/generate", json={"prompt": "x"})
+    assert resp.status_code == 422
+
+
+def test_route_adapter_client_failure_returns_502(monkeypatch):
+    def fake(prompt, **kwargs):
+        raise LLMNotConfigured("no client")
+
+    monkeypatch.setattr(gen_route, "llm_build_intent", fake)
+    resp = client.post("/api/v1/generate", json={"prompt": "x"})
+    assert resp.status_code == 502
+
+
+def test_route_image_path_bad_base64_returns_422():
+    # Real image adapter (no monkeypatch): IntentInvalid must reach the route as 422.
+    resp = client.post("/api/v1/generate", json={"reference_image": "!!! not base64 !!!"})
+    assert resp.status_code == 422
+
+
+def test_route_image_path_malformed_data_uri_returns_422():
+    # A comma-less data URI used to raise an unhandled IndexError (500).
+    resp = client.post("/api/v1/generate", json={"reference_image": "data:image/png;base64"})
+    assert resp.status_code == 422
+
+
+def test_route_requires_some_input():
+    resp = client.post("/api/v1/generate", json={})
+    assert resp.status_code == 422
+    assert "required" in str(resp.json()["detail"]).lower()
+
+
+def test_route_intent_direct_warns_ignored_fields():
+    resp = client.post(
+        "/api/v1/generate", json={"intent": mvp_intent(), "prompt": "ignored"}
+    )
+    assert resp.status_code == 200
+    assert any("ignored because `intent`" in w for w in resp.json()["warnings"])

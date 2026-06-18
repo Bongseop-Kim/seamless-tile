@@ -65,6 +65,7 @@ def generate_candidates(
     candidate_count: int = DEFAULT_CANDIDATE_COUNT,
     seed: int | None = None,
     colorway: str | None = None,
+    source_fidelity: str = SOURCE_FIDELITY_VECTOR,
 ) -> CandidateSet:
     """Diversify a base intent into a ranked, de-duplicated candidate set.
 
@@ -148,7 +149,7 @@ def generate_candidates(
                         intent=eff,
                         colorway_id=cw,
                         seed=s,
-                        source_fidelity=SOURCE_FIDELITY_VECTOR,
+                        source_fidelity=source_fidelity,
                         rank_key=(color_count, clustering, lid, cw, s),
                     )
                 )

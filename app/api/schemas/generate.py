@@ -1,9 +1,9 @@
 """Product API schemas for generation and raster export.
 
-The request mirrors the product surface in ``ARCHITECTURE.md`` (prompt-shaped),
-but ``prompt``/``reference_image`` are accepted-but-unused this session — the LLM
-and image adapters are session 7. The session-6 path is intent-direct: supply a
-raw ``intent`` and the engine diversifies it into ranked candidates.
+The request mirrors the product surface in ``ARCHITECTURE.md`` (prompt-shaped).
+``prompt`` and ``reference_image`` are wired through the session-7 adapters
+(``app.adapters.llm`` / ``app.adapters.image``); supplying a raw ``intent`` instead
+takes the intent-direct path and the engine diversifies it into ranked candidates.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ class GenerateRequest(BaseModel):
 
     # Product surface (forward-compat; honored from session 7).
     prompt: str | None = None
-    reference_image: str | None = None
+    # base64 / data-URI image, size-bounded (cheap DoS guard; full upload validation is
+    # session 8). ~12M chars ≈ 9 MB decoded.
+    reference_image: str | None = Field(default=None, max_length=12_000_000)
     canvas: dict[str, Any] | None = None
     palette: dict[str, Any] | None = None
 
