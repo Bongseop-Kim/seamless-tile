@@ -19,6 +19,11 @@
                   ├──> 6  (제품 API)
                   │      └──> 7  (LLM·이미지 어댑터)
                   └──> 8  (보안·Recraft)   # 3·4·6·7 의존
+
+# 상위 기능층 (spec: motif-library-and-multicolor)
+9 (영속화) ──> 10 (글루·단색 E2E) ──> 11 (임베딩·변형) ──> 14 (검수·풀 성숙)
+                     └──> 13 (Recraft) ── 의존 ──> 12 (멀티컬러 엔진, 엔진 독립)
+# P0=9+10, P1=11, P2=12+13, P3=14
 ```
 
 7은 6에, 8은 3·4·6·7에 의존한다. 6의 "placement 종류" 다양성 축은 5를 전제하므로, 5 없이 4 직후
@@ -36,6 +41,16 @@
 | 6 | `06-product-api-and-ops.md` | `/api/v1/generate`·다양성/랭킹·에러/관측 | intent 직접 경로로 후보 반환·de-dup·랭킹 |
 | 7 | `07-llm-and-reference-image-adapters.md` | prompt→intent, image→intent | 모킹 어댑터로 prompt/이미지→SVG |
 | 8 | `08-security-hardening-and-recraft.md` | SVG sanitize·업로드 검증·Recraft intake | injection 차단 + Recraft motif 결정론 등록 |
+| 9 | `09-motif-persistence.md` | 모티프 Supabase 영속화 + 복원 | 재시작 후 동일 motif_id 조회 |
+| 10 | `10-motif-orchestration-glue.md` | prompt→명세→정확매칭→LLM 단색 생성→주입 | "돼지 무늬" E2E + 결정성 |
+| 11 | `11-embedding-and-variant-sampling.md` | 임베딩 τ 조회 + 시드 변형 샘플링 | seed별 변형 + registry_version 봉인 |
+| 12 | `12-multicolor-engine.md` | 멀티컬러 엔진(슬롯 보존·(b) 바인딩) | N>2 슬롯 렌더 + dedup 유지 + 바이트동일 |
+| 13 | `13-recraft-and-routing.md` | Recraft 연결 + 적합성 게이트 + 라우팅 | detailed 명세 → 멀티컬러 합성 |
+| 14 | `14-curation-and-catalog.md` | Tier2 검수·승격 + 풀 성숙 + ivfflat | curated만 풀 진입 + 변형 실효 |
+
+세션 9–14는 상위 기능층(멀티컬러 모티프 라이브러리 & 프롬프트 생성)으로,
+설계 기준은 `docs/spec/motif-library-and-multicolor.md`다. 각 세션 파일은 **새 대화창에서 단독 실행**
+가능하도록 "부트스트랩"(읽을 스펙/코드)을 자체 포함한다.
 
 ## 공통 규약 (모든 세션 적용)
 
