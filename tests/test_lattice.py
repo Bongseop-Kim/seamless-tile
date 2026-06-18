@@ -4,6 +4,7 @@ non-diagonal all-over intent (overfit counter-proof: same engine, non-diagonal s
 import io
 import xml.etree.ElementTree as ET
 
+from defusedxml import ElementTree as DefusedET
 import numpy as np
 import pytest
 from PIL import Image
@@ -171,7 +172,7 @@ def test_allover_lattice_is_byte_deterministic():
 
 
 def _tiled_svg(single_svg: str, tiles: int) -> str:
-    root = ET.fromstring(single_svg)
+    root = DefusedET.fromstring(single_svg)
     defs_el = root.find(f"{NS}defs")
     defs = (
         "".join(ET.tostring(child, encoding="unicode") for child in list(defs_el))

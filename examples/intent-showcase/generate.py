@@ -20,6 +20,8 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
+from defusedxml import ElementTree as DefusedET
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
@@ -32,7 +34,9 @@ from app.render.raster import find_renderer, rasterize  # noqa: E402
 from app.render.svg import render_svg_document  # noqa: E402
 
 OUT = _HERE
-NS = "{http://www.w3.org/2000/svg}"
+SVG_NS = "http://www.w3.org/2000/svg"
+NS = f"{{{SVG_NS}}}"
+ET.register_namespace("", SVG_NS)
 TILE = 48.0
 PALETTE = {"slots": [
     {"id": "ground", "hex": "#10243a"},
@@ -93,13 +97,31 @@ SHOWCASES = {
 
 
 def _pattern_dims(svg):
-    p = ET.fromstring(svg).find(f".//{NS}pattern")
+    p = DefusedET.fromstring(svg).find(f".//{NS}pattern")
+    if p is None:
+        raise ValueError("SVG does not contain a pattern element")
     return float(p.get("width")), float(p.get("height"))
 
 
+def _defs_inner_xml(defs_el):
+    return "".join(
+        ET.tostring(child, encoding="unicode")
+        .replace(f' xmlns="{SVG_NS}"', "")
+        .replace(" />", "/>")
+        for child in list(defs_el)
+    )
+
+
 def _tiled_svg(svg, cols, rows):
-    defs = svg[svg.index("<defs>") + len("<defs>"): svg.index("</defs>")]
-    pw, ph = _pattern_dims(svg)
+    root = DefusedET.fromstring(svg)
+    defs_el = root.find(f"{NS}defs")
+    if defs_el is None:
+        raise ValueError("SVG does not contain a defs element")
+    defs = _defs_inner_xml(defs_el)
+    p = defs_el.find(f".//{NS}pattern")
+    if p is None:
+        raise ValueError("SVG defs does not contain a pattern element")
+    pw, ph = float(p.get("width")), float(p.get("height"))
     w, h = pw * cols, ph * rows
     body = f'<rect x="0" y="0" width="{w}" height="{h}" fill="url(#tile)"/>'
     return render_svg_document(body, w, h, defs=defs), w, h
@@ -115,7 +137,7 @@ def main():
         with open(f"{OUT}/{name}-tiled.svg", "w") as f:
             f.write(tiled)
         if binary:
-            png, _ = rasterize(tiled, "png", 200, max(w, h), binary=binary)
+            png, _ = rasterize(tiled, "png", 200, w, h, binary=binary)
             Image.open(io.BytesIO(png)).convert("RGBA").save(f"{OUT}/{name}-tiled.png")
         print(f"{name}: tile {_pattern_dims(svg)} -> 4x4 ({w:g}x{h:g}mm)" + ("  + PNG" if binary else ""))
     print("\nrenderer:", binary or "(none; PNGs skipped)")
