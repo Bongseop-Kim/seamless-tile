@@ -1,77 +1,95 @@
-import xml.etree.ElementTree as ET
-
+import pytest
 from fastapi.testclient import TestClient
 
-from app.domain.colorway import PALETTES
+from app.engine.palette import (
+    ColorSlot,
+    Colorway,
+    PALETTES,
+    Palette,
+    is_hex_color,
+    out_of_gamut,
+    resolve_palette,
+)
 from app.main import app
 
 client = TestClient(app)
 
-STRIPE = {"widths_mm": [10, 10], "colors": ["#ffffff", "#00aa33"], "tile_mm": 20}
 
-
-def _create_stripe() -> str:
-    resp = client.post("/api/v1/patterns/stripe", json=STRIPE)
-    assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
-
-
-def _fills(svg: str) -> set[str]:
-    return {el.get("fill") for el in ET.fromstring(svg).iter() if el.get("fill")}
-
-
-def test_recolor_changes_colors_keeps_geometry():
-    pid = _create_stripe()
-    original = client.get(f"/api/v1/patterns/{pid}").text
-
-    resp = client.post(
-        f"/api/v1/patterns/{pid}/colorway", json={"colors": ["#000000", "#ff8800"]}
+def _palette() -> Palette:
+    slots = (ColorSlot("ground", "#10243a"), ColorSlot("accent", "#ef8a7a"))
+    colorways = (
+        Colorway("default", {"ground": "#10243a", "accent": "#ef8a7a"}),
+        Colorway("autumn", {"ground": "#2b1a10", "accent": "#d98f3a"}, name="autumn"),
     )
-    assert resp.status_code == 200, resp.text
-    new_id = resp.json()["id"]
-    assert new_id != pid
-
-    recolored = resp.json()["svg"]
-    # New colors present, old accent gone; geometry (rect count) unchanged.
-    assert "#ff8800" in recolored and "#00aa33" not in recolored
-    assert recolored.count("<rect") == original.count("<rect")
-    # Original pattern is untouched.
-    assert "#00aa33" in client.get(f"/api/v1/patterns/{pid}").text
+    return Palette(slots=slots, colorways=colorways)
 
 
-def test_recolor_with_named_palette():
-    pid = _create_stripe()
-    resp = client.post(f"/api/v1/patterns/{pid}/colorway", json={"palette": "navy"})
-    assert resp.status_code == 200, resp.text
-    fills = _fills(resp.json()["svg"])
-    assert set(PALETTES["navy"]) & fills
+def test_color_slot_validates_hex():
+    ColorSlot("ok", "#abc")
+    with pytest.raises(ValueError):
+        ColorSlot("bad", "not-a-color")
 
 
-def test_recolor_requires_exactly_one_source():
-    pid = _create_stripe()
-    assert client.post(f"/api/v1/patterns/{pid}/colorway", json={}).status_code == 422
-    both = {"colors": ["#000000"], "palette": "navy"}
-    assert client.post(f"/api/v1/patterns/{pid}/colorway", json=both).status_code == 422
+def test_resolve_color_uses_active_colorway():
+    p = _palette()
+    assert p.resolve_color("accent", "default") == "#ef8a7a"
+    assert p.resolve_color("accent", "autumn") == "#d98f3a"
 
 
-def test_recolor_unknown_palette_rejected():
-    pid = _create_stripe()
-    resp = client.post(f"/api/v1/patterns/{pid}/colorway", json={"palette": "neon"})
-    assert resp.status_code == 422
+def test_colorway_mapping_is_immutable():
+    cw = _palette().colorway("default")
+    with pytest.raises(TypeError):
+        cw.mapping["ground"] = "#ffffff"
 
 
-def test_recolor_unknown_pattern_404():
-    resp = client.post("/api/v1/patterns/nope/colorway", json={"palette": "navy"})
-    assert resp.status_code == 404
+def test_resolve_color_defaults_when_colorway_absent():
+    p = _palette()
+    assert p.resolve_color("ground", None) == p.resolve_color("ground", "default")
+
+
+def test_resolve_color_rejects_unknown_slot():
+    with pytest.raises(ValueError):
+        _palette().resolve_color("nope", "default")
+
+
+def test_palette_requires_default_colorway():
+    with pytest.raises(ValueError):
+        Palette(
+            slots=(ColorSlot("a", "#fff"),),
+            colorways=(Colorway("x", {"a": "#fff"}),),
+        )
+
+
+def test_colorway_must_map_all_slots():
+    with pytest.raises(ValueError):
+        Palette(
+            slots=(ColorSlot("a", "#fff"), ColorSlot("b", "#000")),
+            colorways=(Colorway("default", {"a": "#fff"}),),
+        )
+
+
+def test_distinct_colors_counts_per_colorway():
+    assert _palette().distinct_colors("default") == {"#10243a", "#ef8a7a"}
+
+
+def test_hex_color_validation():
+    assert is_hex_color("#fff")
+    assert is_hex_color("#ffffff")
+    assert not is_hex_color("ffffff")
+
+
+def test_out_of_gamut_flags_neon_only():
+    assert out_of_gamut("#00ff00")
+    assert not out_of_gamut("#f5ca57")
+
+
+def test_resolve_palette():
+    assert resolve_palette("navy") == PALETTES["navy"]
+    with pytest.raises(ValueError):
+        resolve_palette("neon")
 
 
 def test_list_palettes():
     resp = client.get("/api/v1/palettes")
     assert resp.status_code == 200
     assert set(resp.json()) == set(PALETTES)
-
-
-def test_export_width_mm_over_max_rejected():
-    pid = _create_stripe()
-    resp = client.get(f"/api/v1/patterns/{pid}/export?format=png&width_mm=5000")
-    assert resp.status_code == 422

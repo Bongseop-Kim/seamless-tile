@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.domain.colorway import PALETTES
+from app.engine.palette import PALETTES
 
 router = APIRouter(prefix="/palettes", tags=["palettes"])
 

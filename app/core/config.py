@@ -19,3 +19,12 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# Code versions recorded in candidate reproduction metadata (not runtime settings).
+ENGINE_VERSION = "0.1.0"
+REGISTRY_VERSION = "0.1.0"
+
+# Allowed raster DPIs at the production/raster boundary.
+DEFAULT_DPI = 300
+ALLOWED_DPI = (150, 300, 600)
