@@ -60,7 +60,19 @@ def tiling_seam(
     by-construction invariants, not this metric, are the load-bearing guarantee.
     """
     arr = np.asarray(tiled_rgba).astype(np.int16)
+    if arr.ndim < 2:
+        raise ValueError("tiled_rgba must be at least a 2D array")
     h, w = arr.shape[:2]
+    if margin < 0:
+        raise ValueError("margin must be non-negative")
+    if tile_px <= 0:
+        raise ValueError("tile_px must be greater than 0")
+    if tile_px < margin:
+        raise ValueError("tile_px must be greater than or equal to margin")
+    if tile_px >= w - margin or tile_px >= h - margin:
+        raise ValueError(
+            "tile_px must be less than both width - margin and height - margin"
+        )
 
     def col_disc(c: int) -> float:
         return float(np.abs(arr[:, c] - arr[:, c - 1]).mean())

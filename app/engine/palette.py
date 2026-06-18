@@ -7,7 +7,9 @@ mapping. A ``default`` colorway is mandatory and is used when no colorway is giv
 
 import colorsys
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 _HEX = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -79,7 +81,7 @@ class Colorway:
     """Maps each slot id to a concrete output color (hex or spot)."""
 
     id: str
-    mapping: dict[str, str]
+    mapping: Mapping[str, str]
     name: str | None = None
 
     def __post_init__(self) -> None:
@@ -87,6 +89,7 @@ class Colorway:
             raise ValueError("colorway id must be non-empty")
         if not self.mapping:
             raise ValueError("colorway mapping must not be empty")
+        object.__setattr__(self, "mapping", MappingProxyType(dict(self.mapping)))
 
     def color_for(self, slot_id: str) -> str:
         try:

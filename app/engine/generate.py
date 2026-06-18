@@ -36,11 +36,12 @@ def generate(raw, *, colorway_id: str = "default", seed: int | None = None) -> C
     otherwise the intent's own seed is recorded.
     """
     result = validate_intent(raw)
-    assert_seamless_invariants(result.intent)
-    svg = compose(result.intent, result.palette, colorway_id)
     effective_seed = result.intent.seed if seed is None else seed
+    intent = result.intent.model_copy(update={"seed": effective_seed})
+    assert_seamless_invariants(intent)
+    svg = compose(intent, result.palette, colorway_id)
     repro = ReproMeta.build(
-        intent_version=result.intent.intent_version,
+        intent_version=intent.intent_version,
         seed=effective_seed,
         colorway_id=colorway_id,
     )

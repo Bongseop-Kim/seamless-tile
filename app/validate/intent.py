@@ -142,6 +142,17 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
 
         placement = getattr(layer, "placement", None)
         if placement is not None:
+            if placement.type == "path_following":
+                required = {
+                    "host_layer": placement.host_layer,
+                    "lane": placement.lane,
+                    "spacing_mm": placement.spacing_mm,
+                }
+                for name, value in required.items():
+                    if value is None:
+                        errors.append(
+                            f"layer {layer.id!r}: path_following placement requires {name}"
+                        )
             if placement.host_layer is not None:
                 if placement.host_layer == layer.id:
                     errors.append(

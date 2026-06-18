@@ -88,6 +88,15 @@ def test_unknown_host_layer_rejected():
         validate_intent(intent)
 
 
+@pytest.mark.parametrize("field", ["host_layer", "lane", "spacing_mm"])
+def test_path_following_requires_fields(field):
+    intent = mvp_intent()
+    intent["layers"][2]["placement"][field] = None
+    with pytest.raises(IntentInvalid) as exc:
+        validate_intent(intent)
+    assert field in str(exc.value)
+
+
 def test_period_not_dividing_tile_rejected():
     intent = mvp_intent()
     intent["layers"][1]["params"]["period_mm"] = 25  # 48 % 25 != 0

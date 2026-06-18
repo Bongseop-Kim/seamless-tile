@@ -10,8 +10,9 @@
 - **`render/sanitize.py`** — 출력 인코딩 완성(속성 quote-escape·텍스트 이스케이프) + 태그/속성
   **allowlist**. `href`는 내부 `#id` fragment만(외부 URL·`javascript:` 금지). `motif_id`는
   registry 키 allowlist. hex는 `^#[0-9a-fA-F]{3,8}$`.
-- **reference_image 업로드 검증** — 포맷·크기·픽셀 상한, 디코드 타임아웃, 메타데이터 strip,
-  SSRF 차단.
+- **reference_image 업로드 검증** — multipart 업로드 파일의 포맷·크기·픽셀 상한, 디코드
+  타임아웃, 메타데이터 strip. 원격 URL fetch 경로가 아니므로 네트워크 fetch 방어는 이 항목의
+  위협 모델이 아니다.
 - **`app/adapters/recraft.py` + `motifs/registry.py` 인입** — Recraft 생성 파이프라인:
   - **authoring-time 생성** → 콘텐츠 해시 `motif_id` → registry 등록(런타임은 id만 참조).
   - **intake 정규화**: mm 좌표계, tight bbox·anchor, 단일 `<symbol>` 래핑, filter/embedded
@@ -36,7 +37,8 @@
 ## 수용 기준
 - SVG injection 시도가 차단된다: `</svg><script>`, `href="javascript:"`, 외부 `<image href=http..>`,
   비허용 태그/속성(테스트로 각각 차단 확인).
-- 악성/과대 업로드(폭탄·외부 URL·과대 픽셀)가 거부된다.
+- 악성/과대 업로드(디코드 폭탄·포맷 spoof/polyglot·과대 픽셀·위험 메타데이터)가 거부되거나
+  정규화된다.
 - Recraft 모킹 SVG가 정규화·해시 등록되고, **같은 입력 → 같은 `motif_id`(캐시 히트)**, 런타임
   결정론 유지.
 - intake가 filter/raster/외부 href를 제거하거나 거부하고 색을 슬롯 참조로 치환한다.

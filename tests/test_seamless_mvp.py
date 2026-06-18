@@ -12,7 +12,7 @@ from app.engine.seamless import assert_seamless_invariants, clone_instances
 from app.motifs.registry import get_motif
 from app.render.raster import find_renderer, rasterize
 from app.render.svg import render_svg_document
-from app.validate.intent import validate_intent
+from app.validate.intent import IntentInvalid, validate_intent
 from app.validate.seamless import TILING_SEAM_TOL, tiling_seam
 from tests.test_intent import mvp_intent
 
@@ -52,8 +52,16 @@ def test_validate_rejects_non_tiling_diagonal():
     raw = mvp_intent()
     raw["layers"][1]["params"]["angle"] = -32
     raw["layers"][1]["params"]["period_mm"] = 24
-    with pytest.raises(Exception):
+    with pytest.raises(IntentInvalid):
         validate_intent(raw)
+
+
+def test_tiling_seam_rejects_invalid_bounds():
+    arr = np.zeros((10, 10, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="margin"):
+        tiling_seam(arr, tile_px=5, margin=-1)
+    with pytest.raises(ValueError, match="tile_px"):
+        tiling_seam(arr, tile_px=9, margin=2)
 
 
 # --- boundary clone ----------------------------------------------------------

@@ -28,9 +28,8 @@ intent를 `<pattern>` + `<symbol>`/`<use>` 단일 SVG로 합성하고, 구조적
 ```text
 GET /api/v1/health
 GET /api/v1/palettes
+POST /api/v1/generate
 ```
-
-HTTP `/api/v1/generate` 라우트는 이후 세션에서 추가한다.
 
 ## 설치
 
@@ -94,5 +93,5 @@ background
 ## 테스트
 
 ```bash
-.venv/bin/pytest -q
+.venv/bin/python -m pytest -q
 ```

@@ -36,6 +36,12 @@ def test_resolve_color_uses_active_colorway():
     assert p.resolve_color("accent", "autumn") == "#d98f3a"
 
 
+def test_colorway_mapping_is_immutable():
+    cw = _palette().colorway("default")
+    with pytest.raises(TypeError):
+        cw.mapping["ground"] = "#ffffff"
+
+
 def test_resolve_color_defaults_when_colorway_absent():
     p = _palette()
     assert p.resolve_color("ground", None) == p.resolve_color("ground", "default")

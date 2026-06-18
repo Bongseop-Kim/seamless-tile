@@ -27,7 +27,6 @@
 - [ ] `generate.py` 파이프라인 + 재현 메타.
 - [ ] 검증 렌더러·DPI 핀.
 - [ ] 테스트(MVP·결정론·clone).
-- [ ] `README.md`의 stale 서술(dot/diagonal_lane)을 현행(circle motif/path_following)으로 정리.
 
 ## 만들/수정 파일
 `engine/seamless.py`(신규), `engine/generate.py`(신규), `validate/seamless.py`(보강),

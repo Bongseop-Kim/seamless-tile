@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from app.engine.placement import Instance
 from app.engine.seamless import clone_instances
@@ -10,6 +11,7 @@ from app.core.config import ENGINE_VERSION, REGISTRY_VERSION
 from tests.test_intent import mvp_intent
 
 TILE = 48.0
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _with_alt_colorway():
@@ -65,16 +67,15 @@ def test_byte_identical_across_processes():
         "from app.engine.generate import generate; "
         "sys.stdout.write(generate(mvp_intent()).svg)"
     )
-    root = os.getcwd()
-
     def run(hashseed: str) -> str:
         env = {**os.environ, "PYTHONHASHSEED": hashseed}
         proc = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
-            cwd=root,
+            cwd=ROOT,
             env=env,
+            timeout=10,
         )
         assert proc.returncode == 0, proc.stderr
         return proc.stdout

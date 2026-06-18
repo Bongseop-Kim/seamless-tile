@@ -121,15 +121,17 @@ def assert_seamless_invariants(intent: Intent) -> None:
         if layer.type == "stripe":
             period = layer.params.period_mm
             snapped = snap_angle(layer.params.angle, tile, period)
-            assert stripe_tiles(tile, period, snapped.p, snapped.q), (
-                f"layer {layer.id!r}: stripe (angle {layer.params.angle}, period {period}) "
-                f"is not tile-commensurate (snapped slope {snapped.p}/{snapped.q}); "
-                f"requires tile_mm == k*period_mm*hypot(p, q)"
-            )
+            if not stripe_tiles(tile, period, snapped.p, snapped.q):
+                raise AssertionError(
+                    f"layer {layer.id!r}: stripe (angle {layer.params.angle}, period {period}) "
+                    f"is not tile-commensurate (snapped slope {snapped.p}/{snapped.q}); "
+                    f"requires tile_mm == k*period_mm*hypot(p, q)"
+                )
         elif layer.type == "motif":
             placement = layer.placement
             if placement is not None and placement.spacing_mm is not None:
-                assert divides(tile, placement.spacing_mm), (
-                    f"layer {layer.id!r}: spacing_mm {placement.spacing_mm} "
-                    f"does not divide tile_mm {tile}"
-                )
+                if not divides(tile, placement.spacing_mm):
+                    raise AssertionError(
+                        f"layer {layer.id!r}: spacing_mm {placement.spacing_mm} "
+                        f"does not divide tile_mm {tile}"
+                    )

@@ -39,6 +39,10 @@
 ## 수용 기준
 - intent 직접 경로로 `candidate_count`개 후보를 반환하고 `layout_id`로 de-dup·랭킹 정렬한다.
   포괄 요청은 distinct `layout_id`가 ≥ min(2, 가용 전략 수)임을 단언한다.
+- 우선순위는 `candidate_count` 충족이 1순위, `layout_id` 다양성이 2순위다. de-dup 후 후보가
+  부족하면 가능한 후보만 부분 성공으로 반환하고 경고를 포함한다. 가용 전략 수나 유효 후보 수가
+  distinct `layout_id` 기준을 만족하지 못하면 중복 없는 후보 반환을 유지하되 다양성 부족 경고를
+  포함한다.
 - 검증 실패 → `422`, 렌더러 실패 → `5xx`, 일부 후보 실패 시 부분 성공 동작.
 - `request_id`가 응답·로그에 일관 전파된다.
 - `pytest` 그린(httpx 테스트 클라이언트).
