@@ -56,6 +56,47 @@ class PathSpec(BaseModel):
     path_id: str | None = None
 
 
+class LatticeSpec(BaseModel):
+    """Two-basis-vector lattice. Absorbs the old block/half_drop/brick repeat modes.
+
+    block: drop_fraction None. half_drop: drop_axis="column" (every column shifts down
+    by drop_fraction*cell_h). brick: drop_axis="row" (every row shifts right by
+    drop_fraction*cell_w). drop_fraction generalizes the discrete 1/2 to 1/2, 1/3, 1/4.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cell_w_mm: float = Field(gt=0)
+    cell_h_mm: float = Field(gt=0)
+    drop_fraction: float | None = Field(default=None, gt=0, lt=1)
+    drop_axis: Literal["row", "column"] = "column"
+
+
+class ScatterSpec(BaseModel):
+    """Seed-deterministic torus scatter.
+
+    ``poisson``: blue-noise dart-throwing with a torus minimum distance.
+    ``sateen``: an N-end satin step grid that guarantees no two points share a row or
+    column (deterministic, no RNG).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["poisson", "sateen"] = "poisson"
+    min_dist_mm: float | None = Field(default=None, gt=0)
+    count: int | None = Field(default=None, gt=0)
+    sateen_n: int | None = Field(default=None, gt=1)
+    sateen_step: int | None = Field(default=None, gt=0)
+
+
+class PointSetSpec(BaseModel):
+    """Explicit anchor points (mm) on the tile (e.g. lattice intersections)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    points: list[tuple[float, float]] = Field(min_length=1)
+
+
 class Placement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -66,6 +107,9 @@ class Placement(BaseModel):
     spacing_mm: float | None = Field(default=None, gt=0)
     phase_mm: float = 0.0
     rotation: Literal["follow_path", "fixed"] | None = None
+    lattice: LatticeSpec | None = None
+    scatter: ScatterSpec | None = None
+    point_set: PointSetSpec | None = None
 
 
 # --- Layer params (type-specific) ---------------------------------------------
@@ -153,6 +197,20 @@ Layer = Annotated[
 ]
 
 
+class SymmetrySpec(BaseModel):
+    """Tile-level arrangement symmetry, baked into a super-tile by the SeamlessEngine.
+
+    SVG ``<pattern>`` cannot reflect natively, so mirror/glide are realized by baking
+    reflected copies of the whole tile into a 2x1 / 1x2 / 2x2 super-tile that then
+    block-tiles. ``glide_*`` adds a ``shift_mm`` (default tile/2) along the seam axis.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["mirror_h", "mirror_v", "mirror_2x2", "glide_h", "glide_v"]
+    shift_mm: float | None = Field(default=None, gt=0)
+
+
 class Intent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -163,3 +221,4 @@ class Intent(BaseModel):
     palette: PaletteSpec
     colorways: list[ColorwaySpec] = Field(min_length=1)
     layers: list[Layer] = Field(min_length=1)
+    symmetry: SymmetrySpec | None = None

@@ -36,26 +36,49 @@ class Centerline:
     amplitude_mm: float | None = None
 
     def length_mm(self, tile_mm: float) -> float:
-        """Arc length of one torus period until the lane closes (assumes a square tile)."""
-        if self.kind != "straight":
-            raise NotImplementedError(f"length_mm not implemented for kind={self.kind!r}")
+        """Closure length of one torus period (assumes a square tile).
+
+        For ``wave`` lanes this is the along-axis closure length: the walk parameter
+        is along-axis distance (an approximation of true arc length). Periodicity and
+        seam continuity -- not exact along-curve spacing -- are the acceptance criteria
+        (consistent with ``seamless.py``'s ``spacing|L`` note).
+        """
         return tile_mm * math.hypot(self.p, self.q)
 
     def point_at(self, s_mm: float, tile_mm: float) -> tuple[Point, float]:
-        """Sample the centerline at arc length ``s_mm``.
+        """Sample the centerline at walk parameter ``s_mm``.
 
-        Returns ``((x_mm, y_mm) on the torus, tangent_angle_deg)``. For a straight
-        lane the tangent is constant (the lane angle), which is exactly what
-        ``rotation: "follow_path"`` consumes.
+        Returns ``((x_mm, y_mm) on the torus, tangent_angle_deg)``. A ``straight`` lane
+        has a constant tangent (the lane angle). A ``wave`` lane adds a perpendicular
+        sinusoid ``amplitude*sin(2*pi*s/wavelength)``; its tangent varies along the
+        curve, which is exactly what ``rotation: "follow_path"`` consumes. The lane is
+        torus-periodic and seam-continuous only when the sinusoid returns to phase 0 at
+        the closure length ``L = tile*hypot(p, q)`` -- i.e. ``wavelength | L`` (which
+        equals ``wavelength | tile`` only for an axis-aligned lane). This is enforced by
+        ``validate_intent``; ``point_at`` itself does not re-check it.
         """
-        if self.kind != "straight":
-            raise NotImplementedError(f"point_at not implemented for kind={self.kind!r}")
         a = math.radians(self.angle_deg)
         dx, dy = math.cos(a), math.sin(a)
         nx, ny = -math.sin(a), math.cos(a)  # unit normal; offset runs along it
         x = self.offset_mm * nx + s_mm * dx
         y = self.offset_mm * ny + s_mm * dy
-        return (x % tile_mm, y % tile_mm), self.angle_deg
+        if self.kind == "straight":
+            return (x % tile_mm, y % tile_mm), self.angle_deg
+        if self.kind == "wave":
+            if self.wavelength_mm is None or self.amplitude_mm is None:
+                raise ValueError(
+                    "wave centerline requires wavelength_mm and amplitude_mm"
+                )
+            w = 2.0 * math.pi / self.wavelength_mm
+            perp = self.amplitude_mm * math.sin(w * s_mm)
+            perp_prime = self.amplitude_mm * w * math.cos(w * s_mm)
+            x += perp * nx
+            y += perp * ny
+            vx = dx + perp_prime * nx
+            vy = dy + perp_prime * ny
+            tangent = math.degrees(math.atan2(vy, vx))
+            return (x % tile_mm, y % tile_mm), tangent
+        raise NotImplementedError(f"point_at not implemented for kind={self.kind!r}")
 
 
 @dataclass(frozen=True)

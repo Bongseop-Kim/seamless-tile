@@ -151,11 +151,12 @@ def test_centerline_length_straight():
     assert math.isclose(cl.length_mm(48.0), 48.0 * math.hypot(5, 8))
 
 
-def test_centerline_wave_is_deferred():
+def test_centerline_wave_displaces_perpendicular():
     cl = Centerline(
         angle_deg=0.0, offset_mm=0.0, kind="wave", wavelength_mm=24.0, amplitude_mm=4.0
     )
-    with pytest.raises(NotImplementedError):
-        cl.point_at(1.0, 48.0)
-    with pytest.raises(NotImplementedError):
-        cl.length_mm(48.0)
+    assert cl.length_mm(48.0) == pytest.approx(48.0)
+    # at wavelength/4 the perpendicular sinusoid is at its crest (= amplitude).
+    (x, y), _ = cl.point_at(6.0, 48.0)
+    assert x == pytest.approx(6.0)
+    assert y == pytest.approx(4.0)
