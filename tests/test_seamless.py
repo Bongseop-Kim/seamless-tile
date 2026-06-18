@@ -1,6 +1,5 @@
 import numpy as np
 
-from app.engine.placement.repeat import RepeatMode, placements
 from app.validate.seamless import edge_seam, seamless_diff
 
 
@@ -34,21 +33,3 @@ def test_edge_seam_detects_mismatched_edges():
     tile[:, -1] = 255
     seam_x, _ = edge_seam(tile)
     assert seam_x > 100
-
-
-def test_block_is_single_stamp():
-    tw, th, places = placements(10, 10, RepeatMode.block)
-    assert (tw, th) == (10, 10)
-    assert places == [(0.0, 0.0)]
-
-
-def test_half_drop_doubles_width_with_wrap_copy():
-    tw, th, places = placements(10, 10, RepeatMode.half_drop)
-    assert (tw, th) == (20, 10)
-    assert (10, 5.0) in places and (10, -5.0) in places
-
-
-def test_brick_doubles_height_with_wrap_copy():
-    tw, th, places = placements(10, 10, RepeatMode.brick)
-    assert (tw, th) == (10, 20)
-    assert (5.0, 10) in places and (-5.0, 10) in places

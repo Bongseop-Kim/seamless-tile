@@ -204,8 +204,9 @@ LLM이 만든 intent를 그대로 신뢰하지 않는다. 엔진과 LLM 사이�
 - **구조 검증**: JSON Schema로 형태를 검증한다.
 - **시맨틱 검증**:
   - `host_layer` 참조가 실제 존재하는 layer인가
-  - `period_mm | tile_mm`, `lane_spacing × k = tile_period`(정수해), 요청 각도가 p/q로 스냅
-    가능한가, 곡선 lane은 wavelength가 tile을 정수로 나누는가
+  - `period_mm | tile_mm`, 요청 각도가 p/q로 스냅 가능한가, path_following `spacing_mm`은 lane
+    closure 길이 `L = tile × hypot(p, q)`의 약수로 스냅(비-약수는 경고), 곡선 lane은 wavelength가
+    `L`을 정수로 나누는가
   - 색 슬롯 참조 유효성, 각 colorway의 해석된 색 수 ≤ `production.max_colors`
   - 값 범위(음수 spacing 등)
 - **복구**: 실패 시 (a) 제약을 준 re-prompt 1회 또는 (b) 안전값 클램프. 둘 다 실패하면 `422`.
@@ -239,6 +240,16 @@ torus(타일 주기) 위에서 계산해 경계 연속성을 확보한다. 전�
 임의 각도(예: 정확히 32.0°)는 대부분 seamless가 불가능하다. 따라서 엔진은 요청 각도를
 **타일과 commensurate한 가장 가까운 각도 `arctan(p/q)`로 스냅**한다. 스냅된 각도와 원 요청의
 차이는 검증 단계에서 보고한다.
+
+### path_following 간격 commensurate 스냅
+
+직선 lane의 **한 바퀴(closure) 길이**는 타일 한 변이 아니라 `L = tile_mm × hypot(p, q)`다(축 정렬
+lane만 `L = tile_mm`). motif를 올리는 `spacing_mm`은 `tile`이 아니라 이 `L`을 정수로 나눠야
+시작↔끝이 만나는 wrap 지점에서도 간격이 균일하다. 그런데 대부분의 스냅 각도는 `hypot(p, q)`가
+무리수라 어떤 `spacing`도 `L`을 정확히 나눌 수 없으므로, 엔진은 요청 간격을 거부하지 않고 **가장
+가까운 약수 `L / round(L / spacing)`로 스냅**해 균일 배치를 만들고 그 차이를 검증 단계에서 경고로
+보고한다(각도 스냅과 같은 철학). `spacing`이 이미 `L`을 나누는 경우(예: 3-4-5 사선)에는 스냅이
+무연산이라 결정론(바이트 동일 SVG)이 유지된다.
 
 ### 곡선 lane
 
@@ -302,8 +313,8 @@ Seamless는 각 primitive가 알아서 해결하는 문제가 아니다. 엔진 
 
 보장 방식:
 
-- tile 크기와 placement period의 commensurability 검증(`period | tile`, lane spacing 정수배,
-  각도 p/q 스냅).
+- tile 크기와 placement period의 commensurability 검증(`period | tile`, lane spacing은 lane
+  closure 길이 `L = tile × hypot(p, q)`의 약수로 스냅, 각도 p/q 스냅).
 - repeat lattice = 기저벡터 2개 + 선택적 대칭 연산. 지원 대칭:
   - **block (straight)**: 단순 평행이동.
   - **half-drop / brick**: 변위 리피트. drop은 이산 enum이 아니라 `drop_fraction`(1/2·1/3·1/4)로

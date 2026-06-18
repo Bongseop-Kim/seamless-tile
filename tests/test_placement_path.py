@@ -43,20 +43,50 @@ def _placement(**kwargs) -> Placement:
 
 
 def test_contract_only_dependency_positions():
+    from app.engine.units import snap_spacing
+
     tile = 48.0
     host = FakeHost([_lane(angle_deg=45.0, p=1, q=1)])
     instances = place_path_following(host, _placement(spacing_mm=12.0), tile)
 
     length = tile * math.hypot(1, 1)
-    expected_n = math.ceil(length / 12.0)  # phase 0
-    assert len(instances) == expected_n
+    # 12.0 does not divide the diagonal closure, so the step is snapped to an exact
+    # divisor for a uniform rhythm across the wrap (see snap_spacing / place_path_following).
+    n, spacing_eff = snap_spacing(length, 12.0)
+    assert len(instances) == n
 
     # s=0 on a 45 deg lane through the origin -> (0, 0)
     assert instances[0].x_mm == pytest.approx(0.0)
     assert instances[0].y_mm == pytest.approx(0.0)
-    # s=12 -> (12 cos45, 12 sin45) wrapped on the torus
-    assert instances[1].x_mm == pytest.approx((12.0 * math.cos(math.radians(45))) % tile)
-    assert instances[1].y_mm == pytest.approx((12.0 * math.sin(math.radians(45))) % tile)
+    # s=spacing_eff -> (eff cos45, eff sin45) wrapped on the torus
+    assert instances[1].x_mm == pytest.approx((spacing_eff * math.cos(math.radians(45))) % tile)
+    assert instances[1].y_mm == pytest.approx((spacing_eff * math.sin(math.radians(45))) % tile)
+
+
+def test_diagonal_spacing_snaps_for_uniform_wrap():
+    """Regression: a diagonal lane's along-step is snapped so the wrap gap matches the
+    interior gap (closure = tile*hypot(p,q) is irrational here, so raw 12.0 cannot)."""
+    from app.engine.units import snap_spacing
+
+    tile = 48.0
+    spacing = 12.0
+    host = FakeHost([_lane(angle_deg=45.0, p=1, q=1)])
+    instances = place_path_following(host, _placement(spacing_mm=spacing), tile)
+
+    closure = tile * math.hypot(1, 1)
+    n, eff = snap_spacing(closure, spacing)
+    # precondition of the bug: the requested step does NOT divide the closure
+    assert round(closure / spacing) != pytest.approx(closure / spacing)
+    # the snapped step divides the closure exactly -> n equal gaps, wrap included
+    assert len(instances) == n
+    assert eff * n == pytest.approx(closure)
+    # the first interior gap (no torus wrap between the first two points) is the step
+    gap = math.hypot(
+        instances[1].x_mm - instances[0].x_mm,
+        instances[1].y_mm - instances[0].y_mm,
+    )
+    assert gap == pytest.approx(eff)
+    assert gap != pytest.approx(spacing)  # would equal raw spacing before the fix
 
 
 def test_rotation_follow_path_uses_tangent():

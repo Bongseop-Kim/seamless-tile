@@ -1,30 +1,129 @@
-"""Generate API route for the current direct-intent engine path."""
+"""Product generate route: a thin adapter over the engine candidate orchestrator.
+
+Session 6 is intent-direct (the stub builder passes a supplied ``intent`` through);
+the LLM/image builder is session 7. Diversification, ranking and de-dup live in
+``app.engine.candidates`` so the determinism contract stays in the engine layer.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas.generate import GenerateRequest, GenerateResponse
-from app.engine.generate import generate
+from app.api.schemas.generate import (
+    CandidateResponse,
+    GenerateRequest,
+    GenerateResponse,
+)
+from app.adapters.base import AdapterClientError
+from app.adapters.image import build_intent as image_build_intent
+from app.adapters.llm import build_intent as llm_build_intent
+from app.core.observability import get_request_id, log_metrics
+from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidates
 from app.validate.intent import IntentInvalid
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
+# Product-surface fields that are ignored when a raw `intent` is supplied directly
+# (the intent is then authoritative); they ARE honored on the prompt/image paths.
+_INTENT_DIRECT_IGNORED = ("prompt", "reference_image", "canvas", "palette")
+
+
+def _run_adapter(call):
+    """Invoke an adapter, mapping its failures to HTTP status: IntentInvalid -> 422
+    (semantic, after the adapter's own one re-prompt), client/decoding failure -> 502."""
+    try:
+        return call()
+    except IntentInvalid as exc:
+        raise HTTPException(status_code=422, detail=exc.errors) from None
+    except AdapterClientError as exc:
+        raise HTTPException(status_code=502, detail=[str(exc)]) from None
+
 
 @router.post("", response_model=GenerateResponse)
-def generate_candidate(request: GenerateRequest) -> GenerateResponse:
+async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
+    # Resolve the intent: direct > reference_image > prompt. The adapters live outside
+    # the engine; they freeze/cache their (non-deterministic) output so the pipeline
+    # below stays deterministic. Adapter IntentInvalid -> 422 (after its own one-shot
+    # re-prompt); a missing/failed external client -> 5xx.
+    warnings: list[str] = []
+    source_fidelity = SOURCE_FIDELITY_VECTOR
+
+    if request.intent is not None:
+        intent_raw = request.intent
+        warnings += [
+            f"{name} ignored because `intent` was supplied directly"
+            for name in _INTENT_DIRECT_IGNORED
+            if getattr(request, name) is not None
+        ]
+    elif request.reference_image is not None:
+        adapted = _run_adapter(
+            lambda: image_build_intent(request.reference_image, canvas=request.canvas)
+        )
+        intent_raw, source_fidelity = adapted.intent, adapted.source_fidelity
+        warnings += adapted.warnings
+    elif request.prompt is not None:
+        adapted = _run_adapter(
+            lambda: llm_build_intent(
+                request.prompt, canvas=request.canvas, palette=request.palette
+            )
+        )
+        intent_raw, source_fidelity = adapted.intent, adapted.source_fidelity
+        warnings += adapted.warnings
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=["one of `intent`, `reference_image`, or `prompt` is required"],
+        )
+
+    started = time.perf_counter()
     try:
-        candidate = generate(
-            request.intent,
-            colorway_id=request.colorway_id,
+        result = generate_candidates(
+            intent_raw,
+            candidate_count=request.candidate_count,
             seed=request.seed,
+            colorway=request.colorway,
+            source_fidelity=source_fidelity,
         )
     except IntentInvalid as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from None
     except (AssertionError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=[str(exc)]) from None
+    generate_ms = round((time.perf_counter() - started) * 1000, 1)
+
+    if not result.candidates:
+        raise HTTPException(
+            status_code=500, detail=["no candidate could be composed"]
+        )
+
+    candidates = [
+        CandidateResponse(
+            id=rc.id,
+            svg=rc.candidate.svg,
+            intent=rc.intent.model_dump(mode="json"),
+            layout_id=rc.candidate.layout_id,
+            source_fidelity=rc.source_fidelity,
+            repro=asdict(rc.candidate.repro),
+        )
+        for rc in result.candidates
+    ]
+    warnings = warnings + result.warnings
+
+    distinct_layouts = len({rc.candidate.layout_id for rc in result.candidates})
+    log_metrics(
+        "generate",
+        requested=request.candidate_count,
+        returned=len(candidates),
+        distinct_layouts=distinct_layouts,
+        available_strategies=result.available_strategy_count,
+        warnings=len(warnings),
+        generate_ms=generate_ms,
+    )
 
     return GenerateResponse(
-        svg=candidate.svg,
-        repro=vars(candidate.repro),
-        warnings=candidate.warnings,
-        layout_id=candidate.layout_id,
+        request_id=get_request_id(),
+        candidates=candidates,
+        warnings=warnings,
     )

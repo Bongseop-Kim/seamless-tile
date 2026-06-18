@@ -13,9 +13,10 @@ from app.engine.intent import Intent, Layer, MotifLayer
 from app.engine.palette import Palette
 from app.engine.placement import Instance, place
 from app.engine.primitives import build_primitive
-from app.engine.seamless import clone_instances
+from app.engine.seamless import clone_instances, super_tile
 from app.engine.units import fmt
 from app.motifs.registry import MotifDef, get_motif
+from app.render.sanitize import sanitize_svg
 from app.render.svg import escape_attr, render_svg_document
 
 
@@ -35,21 +36,34 @@ def compose(intent: Intent, palette: Palette, colorway_id: str | None = None) ->
     symbol_defs: dict[str, str] = {}  # motif_id -> <symbol>, deduped, insertion-ordered
     fragments: list[str] = []
     for layer in layers:
-        fragment = _render_layer(layer, hosts, palette, colorway_id, tile, symbol_defs)
+        fragment = _render_layer(
+            layer, hosts, palette, colorway_id, tile, symbol_defs, intent.seed
+        )
         if not fragment:
             continue
         if layer.opacity != 1.0:
             fragment = f'<g opacity="{fmt(layer.opacity)}">{fragment}</g>'
         fragments.append(fragment)
 
+    content = "".join(fragments)
+    width = height = tile
+    if intent.symmetry is not None:
+        # Bake tile-level mirror/glide into a (doubled) super-tile that block-tiles.
+        content, width, height = super_tile(content, tile, intent.symmetry)
+
     pattern = (
         '<pattern id="tile" patternUnits="userSpaceOnUse" '
-        f'width="{fmt(tile)}" height="{fmt(tile)}">'
-        f'{"".join(fragments)}</pattern>'
+        f'width="{fmt(width)}" height="{fmt(height)}">'
+        f"{content}</pattern>"
     )
     defs = "".join(symbol_defs.values()) + pattern
-    body = f'<rect x="0" y="0" width="{fmt(tile)}" height="{fmt(tile)}" fill="url(#tile)"/>'
-    return render_svg_document(body, tile, tile, defs=defs)
+    body = (
+        f'<rect x="0" y="0" width="{fmt(width)}" height="{fmt(height)}" '
+        'fill="url(#tile)"/>'
+    )
+    # Final allowlist gate: trusted engine output passes through unchanged, while any
+    # regression that emits a disallowed tag/attr/href is caught here (enumerate guard).
+    return sanitize_svg(render_svg_document(body, width, height, defs=defs))
 
 
 def _render_layer(
@@ -59,13 +73,16 @@ def _render_layer(
     colorway_id: str | None,
     tile: float,
     symbol_defs: dict[str, str],
+    seed: int,
 ) -> str:
     if layer.type == "background":
         return hosts[layer.id].render(tile, palette, colorway_id)
     if layer.type == "stripe":
         return hosts[layer.id].render(palette, colorway_id)
     if layer.type == "motif":
-        return _render_motif_layer(layer, hosts, palette, colorway_id, tile, symbol_defs)
+        return _render_motif_layer(
+            layer, hosts, palette, colorway_id, tile, symbol_defs, seed
+        )
     raise ValueError(f"unsupported layer type: {layer.type!r}")
 
 
@@ -76,15 +93,21 @@ def _render_motif_layer(
     colorway_id: str | None,
     tile: float,
     symbol_defs: dict[str, str],
+    seed: int,
 ) -> str:
     placement = layer.placement
     if placement is None:
         raise ValueError(f"motif layer {layer.id!r} requires placement (session 3 scope)")
-    host_id = placement.host_layer
-    if host_id not in hosts:
-        raise ValueError(
-            f"motif layer {layer.id!r} references unknown host_layer {host_id!r}"
-        )
+    # Host-based strategies (path_following) resolve a host via the lanes() contract;
+    # host-free strategies (lattice/scatter/point_set) carry no host_layer.
+    host = None
+    if placement.host_layer is not None:
+        if placement.host_layer not in hosts:
+            raise ValueError(
+                f"motif layer {layer.id!r} references unknown host_layer "
+                f"{placement.host_layer!r}"
+            )
+        host = hosts[placement.host_layer]
     if layer.params.color is None:
         raise ValueError(
             f"motif layer {layer.id!r}: multi-color `colors` binding is out of session-3 scope"
@@ -95,7 +118,7 @@ def _render_motif_layer(
 
     color = escape_attr(palette.resolve_color(layer.params.color, colorway_id))
     size_mm = layer.params.size_mm
-    placed = place(layer, hosts[host_id], tile)
+    placed = place(layer, host, tile, seed)
     instances = clone_instances(placed, motif=motif, size_mm=size_mm, tile_mm=tile)
     uses: list[str] = []
     for inst in instances:
