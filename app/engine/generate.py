@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.engine.composition import compose
-from app.engine.determinism import ReproMeta
+from app.engine.determinism import ReproMeta, layout_id_for
 from app.engine.seamless import assert_seamless_invariants
 from app.validate.intent import validate_intent
 
@@ -40,9 +40,16 @@ def generate(raw, *, colorway_id: str = "default", seed: int | None = None) -> C
     intent = result.intent.model_copy(update={"seed": effective_seed})
     assert_seamless_invariants(intent)
     svg = compose(intent, result.palette, colorway_id)
+    layout_id = layout_id_for(intent)
     repro = ReproMeta.build(
         intent_version=intent.intent_version,
         seed=effective_seed,
         colorway_id=colorway_id,
+        layout_id=layout_id,
     )
-    return Candidate(svg=svg, repro=repro, warnings=list(result.warnings))
+    return Candidate(
+        svg=svg,
+        repro=repro,
+        warnings=list(result.warnings),
+        layout_id=layout_id,
+    )
