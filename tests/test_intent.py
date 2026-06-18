@@ -144,6 +144,16 @@ def test_negative_spacing_rejected():
         validate_intent(intent)
 
 
+def test_path_following_spacing_snapped_with_warning():
+    # The diagonal stripe snaps to 3-4-5, so the lane closure is 48*5 = 240. A step of 7
+    # does not divide 240 (nor the tile 48): the engine snaps it and warns rather than
+    # rejecting -- otherwise nearly all diagonal lanes would be unusable.
+    intent = mvp_intent()
+    intent["layers"][2]["placement"]["spacing_mm"] = 7
+    result = validate_intent(intent)
+    assert any("snapped" in w and "circle_on_stripe" in w for w in result.warnings)
+
+
 def test_unknown_color_slot_rejected():
     intent = mvp_intent()
     intent["layers"][0]["params"]["color"] = "missing_slot"

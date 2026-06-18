@@ -115,3 +115,21 @@ def divides(whole: float, part: float, tol: float = 1e-6) -> bool:
         return False
     residue = round(whole / part) * part - whole
     return abs(residue) <= tol * max(1.0, abs(whole))
+
+
+def snap_spacing(closure_mm: float, spacing_mm: float) -> tuple[int, float]:
+    """Snap an along-lane spacing to an exact divisor of the closure length.
+
+    Returns ``(n, spacing_eff)`` where ``n = max(1, round(closure/spacing))`` is the
+    instance count over one torus period and ``spacing_eff = closure_mm / n`` divides
+    the closure exactly, so the motif rhythm is uniform across the wrap. A diagonal lane
+    has an irrational closure for most slopes, so the requested spacing rarely divides
+    it; snapping (rather than rejecting) keeps the lane usable, mirroring ``snap_angle``.
+
+    For a spacing that already divides the closure (e.g. the MVP tie), ``spacing_eff ==
+    spacing_mm`` to within float precision -- output is unchanged (determinism preserved).
+    """
+    if spacing_mm <= 0:
+        raise ValueError(f"spacing_mm must be positive, got {spacing_mm}")
+    n = max(1, round(closure_mm / spacing_mm))
+    return n, closure_mm / n

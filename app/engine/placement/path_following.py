@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from app.engine.host import Centerline, HostLayer, resolve_lane
 from app.engine.intent import PathSpec, Placement
-from app.engine.units import snap_angle
+from app.engine.units import snap_angle, snap_spacing
 
 _EPS = 1e-9
 
@@ -87,7 +87,9 @@ def place_path_following(
 
     centerline = _resolve_centerline(host, placement, tile_mm)
     length = centerline.length_mm(tile_mm)
-    spacing = placement.spacing_mm
+    # Snap the requested step to an exact divisor of the closure length so the rhythm is
+    # uniform across the torus wrap (diagonal lanes rarely divide `length` evenly).
+    _, spacing = snap_spacing(length, placement.spacing_mm)
     follow = placement.rotation == "follow_path"
 
     instances: list[Instance] = []

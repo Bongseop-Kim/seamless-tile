@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from app.core.config import ALLOWED_DPI
 from app.engine.intent import Intent
 from app.engine.palette import ColorSlot, Colorway, Palette, out_of_gamut
-from app.engine.units import divides, snap_angle, stripe_tiles
+from app.engine.units import divides, snap_angle, snap_spacing, stripe_tiles
 
 
 class IntentInvalid(Exception):
@@ -151,6 +151,28 @@ def _point_set_errors(layer, placement, tile: float) -> list[str]:
     return errs
 
 
+def _lane_closure(placement, layers_by_id, tile: float) -> tuple[float, int, int] | None:
+    """Closure length and snapped slope ``(L, p, q)`` of a path_following lane.
+
+    Returns ``None`` when the lane can't be resolved (host_layer missing or not a
+    stripe) -- those cases are reported by other checks. Mirrors how
+    ``place_path_following`` resolves the centerline: a host-based lane inherits the host
+    stripe's snapped slope (host wins when ``host_layer`` is set), while a standalone
+    path snaps its own angle. Host lanes are always straight, so this covers both.
+    """
+    if placement.host_layer is not None:
+        host = layers_by_id.get(placement.host_layer)
+        if host is None or host.type != "stripe":
+            return None
+        snapped = snap_angle(host.params.angle, tile, host.params.period_mm)
+    elif placement.path is not None:
+        angle = placement.path.angle if placement.path.angle is not None else 0.0
+        snapped = snap_angle(angle, tile, tile)
+    else:
+        return None
+    return tile * math.hypot(snapped.p, snapped.q), snapped.p, snapped.q
+
+
 def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
     # 1. structural
     if isinstance(raw, Intent):
@@ -205,6 +227,7 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
     # 6. layer + placement checks
     all_layer_ids = [layer.id for layer in intent.layers]
     layer_ids = set(all_layer_ids)
+    layers_by_id = {layer.id: layer for layer in intent.layers}
     if len(all_layer_ids) != len(layer_ids):
         dupes = sorted({i for i in all_layer_ids if all_layer_ids.count(i) > 1})
         errors.append(f"duplicate layer id: {dupes}")
@@ -233,6 +256,11 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                     errors.append(
                         f"layer {layer.id!r}: path_following placement requires spacing_mm"
                     )
+                elif placement.spacing_mm <= 0:
+                    errors.append(
+                        f"layer {layer.id!r}: spacing_mm must be positive, got "
+                        f"{placement.spacing_mm}"
+                    )
                 has_host_lane = (
                     placement.host_layer is not None and placement.lane is not None
                 )
@@ -242,6 +270,23 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"layer {layer.id!r}: path_following requires either "
                         f"host_layer+lane or a standalone path"
                     )
+                # The along-lane step must divide the lane closure length
+                # L = tile*hypot(p, q), NOT the tile (L == tile only for an axis-aligned
+                # lane). A diagonal closure is irrational for most slopes, so instead of
+                # rejecting we snap the step to an exact divisor (see place_path_following)
+                # and report the deviation -- mirroring angle commensurate snapping.
+                if placement.spacing_mm is not None and placement.spacing_mm > 0:
+                    lane = _lane_closure(placement, layers_by_id, tile)
+                    if lane is not None:
+                        closure, lp, lq = lane
+                        if not divides(closure, placement.spacing_mm):
+                            n, eff = snap_spacing(closure, placement.spacing_mm)
+                            warnings.append(
+                                f"layer {layer.id!r}: spacing_mm "
+                                f"{placement.spacing_mm} snapped to {eff:.4f}mm for "
+                                f"uniform placement (lane closure {closure:.4f} = "
+                                f"tile*hypot({lp}, {lq}); {n} instances)"
+                            )
             elif placement.type == "lattice":
                 errors.extend(_lattice_errors(layer, placement, tile))
             elif placement.type == "scatter":
@@ -258,13 +303,6 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"layer {layer.id!r}: host_layer {placement.host_layer!r} "
                         f"does not exist"
                     )
-            # spacing along the lane must repeat with the tile (simplified to tile
-            # divisibility for session 1; session 4 enforces the lane-period geometry).
-            if placement.spacing_mm is not None and not divides(tile, placement.spacing_mm):
-                errors.append(
-                    f"layer {layer.id!r}: spacing_mm {placement.spacing_mm} does not "
-                    f"divide tile_mm {tile}"
-                )
             if (
                 placement.path is not None
                 and placement.path.kind == "wave"
