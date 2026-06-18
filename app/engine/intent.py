@@ -111,6 +111,26 @@ class Placement(BaseModel):
     scatter: ScatterSpec | None = None
     point_set: PointSetSpec | None = None
 
+    @model_validator(mode="after")
+    def _spec_matches_type(self) -> "Placement":
+        specs = {
+            "lattice": self.lattice,
+            "scatter": self.scatter,
+            "point_set": self.point_set,
+        }
+        expected = self.type if self.type in specs else None
+        for name, spec in specs.items():
+            if name == expected:
+                if spec is None:
+                    raise ValueError(f"{self.type} placement requires a `{name}` spec")
+            elif spec is not None:
+                if expected is None:
+                    raise ValueError(f"{self.type} placement does not accept `{name}`")
+                raise ValueError(
+                    f"{self.type} placement does not accept `{name}`; use `{expected}`"
+                )
+        return self
+
 
 # --- Layer params (type-specific) ---------------------------------------------
 

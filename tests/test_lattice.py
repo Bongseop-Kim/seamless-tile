@@ -171,9 +171,13 @@ def test_allover_lattice_is_byte_deterministic():
 
 
 def _tiled_svg(single_svg: str, tiles: int) -> str:
-    defs = single_svg[
-        single_svg.index("<defs>") + len("<defs>") : single_svg.index("</defs>")
-    ]
+    root = ET.fromstring(single_svg)
+    defs_el = root.find(f"{NS}defs")
+    defs = (
+        "".join(ET.tostring(child, encoding="unicode") for child in list(defs_el))
+        if defs_el is not None
+        else ""
+    )
     side = tiles * TILE
     body = f'<rect x="0" y="0" width="{side}" height="{side}" fill="url(#tile)"/>'
     return render_svg_document(body, side, side, defs=defs)

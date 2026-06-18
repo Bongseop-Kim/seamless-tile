@@ -37,7 +37,10 @@ def _torus_dist(ax: float, ay: float, bx: float, by: float, tile_mm: float) -> f
 
 def _place_poisson(placement: Placement, tile_mm: float, seed: int) -> list[Instance]:
     spec = placement.scatter
-    assert spec is not None and spec.min_dist_mm is not None
+    if spec is None:
+        raise ValueError("poisson scatter placement requires a `scatter` spec")
+    if spec.min_dist_mm is None:
+        raise ValueError("poisson scatter placement requires `min_dist_mm`")
     min_dist = spec.min_dist_mm
     rng = seeded_rng(seed)
 
@@ -61,7 +64,10 @@ def _place_poisson(placement: Placement, tile_mm: float, seed: int) -> list[Inst
 
 def _place_sateen(placement: Placement, tile_mm: float) -> list[Instance]:
     spec = placement.scatter
-    assert spec is not None and spec.sateen_n is not None
+    if spec is None:
+        raise ValueError("sateen scatter placement requires a `scatter` spec")
+    if spec.sateen_n is None:
+        raise ValueError("sateen scatter placement requires `sateen_n`")
     n = spec.sateen_n
     step = spec.sateen_step if spec.sateen_step is not None else 1
     cell = tile_mm / n

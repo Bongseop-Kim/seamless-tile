@@ -225,9 +225,18 @@ def _layout_variants(base: Intent) -> Iterator[Intent]:
 
 
 def _with_lattice_drop(base: Intent, layer_idx: int, frac: float | None) -> Intent:
-    clone = base.model_copy(deep=True)
-    clone.layers[layer_idx].placement.lattice.drop_fraction = frac
-    return clone
+    layer = base.layers[layer_idx]
+    placement = layer.placement
+    lattice = placement.lattice
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={
+            "placement": placement.model_copy(
+                update={"lattice": lattice.model_copy(update={"drop_fraction": frac})}
+            )
+        }
+    )
+    return base.model_copy(update={"layers": updated_layers})
 
 
 def _is_lattice_layer(layer) -> bool:

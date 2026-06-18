@@ -61,22 +61,28 @@ def _pattern(svg: str):
     return ET.fromstring(svg).find(f".//{NS}pattern")
 
 
+def _dimension(pattern, attr: str) -> float:
+    value = pattern.get(attr)
+    assert value is not None
+    return float(value)
+
+
 def test_mirror_h_doubles_width():
     p = _pattern(generate(mirror_intent({"kind": "mirror_h"})).svg)
-    assert p.get("width") == "96"
-    assert p.get("height") == "48"
+    assert _dimension(p, "width") == 96
+    assert _dimension(p, "height") == 48
 
 
 def test_mirror_v_doubles_height():
     p = _pattern(generate(mirror_intent({"kind": "mirror_v"})).svg)
-    assert p.get("width") == "48"
-    assert p.get("height") == "96"
+    assert _dimension(p, "width") == 48
+    assert _dimension(p, "height") == 96
 
 
 def test_mirror_2x2_doubles_both():
     p = _pattern(generate(mirror_intent({"kind": "mirror_2x2"})).svg)
-    assert p.get("width") == "96"
-    assert p.get("height") == "96"
+    assert _dimension(p, "width") == 96
+    assert _dimension(p, "height") == 96
 
 
 def test_mirror_keeps_single_pattern_not_enumerated():

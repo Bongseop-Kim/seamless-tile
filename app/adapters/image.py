@@ -117,7 +117,7 @@ def _validate_image(data: bytes) -> None:
         img = Image.open(io.BytesIO(data))
         fmt = img.format
         width, height = img.size
-    except Exception as exc:  # PIL raises a grab-bag; treat as bad caller input
+    except Exception as exc:  # noqa: BLE001 - PIL raises a grab-bag; treat as caller input
         raise IntentInvalid([f"reference_image could not be decoded as an image: {exc}"]) from None
     if fmt not in ALLOWED_IMAGE_FORMATS:
         raise IntentInvalid(
@@ -133,7 +133,7 @@ def _validate_image(data: bytes) -> None:
         )
     try:
         Image.open(io.BytesIO(data)).verify()  # verify() consumes the image; reopen to use
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - verify() may raise varied PIL exceptions
         raise IntentInvalid([f"reference_image failed integrity check: {exc}"]) from None
 
 
@@ -294,7 +294,10 @@ def build_intent(
     # VLM structure hint (style/motif). Optional & mocked; only registry motifs are honored.
     motif_id: str | None = _FALLBACK_MOTIF
     if vlm is not None:
-        hints = vlm.describe(data)
+        try:
+            hints = vlm.describe(data)
+        except Exception as exc:  # noqa: BLE001 - external client failures map to 502
+            raise ImageAdapterError(f"VLM service failed while describing image: {exc}") from exc
         cand = hints.get("motif_id") if isinstance(hints, dict) else None
         # isinstance guard: a misbehaving VLM could return an unhashable value, which
         # would raise TypeError on the dict membership test and escape as a 500.
@@ -304,7 +307,10 @@ def build_intent(
     # Vectorization fit/unfit -> source_fidelity (vectorizer is mocked in tests).
     source_fidelity = "vector"
     if vectorizer is not None:
-        vres = vectorizer.trace(data)
+        try:
+            vres = vectorizer.trace(data)
+        except Exception as exc:  # noqa: BLE001 - external client failures map to 502
+            raise ImageAdapterError(f"vectorizer service failed while tracing image: {exc}") from exc
         source_fidelity = judge_vectorization(vres)
         if source_fidelity != "vector":
             warnings.append(

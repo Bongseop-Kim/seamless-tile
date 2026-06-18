@@ -20,7 +20,7 @@ router = APIRouter(prefix="/export", tags=["export"])
 
 
 @router.post("")
-def export_candidate(request: ExportRequest) -> Response:
+async def export_candidate(request: ExportRequest) -> Response:
     settings = get_settings()
 
     if not (0 < request.dpi <= settings.max_dpi):

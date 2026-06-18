@@ -7,13 +7,18 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, features
 
 import app.api.routes.generate as gen_route
 from app.adapters import image as image_adapter
 from app.adapters import llm as llm_adapter
 from app.adapters.base import AdapterResult
-from app.adapters.image import VectorResult, build_intent as image_build_intent, extract_palette
+from app.adapters.image import (
+    ImageAdapterError,
+    VectorResult,
+    build_intent as image_build_intent,
+    extract_palette,
+)
 from app.adapters.image import judge_vectorization
 from app.adapters.llm import LLMNotConfigured, build_intent as llm_build_intent
 from app.main import app
@@ -71,6 +76,16 @@ class _UnhashableVLM:
 
     def describe(self, image_bytes: bytes) -> dict:
         return {"motif_id": ["not", "a", "string"]}
+
+
+class _FailingVLM:
+    def describe(self, image_bytes: bytes) -> dict:
+        raise RuntimeError("vlm down")
+
+
+class _FailingVectorizer:
+    def trace(self, image_bytes: bytes) -> VectorResult:
+        raise RuntimeError("vectorizer down")
 
 
 def _png_b64(*colors: tuple[int, int, int]) -> str:
@@ -225,6 +240,24 @@ def test_image_adapter_ignores_unknown_motif_hint():
         if layer["type"] == "motif"
     ]
     assert motif_ids == ["circle"]  # falls back to the always-present library motif
+
+
+def test_image_adapter_maps_vlm_failure_to_adapter_error():
+    with pytest.raises(ImageAdapterError, match="VLM service failed"):
+        image_build_intent(
+            _png_b64((16, 36, 58), (239, 138, 122)),
+            vlm=_FailingVLM(),
+            use_cache=False,
+        )
+
+
+def test_image_adapter_maps_vectorizer_failure_to_adapter_error():
+    with pytest.raises(ImageAdapterError, match="vectorizer service failed"):
+        image_build_intent(
+            _png_b64((16, 36, 58), (239, 138, 122)),
+            vectorizer=_FailingVectorizer(),
+            use_cache=False,
+        )
 
 
 def test_image_adapter_rejects_bad_base64():
@@ -438,10 +471,9 @@ def test_route_rejects_disallowed_format_422():
 
 
 def test_upload_allows_webp():
-    try:
-        b64 = _img_b64("WEBP")
-    except Exception:
+    if not features.check("webp"):
         pytest.skip("WEBP encoding unavailable in this Pillow build")
+    b64 = _img_b64("WEBP")
     res = image_build_intent(b64, use_cache=False)
     assert res.intent["palette"]["slots"]
 

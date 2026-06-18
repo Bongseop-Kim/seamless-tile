@@ -124,7 +124,7 @@ def main():
 
     binary = find_renderer("rsvg-convert")
     if binary:
-        png, _ = rasterize(tiled, "png", 200, max(w, h), binary=binary)
+        png, _ = rasterize(tiled, "png", 200, w, h, binary=binary)
         Image.open(io.BytesIO(png)).convert("RGBA").save(f"{OUT}/pelican-stripe-tiled.png")
 
     print(f"tile {_pattern_dims(svg)} -> 4x4 ({w:g}x{h:g}mm)" + ("  + PNG" if binary else ""))

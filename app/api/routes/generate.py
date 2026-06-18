@@ -43,7 +43,7 @@ def _run_adapter(call):
 
 
 @router.post("", response_model=GenerateResponse)
-def generate_candidate(request: GenerateRequest) -> GenerateResponse:
+async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
     # Resolve the intent: direct > reference_image > prompt. The adapters live outside
     # the engine; they freeze/cache their (non-deterministic) output so the pipeline
     # below stays deterministic. Adapter IntentInvalid -> 422 (after its own one-shot

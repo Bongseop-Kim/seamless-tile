@@ -264,8 +264,16 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                 has_host_lane = (
                     placement.host_layer is not None and placement.lane is not None
                 )
+                has_host_field = (
+                    placement.host_layer is not None or placement.lane is not None
+                )
                 has_path = placement.path is not None
-                if not (has_host_lane or has_path):
+                if has_path and has_host_field:
+                    errors.append(
+                        f"layer {layer.id!r}: path_following must specify only one "
+                        "mode: host_layer+lane or standalone path"
+                    )
+                elif not (has_host_lane or has_path):
                     errors.append(
                         f"layer {layer.id!r}: path_following requires either "
                         f"host_layer+lane or a standalone path"

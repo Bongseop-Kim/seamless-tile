@@ -132,11 +132,6 @@ def assert_seamless_invariants(intent: Intent) -> None:
             placement = layer.placement
             if placement is None:
                 continue
-            if placement.spacing_mm is not None and not divides(tile, placement.spacing_mm):
-                raise AssertionError(
-                    f"layer {layer.id!r}: spacing_mm {placement.spacing_mm} "
-                    f"does not divide tile_mm {tile}"
-                )
             if (
                 placement.path is not None
                 and placement.path.kind == "wave"

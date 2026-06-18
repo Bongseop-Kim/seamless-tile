@@ -47,7 +47,17 @@ def test_layout_id_is_seed_and_colorway_independent():
     base = validate_intent(mvp_intent()).intent
     a = layout_id_for(base.model_copy(update={"seed": 1}))
     b = layout_id_for(base.model_copy(update={"seed": 2}))
+    alternate_colorways = [
+        base.colorways[0].model_copy(
+            update={
+                "id": "alternate",
+                "mapping": {"ground": "#ffffff", "accent": "#000000", "gold": "#888888"},
+            }
+        )
+    ]
+    c = layout_id_for(base.model_copy(update={"colorways": alternate_colorways}))
     assert a == b  # seed is not part of the layout identity
+    assert a == c  # colorway data is not part of the layout identity
 
 
 def test_lattice_yields_drop_fraction_and_symmetry_layouts():

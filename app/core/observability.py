@@ -10,20 +10,27 @@ stage latencies and candidate/seam counters. No external metrics backend — std
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from contextvars import ContextVar
 
 LOGGER_NAME = "seamless"
 
 _request_id: ContextVar[str] = ContextVar("request_id", default="-")
+_REQUEST_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
+_MAX_REQUEST_ID_LEN = 128
 
 
 def new_request_id() -> str:
     return uuid.uuid4().hex
 
 
-def set_request_id(request_id: str) -> None:
-    _request_id.set(request_id)
+def set_request_id(request_id: str) -> str:
+    clean = _REQUEST_ID_PATTERN.sub("-", request_id)[:_MAX_REQUEST_ID_LEN].strip("-_")
+    if not clean:
+        clean = new_request_id()
+    _request_id.set(clean)
+    return clean
 
 
 def get_request_id() -> str:

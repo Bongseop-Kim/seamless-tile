@@ -198,9 +198,9 @@ def build_intent(
         frozen = result.intent.model_dump(mode="json")
         warns = list(result.warnings)
         if use_cache:
-            _intent_cache[key] = {"intent": frozen, "warnings": warns}
+            _intent_cache[key] = {"intent": copy.deepcopy(frozen), "warnings": warns}
         return AdapterResult(
-            intent=copy.deepcopy(frozen), source_fidelity="vector", warnings=list(warns)
+            intent=frozen, source_fidelity="vector", warnings=list(warns)
         )
 
     assert last_exc is not None  # the loop only exits early via return

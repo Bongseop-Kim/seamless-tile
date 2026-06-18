@@ -60,6 +60,16 @@ def test_request_id_echoed_from_header():
     assert resp.headers["X-Request-ID"] == "trace-xyz"
 
 
+def test_request_id_header_is_sanitized():
+    resp = client.post(
+        "/api/v1/generate",
+        headers={"X-Request-ID": "bad id.with spaces"},
+        json={"intent": mvp_intent()},
+    )
+    assert resp.json()["request_id"] == "bad-id-with-spaces"
+    assert resp.headers["X-Request-ID"] == "bad-id-with-spaces"
+
+
 def test_determinism_same_request_same_candidates():
     payload = {"intent": mvp_intent(), "candidate_count": 4, "seed": 999}
     a = client.post("/api/v1/generate", json=payload).json()
