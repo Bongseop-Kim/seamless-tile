@@ -16,6 +16,7 @@ from app.engine.primitives import build_primitive
 from app.engine.seamless import clone_instances, super_tile
 from app.engine.units import fmt
 from app.motifs.registry import MotifDef, get_motif
+from app.render.sanitize import sanitize_svg
 from app.render.svg import escape_attr, render_svg_document
 
 
@@ -60,7 +61,9 @@ def compose(intent: Intent, palette: Palette, colorway_id: str | None = None) ->
         f'<rect x="0" y="0" width="{fmt(width)}" height="{fmt(height)}" '
         'fill="url(#tile)"/>'
     )
-    return render_svg_document(body, width, height, defs=defs)
+    # Final allowlist gate: trusted engine output passes through unchanged, while any
+    # regression that emits a disallowed tag/attr/href is caught here (enumerate guard).
+    return sanitize_svg(render_svg_document(body, width, height, defs=defs))
 
 
 def _render_layer(

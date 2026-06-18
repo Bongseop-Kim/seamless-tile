@@ -10,9 +10,9 @@ reproduction (ARCHITECTURE.md "Reference Image 처리 정책"). Two parts:
   decides ``source_fidelity``; unfit textures fall back to palette + a library motif
   and are flagged. Actual raster-hybrid baking is session 8.
 
-Transport for session 7 is a base64 / data-URI string in the JSON body. A minimal
-size guard is applied here; full upload validation (format/pixel caps, metadata
-strip, multipart) is session 8.
+Transport is a base64 / data-URI string in the JSON body. Upload validation runs on
+this path (session 8): an encoded-size guard, then format allowlist, pixel/decode-bomb
+caps, an integrity check, and a metadata strip before palette extraction.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import io
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
 from app.motifs.registry import MOTIFS
@@ -39,6 +39,13 @@ DEFAULT_NUM_COLORS = 8
 # metadata strip, multipart) is session 8.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_ENCODED_CHARS = MAX_IMAGE_BYTES * 4 // 3 + 16
+# Upload hardening: allow only real raster formats; a format-spoofed payload (e.g. an
+# SVG/HTML polyglot claiming image/png) sniffs to a disallowed format and is rejected.
+# The pixel-count cap bounds decode work — a decompression bomb's huge *declared*
+# dimensions are read from the header and rejected before any pixels decode.
+ALLOWED_IMAGE_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
+MAX_IMAGE_DIM = 8192
+MAX_IMAGE_PIXELS = 24_000_000
 # Vectorization fit thresholds (ARCHITECTURE.md: clean path under a count, bounded colors).
 VECTORIZE_MAX_PATHS = 1500
 VECTORIZE_MAX_COLORS = 32
@@ -96,6 +103,55 @@ def _decode_image(image_b64: str) -> bytes:
     if len(data) > MAX_IMAGE_BYTES:
         raise IntentInvalid([f"reference_image exceeds {MAX_IMAGE_BYTES} bytes"])
     return data
+
+
+def _validate_image(data: bytes) -> None:
+    """Reject disallowed formats, oversize/decode-bomb dimensions, and corrupt streams.
+
+    ``Image.open`` reads only the header (it is lazy), so the dimension caps are
+    enforced before any pixels are decoded; ``verify()`` then walks the full stream to
+    catch truncation and format spoofs. Raises :class:`IntentInvalid` (a 422 at the
+    route) on any violation.
+    """
+    try:
+        img = Image.open(io.BytesIO(data))
+        fmt = img.format
+        width, height = img.size
+    except Exception as exc:  # PIL raises a grab-bag; treat as bad caller input
+        raise IntentInvalid([f"reference_image could not be decoded as an image: {exc}"]) from None
+    if fmt not in ALLOWED_IMAGE_FORMATS:
+        raise IntentInvalid(
+            [f"reference_image format {fmt!r} not allowed; use one of {sorted(ALLOWED_IMAGE_FORMATS)}"]
+        )
+    if width <= 0 or height <= 0 or width > MAX_IMAGE_DIM or height > MAX_IMAGE_DIM:
+        raise IntentInvalid(
+            [f"reference_image {width}x{height}px exceeds the {MAX_IMAGE_DIM}px per-side cap"]
+        )
+    if width * height > MAX_IMAGE_PIXELS:
+        raise IntentInvalid(
+            [f"reference_image {width}x{height}px exceeds the {MAX_IMAGE_PIXELS}-pixel cap"]
+        )
+    try:
+        Image.open(io.BytesIO(data)).verify()  # verify() consumes the image; reopen to use
+    except Exception as exc:
+        raise IntentInvalid([f"reference_image failed integrity check: {exc}"]) from None
+
+
+def _strip_metadata(data: bytes) -> bytes:
+    """Return clean PNG bytes carrying only RGB pixels — no EXIF/ICC/text chunks.
+
+    Copying the pixel data into a fresh image drops the source ``.info`` dict, and the
+    re-encode discards any appended polyglot payload. Lossless, so palette extraction
+    is unaffected.
+    """
+    # Apply (then discard) EXIF orientation so the stripped image is upright, then
+    # rebuild from the raw pixel buffer so no source ``.info`` (EXIF/ICC/text) carries
+    # over and the re-encode drops any appended polyglot payload.
+    src = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+    clean = Image.frombytes("RGB", src.size, src.tobytes())
+    buf = io.BytesIO()
+    clean.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def extract_palette(image_bytes: bytes, *, num_colors: int = DEFAULT_NUM_COLORS) -> list[dict]:
@@ -211,6 +267,10 @@ def build_intent(
     an intent that fails stage-0 even after dropping the motif layer).
     """
     data = _decode_image(image_b64)
+    # Session-8 upload hardening: reject spoofed/oversize/corrupt images, then strip
+    # metadata so only RGB pixels flow downstream (and into the freeze-cache key).
+    _validate_image(data)
+    data = _strip_metadata(data)
     key = cache_key(
         {
             "k": "image",

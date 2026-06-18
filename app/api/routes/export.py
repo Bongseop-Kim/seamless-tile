@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.observability import log_metrics
 from app.engine.units import mm_to_px
 from app.render.raster import MAX_DIMENSION_PX, RasterError, rasterize
+from app.render.sanitize import SanitizeError, scrub_svg
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -48,9 +49,17 @@ def export_candidate(request: ExportRequest) -> Response:
             ],
         )
 
+    # Client-supplied SVG is untrusted: validate against the allowlist AND re-serialize
+    # (scrub) so comments/PI/foreign nodes can't reach the renderer; blocks external
+    # href fetch / injection.
+    try:
+        safe_svg = scrub_svg(request.svg)
+    except SanitizeError as exc:
+        raise HTTPException(status_code=400, detail=[f"unsafe svg: {exc}"]) from None
+
     try:
         data, content_type = rasterize(
-            request.svg,
+            safe_svg,
             request.format,
             request.dpi,
             request.width_mm,

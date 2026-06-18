@@ -371,3 +371,94 @@ def test_route_intent_direct_warns_ignored_fields():
     )
     assert resp.status_code == 200
     assert any("ignored because `intent`" in w for w in resp.json()["warnings"])
+
+
+# --- session-8 upload validation -------------------------------------------
+
+
+def _img_b64(fmt: str, size: tuple[int, int] = (8, 8), color: tuple[int, int, int] = (16, 36, 58)) -> str:
+    img = Image.new("RGB", size, color)
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def test_upload_rejects_disallowed_format():
+    with pytest.raises(IntentInvalid):
+        image_build_intent(_img_b64("GIF"), use_cache=False)
+
+
+def test_upload_rejects_format_spoof_polyglot():
+    # Valid base64, but the bytes are HTML, not an image (sniffs to no allowed format).
+    payload = base64.b64encode(b"<html><script>alert(1)</script></html>").decode("ascii")
+    with pytest.raises(IntentInvalid):
+        image_build_intent(payload, use_cache=False)
+
+
+def test_upload_allows_jpeg():
+    res = image_build_intent(_img_b64("JPEG", color=(16, 36, 58)), use_cache=False)
+    assert res.intent["palette"]["slots"]
+
+
+def test_validate_image_rejects_oversize_dimension(monkeypatch):
+    monkeypatch.setattr(image_adapter, "MAX_IMAGE_DIM", 4)  # 8x8 image exceeds it
+    data = base64.b64decode(_png_b64((16, 36, 58)))
+    with pytest.raises(IntentInvalid):
+        image_adapter._validate_image(data)
+
+
+def test_validate_image_rejects_pixel_bomb(monkeypatch):
+    monkeypatch.setattr(image_adapter, "MAX_IMAGE_PIXELS", 10)  # 8*8=64 exceeds it
+    data = base64.b64decode(_png_b64((16, 36, 58)))
+    with pytest.raises(IntentInvalid):
+        image_adapter._validate_image(data)
+
+
+def test_strip_metadata_drops_text_and_icc():
+    from PIL import PngImagePlugin
+
+    img = Image.new("RGB", (8, 8), (16, 36, 58))
+    meta = PngImagePlugin.PngInfo()
+    meta.add_text("Secret", "leak-me")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=meta, icc_profile=b"FAKEICCPROFILE")
+    raw = buf.getvalue()
+    assert b"leak-me" in raw  # metadata present before the strip
+
+    clean = image_adapter._strip_metadata(raw)
+    assert b"leak-me" not in clean
+    reopened = Image.open(io.BytesIO(clean))
+    assert "icc_profile" not in reopened.info
+    assert reopened.size == (8, 8)  # pixels preserved
+
+
+def test_route_rejects_disallowed_format_422():
+    resp = client.post("/api/v1/generate", json={"reference_image": _img_b64("GIF")})
+    assert resp.status_code == 422
+
+
+def test_upload_allows_webp():
+    try:
+        b64 = _img_b64("WEBP")
+    except Exception:
+        pytest.skip("WEBP encoding unavailable in this Pillow build")
+    res = image_build_intent(b64, use_cache=False)
+    assert res.intent["palette"]["slots"]
+
+
+def test_validate_image_rejects_truncated_stream():
+    data = base64.b64decode(_png_b64((16, 36, 58)))
+    # Header (size) is intact but the stream is cut, so verify() must reject it.
+    with pytest.raises(IntentInvalid):
+        image_adapter._validate_image(data[:40])
+
+
+def test_strip_metadata_preserves_pixels():
+    img = Image.new("RGB", (4, 4))
+    for i in range(16):
+        img.putpixel((i % 4, i // 4), ((i * 17) % 256, 20, 30))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    clean = image_adapter._strip_metadata(buf.getvalue())
+    out = Image.open(io.BytesIO(clean)).convert("RGB")
+    assert out.tobytes() == img.tobytes()  # lossless: pixels intact
