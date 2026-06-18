@@ -1,3 +1,6 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -12,15 +15,43 @@ from app.core.observability import (
     new_request_id,
     set_request_id,
 )
+from app.motifs.registry import hydrate_from_store
+from app.motifs.store import set_default_store, store_from_settings
 from app.render.raster import RasterError
 
 REQUEST_ID_HEADER = "X-Request-ID"
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Install the motif store and hydrate the in-memory registry at boot.
+
+    Unconfigured (no SUPABASE_DB_URL) is a no-op; any store error is logged and
+    swallowed so boot never crashes — correctness still holds because get_motif
+    lazy-loads on a cold miss. The synchronous hydration runs once at startup only
+    (never in the request path).
+    """
+    settings = get_settings()
+    store = store_from_settings(settings)
+    set_default_store(store)
+    if store is not None:
+        try:
+            count = hydrate_from_store(store)
+            logger.info("motif store hydrated: %d motif(s)", count)
+        except Exception:
+            logger.warning("motif store hydration skipped (store error)", exc_info=True)
+    else:
+        logger.info("motif store unconfigured; in-memory registry only")
+    yield
+    # One connection per operation — nothing to tear down.
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging()
-    app = FastAPI(title=settings.app_name, debug=settings.debug)
+    app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
     app.include_router(health.router, prefix=settings.api_v1_prefix)
     app.include_router(palettes.router, prefix=settings.api_v1_prefix)
     app.include_router(generate.router, prefix=settings.api_v1_prefix)

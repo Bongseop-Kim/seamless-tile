@@ -5,4 +5,5 @@ numpy
 pillow
 defusedxml
 httpx
+psycopg[binary]
 pytest

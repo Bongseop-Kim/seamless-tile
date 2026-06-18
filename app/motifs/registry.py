@@ -21,11 +21,19 @@ registered through the same contract at authoring time.
 from __future__ import annotations
 
 import hashlib
+import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.engine.units import fmt
+from app.motifs import facets
 from app.render import sanitize
+
+if TYPE_CHECKING:
+    from app.motifs.store import MotifStore
+
+logger = logging.getLogger(__name__)
 
 BBox = tuple[float, float, float, float]  # (min_x, min_y, max_x, max_y) in mm
 Anchor = tuple[float, float]  # (x, y) in mm
@@ -80,25 +88,126 @@ MOTIFS: dict[str, MotifDef] = {
 def get_motif(motif_id: str) -> MotifDef:
     """Look up a registered motif by id.
 
-    Raises ``ValueError`` (with the available ids) for an unknown motif, mirroring
-    ``host.resolve_lane``.
+    Fast path is a pure in-memory dict lookup (sync, no DB) — this keeps the engine
+    compose hot path deterministic. On a cold miss, if a store is configured, try to
+    lazy-load the motif once and cache it; otherwise raise ``ValueError`` (with the
+    available ids) exactly as before, mirroring ``host.resolve_lane``.
     """
-    try:
-        return MOTIFS[motif_id]
-    except KeyError:
-        available = ", ".join(sorted(MOTIFS))
-        raise ValueError(f"unknown motif {motif_id!r}; available: {available}") from None
+    motif = MOTIFS.get(motif_id)
+    if motif is not None:
+        return motif
+    loaded = _lazy_load(motif_id)
+    if loaded is not None:
+        MOTIFS[motif_id] = loaded
+        return loaded
+    available = ", ".join(sorted(MOTIFS))
+    raise ValueError(f"unknown motif {motif_id!r}; available: {available}") from None
 
 
-def register_motif(motif: MotifDef) -> str:
+def register_motif(
+    motif: MotifDef,
+    *,
+    subject: str | None = None,
+    part: str | None = None,
+    view: str | None = None,
+    expression: str | None = None,
+    style: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    source: str = "recraft",
+    color_slots: list[str] | None = None,
+) -> str:
     """Register a normalized motif under its content-hash id (idempotent).
+
+    The in-memory ``MOTIFS`` dict stays the source of truth; persistence is a
+    best-effort write-through that no-ops when no store is configured and **never**
+    raises into the caller (a DB outage must not break authoring or runtime — the
+    motif is already usable this process, and the content-hash PK makes a later retry
+    idempotent; spec §6.4).
 
     Re-registering an identical id is a cache hit (no-op): the same normalized SVG
     always hashes to the same id, so authoring the same shape twice does not diverge.
-    Runtime keeps referencing motifs by id only, preserving determinism.
+    The optional facet kwargs are inert for current callers; they let the
+    motif-resolution glue (S11+) persist semantic metadata without changing this
+    signature.
     """
+    # Validate facets up front: an out-of-vocab value is a caller bug and must
+    # propagate, unlike a DB outage (swallowed in _write_through). Keeping this out of
+    # the persistence path also decouples validation from whether a store is configured.
+    facets.validate_facets(subject, part)
     MOTIFS[motif.id] = motif
+    _write_through(
+        motif,
+        subject=subject,
+        part=part,
+        view=view,
+        expression=expression,
+        style=style,
+        description=description,
+        tags=tags or [],
+        source=source,
+        color_slots=color_slots or ["s0"],
+    )
     return motif.id
+
+
+def _write_through(motif: MotifDef, **facet_kwargs) -> None:
+    """Persist a registered motif to the configured store (best-effort, non-fatal).
+
+    Facets are already validated by ``register_motif``; here only the DB write happens,
+    and its failures are swallowed (a DB outage must not break authoring — the motif is
+    usable in-process and the content-hash PK makes a later retry idempotent; §6.4).
+    """
+    # Imported lazily: store imports MotifDef from this module, so a top-level import
+    # here would be a cycle.
+    from app.motifs.store import MotifRecord, get_default_store
+
+    store = get_default_store()
+    if store is None:
+        return  # graceful: unconfigured persistence is a no-op
+    try:
+        variant_group = facets.variant_group_key(
+            facet_kwargs.get("subject"), facet_kwargs.get("part")
+        )
+        record = MotifRecord(
+            id=motif.id,
+            symbol=motif.symbol,
+            bbox_mm=motif.bbox_mm,
+            anchor=motif.anchor,
+            variant_group=variant_group,
+            **facet_kwargs,
+        )
+        store.upsert(record)  # ON CONFLICT DO NOTHING => idempotent
+    except Exception:  # validation / DB failure is non-fatal at authoring time
+        logger.warning("motif write-through failed for %s", motif.id, exc_info=True)
+
+
+def _lazy_load(motif_id: str) -> MotifDef | None:
+    """Try the configured store once for a missing motif. Returns ``None`` when the
+    store is unconfigured or the read fails (treated as a graceful miss)."""
+    from app.motifs.store import get_default_store
+
+    store = get_default_store()
+    if store is None:
+        return None
+    try:
+        record = store.get(motif_id)
+    except Exception:
+        logger.warning("motif lazy-load failed for %s", motif_id, exc_info=True)
+        return None
+    return record.to_motif_def() if record is not None else None
+
+
+def hydrate_from_store(store: "MotifStore") -> int:
+    """Load persisted motifs into ``MOTIFS`` at boot (called from the app lifespan).
+
+    Built-in motifs are code constants and are NOT overwritten (``setdefault``); DB
+    rows are additive, so re-hydration is idempotent. Returns the row count loaded.
+    """
+    records = store.all()
+    for rec in records:
+        MOTIFS.setdefault(rec.id, rec.to_motif_def())
+    return len(records)
 
 
 def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:

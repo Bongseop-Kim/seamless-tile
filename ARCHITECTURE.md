@@ -384,6 +384,60 @@ motif는 단순 도형(circle 등)부터 복잡 도형(bee·flower·paisley bote
 - **계약 노출**: registry의 각 motif는 `{ id, symbol, bbox_mm, anchor }`를 노출한다.
   Placement/Composition은 이 계약만 사용하고 내부 path는 모른다.
 
+## 영속화 — Supabase 공유 DB & 마이그레이션 소유권
+
+이 서비스는 독립 DB를 두지 않고, **제품 전체가 공유하는 단일 Supabase 프로젝트**에 붙는다.
+React 모노레포(`YeongSeon`)와 이 Python 서비스가 같은 Postgres를 가리킨다.
+
+- **스키마·마이그레이션 소유자는 React 모노레포 하나뿐이다.** Supabase는 적용된 마이그레이션을
+  DB 안 단일 원장(`supabase_migrations.schema_migrations`)에 기록하므로, 두 레포가 각자
+  `supabase/migrations/`를 들고 push하면 원장이 갈라진다(divergence). 한쪽의 `db reset`이 다른
+  쪽 스키마까지 날린다. 그래서 스키마의 단일 진실 공급원은 모노레포의 선언적 스키마
+  (`supabase/schemas/*.sql`)이며, 마이그레이션도 거기서 `pnpm db:new`로만 만든다. `motifs`
+  테이블도 그 소유 아래에 있다.
+- **이 서비스는 DB 클라이언트로만 붙는다.** 코어 엔진 바깥의 어댑터(`app/motifs/store.py`)가
+  `SUPABASE_DB_URL`(direct Postgres DSN, psycopg)로 `motifs` 테이블만 읽고/쓴다. 이 레포는
+  `supabase/` 폴더도, 마이그레이션도, `supabase db push`도 두지 않는다. 스키마를 바꿀 일이
+  생기면 모노레포에서 마이그레이션을 추가한다.
+- **DSN은 서버 사이드 전용**: direct connection은 PostgREST RLS를 우회하므로 클라이언트에 노출 금지.
+- **미설정 시 폴백**: `SUPABASE_DB_URL`이 비어 있으면 in-memory registry로만 동작한다(영속화 없음).
+  로컬 개발·테스트는 이 경로를 쓴다.
+
+아래는 모노레포가 소유·관리하는 `motifs` 스키마의 **기준 정의(reference)** 다. 운영상의 단일
+진실 공급원은 모노레포의 `supabase/schemas/`이며, 이 블록은 이 서비스가 의존하는 형태를 박제해
+둔 것이다.
+
+```sql
+create extension if not exists vector;
+
+create table if not exists motifs (
+  id            text primary key,                         -- content-hash id from register_motif
+  symbol        text not null,                            -- normalized <symbol> SVG
+  color_slots   jsonb not null default '["s0"]'::jsonb,
+  bbox          jsonb not null,                           -- [min_x, min_y, max_x, max_y]
+  anchor        jsonb not null,                           -- [x, y]
+  subject       text,
+  part          text,
+  view          text,
+  expression    text,
+  style         text,
+  description   text,
+  tags          text[] not null default '{}',
+  embedding     vector,                                   -- nullable, 검색은 S11/P3
+  source        text not null default 'recraft',          -- 'llm' | 'recraft'
+  status        text not null default 'auto',             -- 'auto' | 'curated'
+  quality       real,
+  variant_group text,
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists motifs_variant_group_idx on motifs (variant_group);
+create index if not exists motifs_subject_part_idx   on motifs (subject, part);
+```
+
+> P0에는 ivfflat(vector) 인덱스를 두지 않는다 — 카탈로그가 작아 seq scan으로 충분하고, 임베딩
+> 검색은 S11/P3로 미룬다(spec D18).
+
 ## Reference Image 처리 정책
 
 - 참조 이미지는 **의미(스타일·모티프·색) 추출**에만 쓴다. 픽셀 충실 재현은 비목표다.

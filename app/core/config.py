@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     max_dpi: int = 1200
     max_tile_mm: float = 2000.0
 
+    # Supabase persistence (session 9). The motif store is "configured" iff
+    # supabase_db_url is set; unset => in-memory registry only (tests, local dev).
+    supabase_db_url: str | None = None  # postgresql://...  (env: SUPABASE_DB_URL)
+    supabase_service_key: str | None = None  # reserved for REST/Storage (S11+); unused in P0
+
 
 @lru_cache
 def get_settings() -> Settings:
