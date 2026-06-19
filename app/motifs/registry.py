@@ -21,11 +21,20 @@ registered through the same contract at authoring time.
 from __future__ import annotations
 
 import hashlib
+import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.engine.units import fmt
+from app.motifs import facets
+from app.motifs import geometry as geom
 from app.render import sanitize
+
+if TYPE_CHECKING:
+    from app.motifs.store import MotifStore
+
+logger = logging.getLogger(__name__)
 
 BBox = tuple[float, float, float, float]  # (min_x, min_y, max_x, max_y) in mm
 Anchor = tuple[float, float]  # (x, y) in mm
@@ -33,12 +42,21 @@ Anchor = tuple[float, float]  # (x, y) in mm
 
 @dataclass(frozen=True)
 class MotifDef:
-    """Normalized motif intake contract exposed to Placement/Composition."""
+    """Normalized motif intake contract exposed to Placement/Composition.
+
+    ``color_slots`` are the motif-local color slots (``s0, s1, …``) in document DFS
+    first-appearance order (D15). A single-color motif keeps the legacy convention:
+    one slot ``("s0",)`` bound to ``currentColor`` in ``symbol``. A multi-color motif
+    stores ``symbol`` with slot *tokens* (``fill="s0"`` …) — colorway-agnostic and used
+    only for hashing/storage; composition derives renderable per-slot symbols from it
+    (see ``slot_render_symbols``).
+    """
 
     id: str
     symbol: str
     bbox_mm: BBox
     anchor: Anchor
+    color_slots: tuple[str, ...] = ("s0",)
 
 
 # Nominal unit box: extent 1.0, centered on the anchor at the origin.
@@ -80,25 +98,182 @@ MOTIFS: dict[str, MotifDef] = {
 def get_motif(motif_id: str) -> MotifDef:
     """Look up a registered motif by id.
 
-    Raises ``ValueError`` (with the available ids) for an unknown motif, mirroring
-    ``host.resolve_lane``.
+    Fast path is a pure in-memory dict lookup (sync, no DB) — this keeps the engine
+    compose hot path deterministic. On a cold miss, if a store is configured, try to
+    lazy-load the motif once and cache it; otherwise raise ``ValueError`` (with the
+    available ids) exactly as before, mirroring ``host.resolve_lane``.
     """
-    try:
-        return MOTIFS[motif_id]
-    except KeyError:
-        available = ", ".join(sorted(MOTIFS))
-        raise ValueError(f"unknown motif {motif_id!r}; available: {available}") from None
+    motif = MOTIFS.get(motif_id)
+    if motif is not None:
+        return motif
+    loaded = _lazy_load(motif_id)
+    if loaded is not None:
+        MOTIFS[motif_id] = loaded
+        return loaded
+    available = ", ".join(sorted(MOTIFS))
+    raise ValueError(f"unknown motif {motif_id!r}; available: {available}") from None
 
 
-def register_motif(motif: MotifDef) -> str:
+def register_motif(
+    motif: MotifDef,
+    *,
+    subject: str | None = None,
+    part: str | None = None,
+    view: str | None = None,
+    expression: str | None = None,
+    style: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    source: str = "recraft",
+    status: str = "auto",
+    color_slots: list[str] | None = None,
+    embedding: list[float] | None = None,
+) -> str:
     """Register a normalized motif under its content-hash id (idempotent).
+
+    The in-memory ``MOTIFS`` dict stays the source of truth; persistence is a
+    best-effort write-through that no-ops when no store is configured and **never**
+    raises into the caller (a DB outage must not break authoring or runtime — the
+    motif is already usable this process, and the content-hash PK makes a later retry
+    idempotent; spec §6.4).
 
     Re-registering an identical id is a cache hit (no-op): the same normalized SVG
     always hashes to the same id, so authoring the same shape twice does not diverge.
-    Runtime keeps referencing motifs by id only, preserving determinism.
+    The optional facet kwargs are inert for current callers; they let the
+    motif-resolution glue (S11+) persist semantic metadata without changing this
+    signature. ``embedding`` (S11, D12) is the descriptor vector persisted alongside the
+    facets so future requests can soft-match this motif.
     """
+    # Validate facets up front: an out-of-vocab value is a caller bug and must
+    # propagate, unlike a DB outage (swallowed in _write_through). Keeping this out of
+    # the persistence path also decouples validation from whether a store is configured.
+    facets.validate_facets(subject, part)
+    _write_through(
+        motif,
+        subject=subject,
+        part=part,
+        view=view,
+        expression=expression,
+        style=style,
+        description=description,
+        tags=tags or [],
+        source=source,
+        status=status,
+        color_slots=color_slots or list(motif.color_slots),
+        embedding=embedding,
+    )
     MOTIFS[motif.id] = motif
     return motif.id
+
+
+def _write_through(motif: MotifDef, **facet_kwargs) -> None:
+    """Persist a registered motif to the configured store (best-effort, non-fatal).
+
+    Facets are already validated by ``register_motif``; here only the DB write happens,
+    and its failures are swallowed (a DB outage must not break authoring — the motif is
+    usable in-process and the content-hash PK makes a later retry idempotent; §6.4).
+    """
+    # Imported lazily: store imports MotifDef from this module, so a top-level import
+    # here would be a cycle.
+    from app.motifs.store import MotifRecord, get_default_store
+
+    store = get_default_store()
+    if store is None:
+        return  # graceful: unconfigured persistence is a no-op
+    variant_group = facets.variant_group_key(
+        facet_kwargs.get("subject"), facet_kwargs.get("part")
+    )
+    record = MotifRecord(
+        id=motif.id,
+        symbol=motif.symbol,
+        bbox_mm=motif.bbox_mm,
+        anchor=motif.anchor,
+        variant_group=variant_group,
+        **facet_kwargs,
+    )
+    try:
+        store.upsert(record)  # ON CONFLICT DO NOTHING => idempotent
+    except Exception:  # DB failure is non-fatal at authoring time
+        logger.warning("motif write-through failed for %s", motif.id, exc_info=True)
+
+
+def _lazy_load(motif_id: str) -> MotifDef | None:
+    """Try the configured store once for a missing motif. Returns ``None`` when the
+    store is unconfigured or the read fails (treated as a graceful miss)."""
+    from app.motifs.store import get_default_store
+
+    store = get_default_store()
+    if store is None:
+        return None
+    try:
+        record = store.get(motif_id)
+    except Exception:
+        logger.warning("motif lazy-load failed for %s", motif_id, exc_info=True)
+        return None
+    return record.to_motif_def() if record is not None else None
+
+
+def hydrate_from_store(store: "MotifStore") -> int:
+    """Load persisted motifs into ``MOTIFS`` at boot (called from the app lifespan).
+
+    Built-in motifs are code constants and are NOT overwritten (``setdefault``); DB
+    rows are additive, so re-hydration is idempotent. Returns the row count loaded.
+    """
+    records = store.all()
+    for rec in records:
+        MOTIFS.setdefault(rec.id, rec.to_motif_def())
+    return len(records)
+
+
+def promote_motif(motif_id: str) -> None:
+    """Promote a persisted motif from 'auto' to 'curated' (spec §8 Tier2).
+
+    Only curated variants enter the seed-sampling pool (spec §7.4), so this is what
+    activates a motif for variant sampling. The in-memory ``MOTIFS`` dict holds only
+    geometry (no status), so nothing in-process needs to change — the variant pool
+    query reads the status from the store on the next request.
+
+    Curation is an explicit admin action, so unlike authoring write-through a missing
+    store (``MotifStoreNotConfigured``) or a DB failure (``MotifStoreError``)
+    propagates rather than being swallowed.
+    """
+    from app.motifs.store import _resolve_store
+
+    _resolve_store(None).set_status(motif_id, "curated")
+
+
+def reject_motif(motif_id: str) -> None:
+    """Reject a motif, propagating removal across DB, in-memory and caches (spec §6.4).
+
+    Keeps the three layers consistent: the store row is deleted, the in-memory
+    ``MOTIFS`` entry is evicted, and the adapter caches that map a spec/prompt to a
+    motif id are flushed, so a deleted motif can never be re-served from a warm cache.
+    A full flush is deliberate — curation is a rare manual action, so dropping warm
+    caches is cheaper and safer than maintaining per-id reverse indices. The intent and
+    embedding caches hold no concrete motif id, so they are left intact. The flush is
+    process-local (the caches are module-level globals): a separately running server
+    keeps its own caches and must be restarted after a reject.
+
+    Built-in motifs (``circle``/``bee``) are code constants, not catalog rows, and
+    cannot be rejected.
+    """
+    if motif_id in {_CIRCLE.id, _BEE.id}:
+        raise ValueError(f"cannot reject built-in motif {motif_id!r}")
+    from app.motifs.store import _resolve_store
+
+    _resolve_store(None).delete(motif_id)
+    MOTIFS.pop(motif_id, None)
+    _flush_motif_id_caches()
+
+
+def _flush_motif_id_caches() -> None:
+    """Flush adapter caches whose values are motif ids (spec §6.4 cache invalidation)."""
+    # Lazy import: the adapters import this module, so a top-level import is a cycle.
+    from app.adapters import llm, recraft
+
+    llm.clear_motif_svg_cache()
+    recraft.clear_motif_cache()
+    recraft.clear_recraft_motif_cache()
 
 
 def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:
@@ -120,21 +295,143 @@ def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:
     return 0.0, 0.0, w, h
 
 
-def _recolor_to_slot(el: ET.Element) -> None:
-    """Replace concrete fill/stroke colors with the ``currentColor`` slot reference.
+def _norm_color(value: str) -> str | None:
+    """Normalized comparison key for a concrete paint value, or ``None`` for a
+    non-color paint (``none`` / internal ``url(#…)``) that carries no slot.
 
-    Single-color normalization (matches the built-in motif convention). ``none`` and
-    internal ``url(#…)`` paints are left intact. Multi-color slot binding is future work.
+    ``currentColor`` is intentionally treated as a concrete value: a pure-``currentColor``
+    motif stays single-color (1 distinct -> legacy path), but when mixed with concrete
+    colors it is promoted to its own slot token (multicolor motifs bind every color
+    explicitly — no implicit inherited paint survives into a per-slot symbol).
     """
-    for node in el.iter():
-        for attr in ("fill", "stroke"):
-            value = node.get(attr)
-            if value is None:
-                continue
-            low = value.strip().lower()
-            if low == "none" or low.startswith("url("):
-                continue
-            node.set(attr, "currentColor")
+    low = value.strip().lower()
+    if low == "none" or low.startswith("url("):
+        return None
+    return low
+
+
+def _distinct_colors(children: list[ET.Element]) -> list[str]:
+    """Distinct concrete paint values across ``children`` in document DFS
+    first-appearance order (deterministic slot ordering, D15)."""
+    order: list[str] = []
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                norm = _norm_color(value)
+                if norm is not None and norm not in order:
+                    order.append(norm)
+    return order
+
+
+def _recolor_single(children: list[ET.Element]) -> None:
+    """Legacy single-color normalization: every concrete fill/stroke -> ``currentColor``
+    (``none`` / internal ``url(#…)`` left intact). Byte-identical to the pre-multicolor
+    behavior, preserving single-color motif ids and rendered output."""
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                if _norm_color(value) is None:
+                    continue
+                node.set(attr, "currentColor")
+
+
+def _slotize_colors(children: list[ET.Element]) -> tuple[str, ...]:
+    """Replace concrete fill/stroke colors with motif-local slot tokens and return the
+    ordered ``color_slots`` (D15).
+
+    A motif with <=1 distinct concrete color keeps the legacy single-color convention
+    (``currentColor`` + ``("s0",)``) so its id and rendered output are unchanged. A
+    multi-color motif maps each distinct color (DFS first-appearance order) to a token
+    ``s0, s1, …`` written as the attribute value; the colorway-agnostic ``<symbol>`` is
+    expanded to renderable per-slot symbols at composition time (``slot_render_symbols``).
+    """
+    order = _distinct_colors(children)
+    if len(order) <= 1:
+        _recolor_single(children)
+        return ("s0",)
+    token = {color: f"s{i}" for i, color in enumerate(order)}
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                norm = _norm_color(value)
+                if norm is None:
+                    continue
+                node.set(attr, token[norm])
+    return tuple(f"s{i}" for i in range(len(order)))
+
+
+def _hex_to_rgb(color: str) -> tuple[int, int, int] | None:
+    """Parse a ``#rgb`` / ``#rrggbb`` token to an ``(r, g, b)`` tuple, else ``None``."""
+    c = color.strip().lower()
+    if not c.startswith("#"):
+        return None
+    h = c[1:]
+    if len(h) == 3:
+        h = "".join(ch * 2 for ch in h)
+    if len(h) != 6:
+        return None
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _quantize_colors(children: list[ET.Element], max_slots: int) -> None:
+    """Deterministically merge concrete colors down to at most ``max_slots`` (§6.2/§12).
+
+    Painterly Recraft output can carry more colors than the slot budget. Merging is a
+    pure function of the colors: repeatedly fuse the two closest hex colors (RGB
+    Euclidean distance; ties broken by hex order, keeping the lexicographically smaller
+    hex as the representative) until the budget is met. Non-hex paints (e.g.
+    ``currentColor``) cannot be measured and are never merged; if the irreducible count
+    still exceeds ``max_slots`` the motif is rejected (``ValueError``) so the caller can
+    regenerate / fall back. Mutates ``children`` in place; ``_slotize_colors`` runs next.
+    """
+    distinct = _distinct_colors(children)
+    if len(distinct) <= max_slots:
+        return
+    rgb = {c: _hex_to_rgb(c) for c in distinct}
+    rep = {c: c for c in distinct}  # original color -> current representative
+    unmergeable = sum(1 for c in distinct if rgb[c] is None)
+    active = sorted(c for c in distinct if rgb[c] is not None)
+    while unmergeable + len(active) > max_slots and len(active) >= 2:
+        best: tuple[int, str, str] | None = None  # (distance, keep_hex, drop_hex)
+        for i in range(len(active)):
+            for j in range(i + 1, len(active)):
+                a, b = active[i], active[j]  # a < b (active is sorted)
+                ra, rb = rgb[a], rgb[b]
+                dist = (ra[0] - rb[0]) ** 2 + (ra[1] - rb[1]) ** 2 + (ra[2] - rb[2]) ** 2
+                cand = (dist, a, b)
+                if best is None or cand < best:
+                    best = cand
+        _, keep, drop = best
+        for color, representative in rep.items():
+            if representative == drop:
+                rep[color] = keep
+        active.remove(drop)
+    if unmergeable + len(active) > max_slots:
+        raise ValueError(
+            f"motif has {len(distinct)} colors that cannot be quantized to "
+            f"{max_slots} slots (too many non-hex paints)"
+        )
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                norm = _norm_color(value)
+                if norm is not None and rep.get(norm, norm) != norm:
+                    node.set(attr, rep[norm])
 
 
 # Elements that actually paint. A motif whose geometry is only non-rendering
@@ -156,7 +453,7 @@ def _has_drawable(elements: list[ET.Element]) -> bool:
     return False
 
 
-def normalize_motif_svg(raw_svg: str) -> MotifDef:
+def normalize_motif_svg(raw_svg: str, *, max_color_slots: int | None = None) -> MotifDef:
     """Normalize an authored/Recraft SVG into the motif intake contract.
 
     Steps (ARCHITECTURE.md "Motif 소스와 registry"):
@@ -164,31 +461,44 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
     1. Parse + allowlist via :mod:`app.render.sanitize` — ``<filter>``, embedded
        raster (``<image>``) and external ``href`` are outside the allowlist and so are
        rejected (a motif must be vector).
-    2. Map the source ``viewBox`` frame into the normalized unit box (extent ``1.0``,
-       centered on the origin) with a single wrapping ``<g transform>`` — no per-path
-       coordinate rewriting (pixel-tight bbox flattening is out of scope; the viewBox
-       is the authoring frame).
-    3. Substitute concrete colors with the ``currentColor`` slot reference
-       (single-color; multi-color slot binding is future work).
+    2. Frame on the **tight bounding box of the actual geometry** (not the source
+       viewBox): map that bbox's center onto the origin and its longest side onto ``1.0``
+       with a single wrapping ``<g transform>``. This makes the object *fill* the unit
+       box so ``size_mm`` controls its real rendered size (the source viewBox, which may
+       leave wide margins around a small object, is only validated for sanity). A motif
+       is a single object placed/repeated by the engine — not a pre-composed scene.
+    3. Map concrete colors to motif-local slots (D15): a single-color motif keeps the
+       legacy ``currentColor`` convention (``color_slots=("s0",)``); a multi-color motif
+       writes slot tokens (``fill="s0"`` …) in document DFS first-appearance order.
     4. Wrap in a single ``<symbol>`` and derive a content-hash ``motif_id`` from the
-       **normalized** geometry, so the same shape always hashes to the same id (the
-       cache-hit guarantee).
+       **normalized, slotified** geometry, so the same shape always hashes to the same
+       id regardless of colorway (the cache-hit guarantee).
     """
     root = sanitize.parse_svg(raw_svg)
     sanitize.validate_tree(root)
 
-    min_x, min_y, w, h = _parse_viewbox(root)
-    extent = max(w, h)
-    scale = 1.0 / extent
-    # Map the source-frame center onto the origin and the longest side onto 1.0.
-    tx = -(min_x + w / 2.0) * scale
-    ty = -(min_y + h / 2.0) * scale
+    _parse_viewbox(root)  # validate the source frame (rejects missing / non-positive viewBox)
 
     children = list(root)
     if not _has_drawable(children):
         raise ValueError("motif SVG has no drawable geometry")
-    for child in children:
-        _recolor_to_slot(child)
+
+    bbox = geom.bbox_of(children)
+    if bbox is None:
+        raise ValueError("motif SVG has no measurable geometry")
+    bx, by, bx2, by2 = bbox
+    bw, bh = bx2 - bx, by2 - by
+    extent = max(bw, bh)
+    if extent <= 0:
+        raise ValueError("motif SVG geometry has zero extent")
+    scale = 1.0 / extent
+    # Map the tight-geometry center onto the origin and the longest side onto 1.0.
+    tx = -(bx + bw / 2.0) * scale
+    ty = -(by + bh / 2.0) * scale
+
+    if max_color_slots is not None:
+        _quantize_colors(children, max_color_slots)
+    color_slots = _slotize_colors(children)
     inner = "".join(ET.tostring(child, encoding="unicode") for child in children)
     geometry = (
         f'<g transform="translate({fmt(tx)} {fmt(ty)}) scale({fmt(scale)})">'
@@ -201,4 +511,35 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
         symbol=_symbol(motif_id, geometry),
         bbox_mm=_UNIT_BBOX,
         anchor=_ORIGIN,
+        color_slots=color_slots,
     )
+
+
+def slot_render_symbols(motif: MotifDef) -> list[tuple[str, str]]:
+    """Per-slot, colorway-agnostic ``<symbol>`` definitions for composition (D15).
+
+    A single-color motif renders through its original ``currentColor`` symbol unchanged
+    (id ``motif-{id}``), preserving the legacy single-color output byte-for-byte.
+
+    A multi-color motif expands to one symbol per slot (id ``motif-{id}-s{k}``): the
+    active slot's token becomes ``currentColor`` and every other slot's token becomes
+    ``none``. The concrete color is bound per ``<use color>`` instance, so each symbol
+    stays colorway-agnostic and dedupes by id. Returned in ``color_slots`` order.
+
+    Token substitution is exact-match on ``fill="s{k}"`` / ``stroke="s{k}"`` (the closing
+    quote prevents an ``s1`` vs ``s10`` substring collision) over the symbol string this
+    module itself emits, so no re-parse is needed and the result is deterministic.
+    """
+    if len(motif.color_slots) <= 1:
+        return [(f"motif-{motif.id}", motif.symbol)]
+    out: list[tuple[str, str]] = []
+    for k in range(len(motif.color_slots)):
+        body = motif.symbol
+        for j, slot in enumerate(motif.color_slots):
+            repl = "currentColor" if j == k else "none"
+            body = body.replace(f'fill="{slot}"', f'fill="{repl}"')
+            body = body.replace(f'stroke="{slot}"', f'stroke="{repl}"')
+        sym_id = f"motif-{motif.id}-s{k}"
+        body = body.replace(f'id="motif-{motif.id}"', f'id="{sym_id}"', 1)
+        out.append((sym_id, body))
+    return out

@@ -18,10 +18,42 @@ Caching is two-layered and both layers preserve determinism:
 
 from __future__ import annotations
 
+import base64
+import re
+import xml.etree.ElementTree as ET
 from typing import Protocol, runtime_checkable
 
+import httpx
+
 from app.adapters.base import AdapterClientError, cache_key
+from app.core.config import get_settings
+from app.motifs import facets
+from app.motifs import geometry as geom
 from app.motifs.registry import normalize_motif_svg, register_motif
+from app.render import sanitize
+
+# Tags that the sanitizer allowlist rejects and the gate flattens away (M1, §6.2):
+# gradients become a representative solid color; filters/clips/masks and non-vector
+# metadata are dropped; raster <image> cannot be vectorized and forces a regenerate.
+_GRADIENT_TAGS = {"lineargradient", "radialgradient"}
+_DROP_TAGS = _GRADIENT_TAGS | {
+    "filter",
+    "clippath",
+    "mask",
+    "title",
+    "desc",
+    "metadata",
+    "style",
+    "text",
+    "tspan",
+}
+_FRAGMENT_RE = re.compile(r"url\(\s*#([^)\s]+)\s*\)")
+_RGB_RE = re.compile(r"rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)", re.IGNORECASE)
+_PAINT_ATTRS = ("fill", "stroke", "color")  # sanitizer COLOR_ATTRS
+# A leading filled shape whose bbox covers at least this fraction of the viewBox is a
+# full-canvas background (Recraft emits one); dropped so the motif is a transparent
+# single object the engine can place/repeat (a single-shape SVG is never stripped).
+_BG_AREA_RATIO = 0.9
 
 
 @runtime_checkable
@@ -40,12 +72,125 @@ class RecraftNotConfigured(RecraftError):
 
 
 def _resolve_client(client: RecraftClient | None) -> RecraftClient:
-    if client is None:
-        raise RecraftNotConfigured(
-            "no Recraft client provided; pass create_motif(client=...). "
-            "Generation is opt-in and authoring-time only."
-        )
-    return client
+    if client is not None:
+        return client
+    if _DEFAULT_RECRAFT_CLIENT is not None:
+        return _DEFAULT_RECRAFT_CLIENT
+    raise RecraftNotConfigured(
+        "no Recraft client provided; pass client=... or set_default_recraft_client(...). "
+        "Generation is opt-in; detailed misses with no Recraft client surface a 502."
+    )
+
+
+_DEFAULT_RECRAFT_CLIENT: RecraftClient | None = None
+
+
+def set_default_recraft_client(client: RecraftClient | None) -> None:
+    """Register a process-wide default Recraft client (opt-in; injected, no SDK shipped)."""
+    global _DEFAULT_RECRAFT_CLIENT
+    _DEFAULT_RECRAFT_CLIENT = client
+
+
+def get_default_recraft_client() -> RecraftClient | None:
+    return _DEFAULT_RECRAFT_CLIENT
+
+
+# Default Recraft vector API contract (recraft.ai/docs api-reference/examples). Vector
+# output is driven by a *_vector model id on the STANDARD generations endpoint; `style`
+# is omitted for vector models (the model determines SVG). data[0].url is an .svg file.
+_API_PATH = "/images/generations"
+DEFAULT_VECTOR_MODEL = "recraftv4_1_vector"  # Recraft V4.1 Vector
+DEFAULT_VECTOR_STYLE = ""  # omit style by default; the vector model produces SVG
+DEFAULT_SIZE = "1024x1024"
+DEFAULT_BASE_URL = "https://external.api.recraft.ai/v1"
+
+
+class RecraftHTTPClient:
+    """Concrete :class:`RecraftClient` calling the real Recraft vector API over HTTPS.
+
+    ``POST {base_url}/images/generations`` with a ``*_vector`` model (e.g.
+    ``recraftv4_1_vector``) returns ``{"data": [{"url": ...}]}`` pointing to an SVG file
+    (or, with ``response_format="b64_json"``, the SVG base64-encoded inline). ``generate``
+    returns
+    the raw SVG text; the caller (``create_motif`` / ``generate_via_recraft``) then runs
+    the suitability gate. Network calls are opt-in — :func:`app.main.lifespan` installs
+    this only when ``RECRAFT_API_KEY`` is set. All failures normalize to
+    :class:`RecraftError` (the route maps that to 502).
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = DEFAULT_VECTOR_MODEL,
+        style: str = DEFAULT_VECTOR_STYLE,
+        size: str = DEFAULT_SIZE,
+        response_format: str = "url",
+        base_url: str = DEFAULT_BASE_URL,
+        timeout: float = 120.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        if not api_key:
+            raise RecraftError("RecraftHTTPClient requires a non-empty api_key")
+        self._api_key = api_key
+        self._model = model
+        self._style = style
+        self._size = size
+        self._response_format = response_format
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._transport = transport  # injected for offline tests (httpx.MockTransport)
+
+    def generate(self, prompt: str) -> str:
+        payload = {
+            "prompt": prompt,
+            "model": self._model,
+            "response_format": self._response_format,
+            "n": 1,
+        }
+        if self._style:  # optional: a vector model already drives SVG output
+            payload["style"] = self._style
+        if self._size:
+            payload["size"] = self._size
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        try:
+            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+                resp = client.post(
+                    f"{self._base_url}{_API_PATH}", json=payload, headers=headers
+                )
+                resp.raise_for_status()
+                item = resp.json()["data"][0]
+                if self._response_format == "b64_json":
+                    svg = base64.b64decode(item["b64_json"]).decode("utf-8")
+                else:
+                    file_resp = client.get(item["url"])
+                    file_resp.raise_for_status()
+                    svg = file_resp.text
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise RecraftError(
+                f"Recraft API HTTP {exc.response.status_code}: {body}"
+            ) from exc
+        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+            raise RecraftError(f"Recraft request failed: {exc}") from exc
+        if not svg or "<svg" not in svg.lower():
+            raise RecraftError("Recraft returned a non-SVG payload")
+        return svg
+
+
+def client_from_settings(settings) -> RecraftHTTPClient | None:
+    """Build a :class:`RecraftHTTPClient` iff ``recraft_api_key`` is set, else ``None``."""
+    api_key = getattr(settings, "recraft_api_key", None)
+    if not api_key:
+        return None
+    return RecraftHTTPClient(
+        api_key,
+        model=getattr(settings, "recraft_model", None) or DEFAULT_VECTOR_MODEL,
+        style=getattr(settings, "recraft_style", None) or DEFAULT_VECTOR_STYLE,
+        size=getattr(settings, "recraft_size", None) or DEFAULT_SIZE,
+        response_format=getattr(settings, "recraft_response_format", None) or "url",
+        base_url=getattr(settings, "recraft_base_url", None) or DEFAULT_BASE_URL,
+    )
 
 
 # Per-prompt cache: prompt -> motif_id, so an identical authoring request never
@@ -65,9 +210,12 @@ def create_motif(
 ) -> str:
     """Generate, normalize, and register a motif at authoring time; return its ``motif_id``.
 
-    Raises :class:`RecraftError` if the generator is unavailable or fails, and
-    propagates :class:`app.render.sanitize.SanitizeError` / ``ValueError`` if the
-    generated SVG is unsafe or unnormalizable.
+    The raw SVG passes through the suitability gate (:func:`_flatten_unsuitable`) before
+    normalization, so painterly gradients/filters are flattened to path-only and the
+    color count is capped (``recraft_max_color_slots``). Raises :class:`RecraftError` if
+    the generator is unavailable or fails, and propagates
+    :class:`app.render.sanitize.SanitizeError` / ``ValueError`` if the generated SVG is
+    unsafe or unnormalizable even after flattening.
     """
     if not prompt or not prompt.strip():
         raise ValueError("create_motif requires a non-empty prompt")
@@ -83,8 +231,292 @@ def create_motif(
     except Exception as exc:  # any generator failure is an upstream (5xx-class) error
         raise RecraftError(f"Recraft generation failed: {exc}") from exc
 
-    motif = normalize_motif_svg(raw_svg)
+    motif = normalize_motif_svg(
+        _flatten_unsuitable(raw_svg),
+        max_color_slots=get_settings().recraft_max_color_slots,
+    )
     motif_id = register_motif(motif)
     if use_cache:
         _motif_cache[key] = motif_id
     return motif_id
+
+
+def _flatten_unsuitable(raw_svg: str) -> str:
+    """Best-effort path-only flattening of a Recraft SVG (suitability gate, M1 §6.2).
+
+    The sanitizer allowlist rejects ``gradient``/``filter``/``clipPath``/``mask``/raster,
+    non-allowlist attributes (``preserveAspectRatio``/``style``/``version`` — Recraft
+    emits these on the root ``<svg>``), and non-hex paints (Recraft uses ``rgb(...)``).
+    This gate runs *before* :func:`normalize_motif_svg` and:
+
+    - rejects raster ``<image>`` (cannot be vectorized) by raising ``ValueError``;
+    - resolves ``fill``/``stroke="url(#grad)"`` to the gradient's first ``<stop>`` color;
+    - converts ``rgb()``/``rgba()`` paints to ``#rrggbb`` (hex), hoisting any paint out of
+      a ``style`` attribute first;
+    - drops every attribute outside the sanitizer allowlist and the ``<filter>``/
+      ``<clipPath>``/``<mask>``/gradient defs + non-vector metadata tags;
+    - removes a **full-canvas background** shape so the motif is a single transparent
+      object the engine can place/repeat (a single-shape SVG is left intact).
+
+    A clean SVG (nothing to flatten) is returned **unchanged** so the authoring/LLM
+    determinism contract (byte-identical normalized ids) is untouched. Anything the gate
+    cannot handle survives into ``normalize_motif_svg`` and is rejected there
+    (``SanitizeError``), which the caller treats as a regeneration trigger.
+    """
+    root = sanitize.parse_svg(raw_svg)  # namespace-stripped, hardened parse
+
+    gradient_color: dict[str, str] = {}
+    has_image = False
+    needs_flatten = False
+    for el in root.iter():
+        tag = el.tag.lower() if isinstance(el.tag, str) else ""
+        if tag == "image":
+            has_image = True
+        if tag in _DROP_TAGS:
+            needs_flatten = True
+        if tag in _GRADIENT_TAGS:
+            grad_id = el.get("id")
+            if grad_id:
+                gradient_color[grad_id] = _first_stop_color(el)
+        if any(sanitize._local(a) not in sanitize.ALLOWED_ATTRS for a in el.attrib):
+            needs_flatten = True
+        for attr in _PAINT_ATTRS:
+            value = el.get(attr)
+            if value is not None and not _is_sanitizer_clean_paint(value):
+                needs_flatten = True
+
+    if has_image:
+        raise ValueError("raster <image> in motif SVG is not flattenable")
+
+    backgrounds = _find_backgrounds(root)  # [(parent, element)] computed before mutation
+    if backgrounds:
+        needs_flatten = True
+    if not needs_flatten:
+        return raw_svg
+
+    _strip_and_recolor(root, gradient_color)
+    for parent, el in backgrounds:  # same element objects survive the in-place strip
+        parent.remove(el)
+    root.set("xmlns", "http://www.w3.org/2000/svg")  # parse_svg consumed it
+    return ET.tostring(root, encoding="unicode")
+
+
+def _first_stop_color(gradient: ET.Element) -> str:
+    """The first ``<stop>``'s color as a representative solid (deterministic), or black."""
+    for child in gradient.iter():
+        if isinstance(child.tag, str) and child.tag.lower() == "stop":
+            color = child.get("stop-color")
+            if not color:
+                style = child.get("style") or ""
+                match = re.search(r"stop-color\s*:\s*([^;]+)", style)
+                color = match.group(1).strip() if match else None
+            if color:
+                return color.strip()
+    return "#000000"
+
+
+def _strip_and_recolor(el: ET.Element, gradient_color: dict[str, str]) -> None:
+    """Clean ``el`` itself (hoist+normalize paints, drop non-allowlist attrs) then recurse
+    into its children, removing unsuitable child nodes. Applied to the root so the
+    ``<svg>``'s OWN attributes (``preserveAspectRatio``/``style``/``version``) are stripped
+    too — iterating only children would leave the root dirty."""
+    style = el.get("style")
+    if style:  # hoist paint out of a style attr before the attr is stripped
+        _hoist_style_paint(el, style)
+    for attr in [a for a in el.attrib if sanitize._local(a) not in sanitize.ALLOWED_ATTRS]:
+        del el.attrib[attr]
+    for attr in _PAINT_ATTRS:
+        value = el.get(attr)
+        if value is None:
+            continue
+        if value.strip().lower().startswith("url("):
+            match = _FRAGMENT_RE.search(value)
+            value = gradient_color.get(match.group(1) if match else None, "none")
+        el.set(attr, _color_to_hex(value))
+    for child in list(el):
+        tag = child.tag.lower() if isinstance(child.tag, str) else ""
+        if tag in _DROP_TAGS or tag == "image":
+            el.remove(child)
+            continue
+        _strip_and_recolor(child, gradient_color)
+
+
+def _is_sanitizer_clean_paint(value: str) -> bool:
+    """True if a paint value already passes the sanitizer (hex / none / currentColor)."""
+    low = value.strip().lower()
+    return low in ("none", "currentcolor") or low.startswith("#")
+
+
+def _color_to_hex(value: str) -> str:
+    """Convert an ``rgb()``/``rgba()`` paint to ``#rrggbb``; pass hex/none/currentColor/
+    ``url(#…)`` through unchanged. Other formats are returned as-is (the sanitizer then
+    rejects them, triggering a regenerate)."""
+    low = value.strip().lower()
+    if low in ("none", "currentcolor") or low.startswith(("#", "url(")):
+        return value
+    match = _RGB_RE.match(low)
+    if not match:
+        return value
+    r, g, b = (max(0, min(255, round(float(c)))) for c in match.groups())
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _hoist_style_paint(el: ET.Element, style: str) -> None:
+    """Copy ``fill``/``stroke``/``color`` declarations from a ``style`` attr onto the
+    element as real attributes (only when not already set), so paint survives the drop."""
+    for prop in _PAINT_ATTRS:
+        if el.get(prop) is not None:
+            continue
+        match = re.search(rf"(?:^|;)\s*{prop}\s*:\s*([^;]+)", style, re.IGNORECASE)
+        if match:
+            el.set(prop, match.group(1).strip())
+
+
+def _is_filled(el: ET.Element) -> bool:
+    """True unless the element explicitly has ``fill="none"`` (a missing fill defaults to
+    a solid paint in SVG, so it still counts as filled — i.e. a possible background)."""
+    fill = el.get("fill")
+    return not (fill is not None and fill.strip().lower() == "none")
+
+
+def _find_backgrounds(root: ET.Element) -> list[tuple[ET.Element, ET.Element]]:
+    """Leading full-canvas filled shapes to drop (background removal). Returns
+    ``(parent, element)`` pairs so the caller can remove them after the in-place strip.
+
+    Only the *leading* drawables (Recraft draws the background first/bottom) are
+    considered, only while at least one other drawable would remain, so a motif that is a
+    single full-frame shape is never stripped. Descends one level into a sole wrapping
+    ``<g>`` (some outputs wrap everything in one group)."""
+    parts = (root.get("viewBox") or "").replace(",", " ").split()
+    if len(parts) < 4:
+        return []
+    try:
+        vb_w, vb_h = float(parts[2]), float(parts[3])
+    except ValueError:
+        return []
+    if vb_w <= 0 or vb_h <= 0:
+        return []
+    vb_area = vb_w * vb_h
+
+    container = root
+    kids = [c for c in container if isinstance(c.tag, str) and c.tag.lower() in geom.DRAWABLE_TAGS]
+    if len(kids) == 1 and kids[0].tag.lower() == "g":
+        container = kids[0]
+        kids = [c for c in container if isinstance(c.tag, str) and c.tag.lower() in geom.DRAWABLE_TAGS]
+
+    backgrounds: list[tuple[ET.Element, ET.Element]] = []
+    for el in kids:
+        if len(kids) - len(backgrounds) <= 1:
+            break  # always keep at least one drawable
+        if not _is_filled(el):
+            break  # leading-only: stop at the first non-background drawable
+        box = geom.element_bbox(el)
+        if box is None:
+            break
+        if (box[2] - box[0]) * (box[3] - box[1]) >= _BG_AREA_RATIO * vb_area:
+            backgrounds.append((container, el))
+        else:
+            break
+    return backgrounds
+
+
+def _canonical_spec(spec: dict) -> dict:
+    """Normalized facet subset used as the Recraft freeze/cache key (mirrors llm)."""
+    return {
+        k: facets.normalize_facet(spec.get(k))
+        for k in ("subject", "part", "view", "expression", "style", "description")
+    }
+
+
+def _build_recraft_prompt(spec: dict, *, errors: list[str] | None = None) -> str:
+    """Recraft generation prompt from a motif spec. Steers hard toward a SINGLE isolated
+    object on a transparent canvas — the engine does the placement/repetition, so a
+    pre-composed pattern/scene would break seamless tiling (spec D3, §6)."""
+    lines = [
+        "Draw ONE single, isolated object as one inline SVG. Output ONLY the SVG markup — "
+        "no markdown, no prose, no <?xml?> prolog.",
+        "CRITICAL: exactly ONE centered subject that FILLS the frame. It must NOT be a "
+        "pattern, NOT repeated, NOT scattered or tiled, NOT a scene, collage or grid.",
+        "NO background: do not draw any background rectangle, border or backdrop — the "
+        "object sits on a transparent canvas.",
+        "The root <svg> MUST have a viewBox. Multiple solid colors are allowed; use flat "
+        "vector <path>/<g> shapes with solid fills. Avoid raster <image>, <text>, "
+        "gradients and filters (they get flattened).",
+        f"subject: {spec.get('subject')}",
+        f"part: {spec.get('part')}",
+    ]
+    for key in ("view", "expression", "style", "description"):
+        if spec.get(key):
+            lines.append(f"{key}: {spec.get(key)}")
+    if errors:
+        lines += ["", "Your previous SVG was rejected. Fix exactly these:"]
+        lines += [f"- {e}" for e in errors]
+    return "\n".join(lines)
+
+
+# Per-spec freeze cache: canonical spec -> motif_id (mirrors llm._motif_svg_cache), so a
+# non-deterministic Recraft call is frozen to one motif id per spec (§9.4 determinism).
+_motif_svg_cache: dict[str, str] = {}
+
+
+def clear_recraft_motif_cache() -> None:
+    _motif_svg_cache.clear()
+
+
+def generate_via_recraft(
+    spec: dict,
+    *,
+    client: RecraftClient | None = None,
+    embedding: list[float] | None = None,
+    use_cache: bool = True,
+) -> str:
+    """Generate a multicolor motif via Recraft for a miss spec (detailed path, D8/D11).
+
+    Mirrors :func:`app.adapters.llm.generate_motif_svg`: the same canonical spec freezes
+    to the same motif id. The suitability gate (:func:`_flatten_unsuitable` + color cap)
+    runs each attempt; on a gate/sanitize failure the model is re-prompted once, and a
+    second failure (or no client) raises :class:`RecraftError` (the route maps it to 502;
+    spec §6.4). ``embedding`` is the descriptor vector the resolver computed for the miss,
+    persisted so later requests can soft-match this motif.
+    """
+    key = cache_key({"k": "recraft_motif", "spec": _canonical_spec(spec)})
+    if use_cache and key in _motif_svg_cache:
+        return _motif_svg_cache[key]
+
+    generator = _resolve_client(client)
+    max_slots = get_settings().recraft_max_color_slots
+
+    errors: list[str] | None = None
+    for _ in range(2):  # initial attempt + one suitability-gate regeneration
+        try:
+            raw = generator.generate(_build_recraft_prompt(spec, errors=errors))
+        except RecraftError:
+            raise
+        except Exception as exc:  # any generator failure is upstream (502-class)
+            raise RecraftError(f"Recraft generation failed: {exc}") from exc
+        try:
+            motif = normalize_motif_svg(
+                _flatten_unsuitable(raw), max_color_slots=max_slots
+            )
+        except (sanitize.SanitizeError, ValueError) as exc:
+            errors = [str(exc)]
+            continue
+        motif_id = register_motif(
+            motif,
+            subject=facets.normalize_facet(spec.get("subject")) or None,
+            part=facets.normalize_facet(spec.get("part")) or None,
+            view=spec.get("view"),
+            expression=spec.get("expression"),
+            style=spec.get("style"),
+            description=spec.get("description"),
+            source="recraft",
+            color_slots=list(motif.color_slots),
+            embedding=embedding,
+        )
+        if use_cache:
+            _motif_svg_cache[key] = motif_id
+        return motif_id
+
+    raise RecraftError(
+        f"Recraft motif failed the suitability/sanitize gate after retry: {errors}"
+    )

@@ -384,6 +384,79 @@ motif는 단순 도형(circle 등)부터 복잡 도형(bee·flower·paisley bote
 - **계약 노출**: registry의 각 motif는 `{ id, symbol, bbox_mm, anchor }`를 노출한다.
   Placement/Composition은 이 계약만 사용하고 내부 path는 모른다.
 
+## 영속화 — Supabase 공유 DB & 마이그레이션 소유권
+
+이 서비스는 독립 DB를 두지 않고, **제품 전체가 공유하는 단일 Supabase 프로젝트**에 붙는다.
+React 모노레포(`YeongSeon`)와 이 Python 서비스가 같은 Postgres를 가리킨다.
+
+- **스키마·마이그레이션 소유자는 React 모노레포 하나뿐이다.** Supabase는 적용된 마이그레이션을
+  DB 안 단일 원장(`supabase_migrations.schema_migrations`)에 기록하므로, 두 레포가 각자
+  `supabase/migrations/`를 들고 push하면 원장이 갈라진다(divergence). 한쪽의 `db reset`이 다른
+  쪽 스키마까지 날린다. 그래서 스키마의 단일 진실 공급원은 모노레포의 선언적 스키마
+  (`supabase/schemas/*.sql`)이며, 마이그레이션도 거기서 `pnpm db:new`로만 만든다. `motifs`
+  테이블도 그 소유 아래에 있다.
+- **이 서비스는 DB 클라이언트로만 붙는다.** 코어 엔진 바깥의 어댑터(`app/motifs/store.py`)가
+  `SUPABASE_DB_URL`(direct Postgres DSN, psycopg)로 `motifs` 테이블만 읽고/쓴다. 이 레포는
+  `supabase/` 폴더도, 마이그레이션도, `supabase db push`도 두지 않는다. 스키마를 바꿀 일이
+  생기면 모노레포에서 마이그레이션을 추가한다.
+- **DSN은 서버 사이드 전용**: direct connection은 PostgREST RLS를 우회하므로 클라이언트에 노출 금지.
+- **미설정 시 폴백**: `SUPABASE_DB_URL`이 비어 있으면 in-memory registry로만 동작한다(영속화 없음).
+  로컬 개발·테스트는 이 경로를 쓴다.
+
+아래는 모노레포가 소유·관리하는 `motifs` 스키마의 **기준 정의(reference)** 다. 운영상의 단일
+진실 공급원은 모노레포의 `supabase/schemas/`이며, 이 블록은 이 서비스가 의존하는 형태를 박제해
+둔 것이다.
+
+```sql
+create extension if not exists vector;
+
+create table if not exists motifs (
+  id            text primary key,                         -- content-hash id from register_motif
+  symbol        text not null,                            -- normalized <symbol> SVG
+  color_slots   jsonb not null default '["s0"]'::jsonb,
+  bbox          jsonb not null,                           -- [min_x, min_y, max_x, max_y]
+  anchor        jsonb not null,                           -- [x, y]
+  subject       text,
+  part          text,
+  view          text,
+  expression    text,
+  style         text,
+  description   text,
+  tags          text[] not null default '{}',
+  embedding     vector,                                   -- nullable, 검색은 S11/P3
+  source        text not null default 'recraft',          -- 'llm' | 'recraft'
+  status        text not null default 'auto',             -- 'auto' | 'curated'
+  quality       real,
+  variant_group text,
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists motifs_variant_group_idx on motifs (variant_group);
+create index if not exists motifs_subject_part_idx   on motifs (subject, part);
+```
+
+> **ivfflat(vector) 인덱스 — 모노레포 핸드오프(S14/P3, D18).** P0~S13에는 두지 않았다(카탈로그가
+> 작아 seq scan으로 충분). 행 수가 충분해지면 모노레포가 아래 인덱스를 추가한다. **이 레포는 DDL을
+> 실행하지 않는다** — 인덱스/스키마 변경은 모노레포의 `supabase/schemas/`로만 한다.
+>
+> ```sql
+> -- 행 수가 충분해진 뒤(D18). lists는 카탈로그 크기에 맞춰 튜닝(대략 rows/1000, 최소 1).
+> create index if not exists motifs_embedding_idx
+>   on motifs using ivfflat (embedding vector_cosine_ops) with (lists = 100);
+> ```
+>
+> **정직한 단서**: 현재 리졸버(`motif_resolver._resolve_one`)는 하드필터(`subject`·`part`)로 후보를
+> 좁힌 뒤 **Python-side 코사인 유사도**(`_best_by_similarity`)로 고른다 — pgvector `ORDER BY embedding`
+> 쿼리가 없으므로 위 인덱스는 *현재 질의 경로에서 쓰이지 않는다*. 인덱스의 가치는 향후 DB-side 벡터
+> 검색(예: `find_by_embedding`, 전역 ANN)을 도입할 때 실현되며, 그 쿼리 경로 추가는 S14 범위 밖이다.
+> ivfflat은 근사(approximate)라 recall 회귀 가능성이 있으므로, DB-side 검색을 도입하는 세션에서 exact
+> (seq/Python) 대비 recall 동등성을 라벨셋으로 검증한다(spec §14 수용기준 4).
+>
+> **REGISTRY_VERSION과 curated 풀(S14).** curated 풀이 바뀌면(시드/승격 배포) 무저장 일회성 요청의
+> 변형 선택(`% len(pool)`)이 달라질 수 있다. 일회성 요청의 정식 재현 단위는 resolved-intent
+> 스냅샷(`CandidateResponse.intent`, spec §7.3)이고, 거친 봉인은 배포 시 `config.REGISTRY_VERSION`
+> 상수를 bump하는 것이다(repro에 기록됨, spec §9.5). 동적 로직이 아니라 배포 시 수동 bump 가이드다.
+
 ## Reference Image 처리 정책
 
 - 참조 이미지는 **의미(스타일·모티프·색) 추출**에만 쓴다. 픽셀 충실 재현은 비목표다.

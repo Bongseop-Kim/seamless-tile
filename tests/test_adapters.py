@@ -141,6 +141,42 @@ def test_llm_adapter_handles_non_json():
     assert res.intent["intent_version"] == 1
 
 
+def test_llm_adapter_strips_single_line_code_fence():
+    llm = _ScriptedLLM(f"```json {json.dumps(mvp_intent())}```")
+    res = llm_build_intent("x", client=llm, use_cache=False)
+    assert res.intent["intent_version"] == 1
+
+
+def test_llm_adapter_rejects_non_string_optional_spec_facets():
+    intent = mvp_intent()
+    bad = {
+        "intent": intent,
+        "motif_specs": [
+            {
+                "layer_id": "circle_on_stripe",
+                "subject": "pig",
+                "part": "face",
+                "view": 7,
+            }
+        ],
+    }
+    good = {
+        "intent": intent,
+        "motif_specs": [
+            {
+                "layer_id": "circle_on_stripe",
+                "subject": "pig",
+                "part": "face",
+                "view": "front",
+            }
+        ],
+    }
+    llm = _ScriptedLLM(json.dumps(bad), json.dumps(good))
+    res = llm_build_intent("x", client=llm, use_cache=False)
+    assert len(llm.calls) == 2
+    assert res.motif_specs[0]["view"] == "front"
+
+
 def test_llm_adapter_caches_frozen_intent():
     first, second = mvp_intent(), mvp_intent()
     second["seed"] = 424242  # a distinct response, so equality below is non-vacuous

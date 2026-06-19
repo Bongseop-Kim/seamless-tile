@@ -1,9 +1,18 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.adapters.embedding import client_from_settings as embedding_client_from_settings
+from app.adapters.embedding import set_default_embedding_client
+from app.adapters.gemini import client_from_settings
+from app.adapters.llm import set_default_client
+from app.adapters.recraft import client_from_settings as recraft_client_from_settings
+from app.adapters.recraft import set_default_recraft_client
 from app.api.routes import export, generate, health, palettes
 from app.core.config import get_settings
 from app.core.observability import (
@@ -12,15 +21,70 @@ from app.core.observability import (
     new_request_id,
     set_request_id,
 )
+from app.motifs.registry import hydrate_from_store
+from app.motifs.store import set_default_store, store_from_settings
 from app.render.raster import RasterError
 
 REQUEST_ID_HEADER = "X-Request-ID"
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Install the motif store and hydrate the in-memory registry at boot.
+
+    Unconfigured (no SUPABASE_DB_URL) is a no-op; any store error is logged and
+    swallowed so boot never crashes — correctness still holds because get_motif
+    lazy-loads on a cold miss. The synchronous hydration runs once at startup only
+    (never in the request path).
+    """
+    settings = get_settings()
+    store = store_from_settings(settings)
+    set_default_store(store)
+    if store is not None:
+        try:
+            count = hydrate_from_store(store)
+            logger.info("motif store hydrated: %d motif(s)", count)
+        except Exception:
+            logger.warning("motif store hydration skipped (store error)", exc_info=True)
+    else:
+        logger.info("motif store unconfigured; in-memory registry only")
+
+    # Install the chat LLM (Gemini) as the default client when a key is configured;
+    # unset => no default (the prompt path then needs a per-call injected client).
+    llm_client = client_from_settings(settings)
+    set_default_client(llm_client)
+    logger.info(
+        "LLM client %s",
+        "configured (Gemini)" if llm_client is not None else "unconfigured (inject per-call)",
+    )
+
+    # Install the embedding client (OpenAI) when a key is configured; unset => the motif
+    # resolver skips the soft-similarity stage and falls back to S10 behavior.
+    embedding_client = embedding_client_from_settings(settings)
+    set_default_embedding_client(embedding_client)
+    logger.info(
+        "embedding client %s",
+        "configured (OpenAI)" if embedding_client is not None else "unconfigured (skip soft match)",
+    )
+
+    # Install the Recraft vector client when a key is configured; unset => detailed/
+    # multicolor misses (D11 routing) surface a 502 (no generator).
+    recraft_client = recraft_client_from_settings(settings)
+    set_default_recraft_client(recraft_client)
+    logger.info(
+        "Recraft client %s",
+        "configured" if recraft_client is not None else "unconfigured (detailed miss -> 502)",
+    )
+    yield
+    # One connection per operation — nothing to tear down.
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging()
-    app = FastAPI(title=settings.app_name, debug=settings.debug)
+    app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
     app.include_router(health.router, prefix=settings.api_v1_prefix)
     app.include_router(palettes.router, prefix=settings.api_v1_prefix)
     app.include_router(generate.router, prefix=settings.api_v1_prefix)

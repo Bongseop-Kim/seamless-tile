@@ -15,7 +15,7 @@ from app.engine.placement import Instance, place
 from app.engine.primitives import build_primitive
 from app.engine.seamless import clone_instances, super_tile
 from app.engine.units import fmt
-from app.motifs.registry import MotifDef, get_motif
+from app.motifs.registry import MotifDef, get_motif, slot_render_symbols
 from app.render.sanitize import sanitize_svg
 from app.render.svg import escape_attr, render_svg_document
 
@@ -108,18 +108,35 @@ def _render_motif_layer(
                 f"{placement.host_layer!r}"
             )
         host = hosts[placement.host_layer]
-    if layer.params.color is None:
-        raise ValueError(
-            f"motif layer {layer.id!r}: multi-color `colors` binding is out of session-3 scope"
-        )
 
     motif = get_motif(layer.params.motif_id)
-    symbol_defs.setdefault(motif.id, motif.symbol)
-
-    color = escape_attr(palette.resolve_color(layer.params.color, colorway_id))
     size_mm = layer.params.size_mm
     placed = place(layer, host, tile, seed)
     instances = clone_instances(placed, motif=motif, size_mm=size_mm, tile_mm=tile)
+
+    # Multi-color: bind each motif slot to a palette color per instance via stacked
+    # <use color> overlays of per-slot, colorway-agnostic symbols (D15, method (b)).
+    if layer.params.colors is not None:
+        render_symbols = slot_render_symbols(motif)
+        for sym_id, body in render_symbols:
+            symbol_defs.setdefault(sym_id, body)
+        # color_slots order fixes the deterministic z-order and the resolve order.
+        slot_colors = [
+            escape_attr(palette.resolve_color(layer.params.colors[slot], colorway_id))
+            for slot in motif.color_slots
+        ]
+        uses: list[str] = []
+        for inst in instances:
+            transform = _instance_transform(motif, inst, size_mm)
+            for (sym_id, _body), color in zip(render_symbols, slot_colors):
+                uses.append(
+                    f'<use href="#{sym_id}" color="{color}" transform="{transform}"/>'
+                )
+        return "".join(uses)
+
+    # Single-color (legacy): one symbol, one <use color> per instance.
+    symbol_defs.setdefault(motif.id, motif.symbol)
+    color = escape_attr(palette.resolve_color(layer.params.color, colorway_id))
     uses: list[str] = []
     for inst in instances:
         transform = _instance_transform(motif, inst, size_mm)

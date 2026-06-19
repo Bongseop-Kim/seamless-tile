@@ -49,6 +49,31 @@ def layout_id_for(intent: "Intent") -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
+def stable_hash(text: str) -> int:
+    """Deterministic integer hash of ``text`` (sha256, full digest as an int).
+
+    The same sha256 algorithm as ``layout_id_for`` / ``facets.variant_group_key`` /
+    ``adapters.base.cache_key`` — but a SEPARATE helper, not a reuse of ``layout_id_for``
+    (which hashes a whole intent). Defining it once here keeps variant selection stable
+    across processes and platforms (spec §7.1). Returns the full digest as an int so the
+    caller can take ``% len(pool)``; never truncated.
+    """
+    return int(hashlib.sha256(text.encode("utf-8")).hexdigest(), 16)
+
+
+def select_variant(pool_ids: list[str], variant_group: str, seed: int) -> str:
+    """Pick one variant from ``pool_ids`` as a pure function of (variant_group, seed).
+
+    The pool is sorted by ``motif_id`` first, so the choice is invariant to the order
+    the store returned rows in (spec §9.7). ``seed``-only changes yield a different
+    variant when the pool has >= 2 entries; randomness is forbidden (D7).
+    """
+    if not pool_ids:
+        raise ValueError("select_variant requires a non-empty pool")
+    pool = sorted(pool_ids)
+    return pool[stable_hash(f"{variant_group}:{seed}") % len(pool)]
+
+
 @dataclass(frozen=True)
 class ReproMeta:
     intent_version: int
