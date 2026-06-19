@@ -63,6 +63,69 @@ class MotifDef:
 _UNIT_BBOX: BBox = (-0.5, -0.5, 0.5, 0.5)
 _ORIGIN: Anchor = (0.0, 0.0)
 
+# Tier1 structural-heuristic defaults (spec §8/§12). Callers override from Settings;
+# the module-level defaults keep ``normalize_motif_svg`` a pure function of the SVG.
+_MAX_ASPECT_RATIO = 20.0  # reject bbox with longest/shortest side beyond this
+_EDGE_SEAM_TOL = 2.0  # per-channel mean edge_seam tolerance (00-overview <= 2.0)
+# Render-gate tile: fixed mm + DPI so the rasterized size is deterministic, and a 10%
+# transparent margin so a motif that fills its unit box is not a false positive (only
+# geometry overflowing its declared bbox — e.g. stroke width geom.bbox_of cannot
+# measure — reaches the border and trips edge_seam).
+_GATE_RENDER_MM = 10.0
+_GATE_RENDER_DPI = 300
+_GATE_MARGIN_FRAC = 0.1
+
+
+def _render_structure_gate(motif: MotifDef, *, edge_seam_tol: float) -> None:
+    """Render-based Tier1 checks (spec §8): reject a motif that fails to render (#4) or
+    whose rendered geometry overflows its declared unit box (#5).
+
+    Best-effort: when no SVG renderer is installed this is a no-op, so the gate degrades
+    gracefully (librsvg is not a hard dependency). The motif is rendered into a tile with
+    a transparent margin around its unit box; a well-contained motif leaves the border
+    transparent (``edge_seam`` ~ 0), while geometry bleeding past the declared bbox (e.g.
+    stroke width, which ``geom.bbox_of`` does not measure) reaches the border and trips
+    ``edge_seam``. This guards bbox overflow — real tiling seamlessness is the engine's
+    by-construction guarantee, not a motif-level property. This decides accept/reject
+    only; it never mutates the motif, so generated SVG bytes stay deterministic.
+    """
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from app.render.raster import RasterError, find_renderer, rasterize
+    from app.render.svg import render_svg_document
+    from app.validate.seamless import edge_seam
+
+    binary = find_renderer()
+    if not binary:
+        return  # no renderer: skip render-dependent checks (best-effort)
+
+    size = float(_GATE_RENDER_MM)
+    scale = size * (1.0 - 2.0 * _GATE_MARGIN_FRAC)  # unit box -> centered, margined
+    transform = f"translate({fmt(size / 2.0)} {fmt(size / 2.0)}) scale({fmt(scale)})"
+    symbols = slot_render_symbols(motif)
+    defs = "".join(symbol for _, symbol in symbols)
+    body = "".join(
+        f'<use href="#{sym_id}" color="#000000" transform="{transform}"/>'
+        for sym_id, _ in symbols
+    )
+    document = render_svg_document(body, size, defs=defs)
+
+    try:
+        png, _ = rasterize(document, "png", _GATE_RENDER_DPI, size, binary=binary)
+    except RasterError as exc:
+        raise ValueError(f"motif failed to render: {exc}") from exc
+
+    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+    seam_x, seam_y = edge_seam(arr)
+    if max(seam_x, seam_y) > edge_seam_tol:
+        raise ValueError(
+            f"motif geometry overflows its declared bbox "
+            f"(edge_seam {max(seam_x, seam_y):.2f} > {edge_seam_tol})"
+        )
+
 
 def _symbol(motif_id: str, geometry: str) -> str:
     return f'<symbol id="motif-{motif_id}" overflow="visible">{geometry}</symbol>'
@@ -453,7 +516,14 @@ def _has_drawable(elements: list[ET.Element]) -> bool:
     return False
 
 
-def normalize_motif_svg(raw_svg: str, *, max_color_slots: int | None = None) -> MotifDef:
+def normalize_motif_svg(
+    raw_svg: str,
+    *,
+    max_color_slots: int | None = None,
+    max_aspect_ratio: float = _MAX_ASPECT_RATIO,
+    edge_seam_tol: float = _EDGE_SEAM_TOL,
+    render_check: bool = True,
+) -> MotifDef:
     """Normalize an authored/Recraft SVG into the motif intake contract.
 
     Steps (ARCHITECTURE.md "Motif 소스와 registry"):
@@ -473,6 +543,13 @@ def normalize_motif_svg(raw_svg: str, *, max_color_slots: int | None = None) -> 
     4. Wrap in a single ``<symbol>`` and derive a content-hash ``motif_id`` from the
        **normalized, slotified** geometry, so the same shape always hashes to the same
        id regardless of colorway (the cache-hit guarantee).
+
+    Structural heuristics (spec §8) reject a motif that has no drawable geometry, a
+    zero/degenerate extent, a bbox aspect ratio beyond ``max_aspect_ratio``, or — when
+    ``render_check`` is set and an SVG renderer is installed — fails to render or whose
+    rendered geometry overflows its declared unit box (``edge_seam`` over a margined
+    tile exceeds ``edge_seam_tol``). The render-based checks are best-effort: with no
+    renderer they are skipped, so the function stays usable without librsvg.
     """
     root = sanitize.parse_svg(raw_svg)
     sanitize.validate_tree(root)
@@ -491,6 +568,14 @@ def normalize_motif_svg(raw_svg: str, *, max_color_slots: int | None = None) -> 
     extent = max(bw, bh)
     if extent <= 0:
         raise ValueError("motif SVG geometry has zero extent")
+    min_side = min(bw, bh)
+    if min_side <= 0:
+        raise ValueError("motif SVG geometry is degenerate (a zero-width axis)")
+    if extent / min_side > max_aspect_ratio:
+        raise ValueError(
+            f"motif SVG bbox aspect ratio {extent / min_side:.1f} exceeds max "
+            f"{max_aspect_ratio} (too thin/elongated)"
+        )
     scale = 1.0 / extent
     # Map the tight-geometry center onto the origin and the longest side onto 1.0.
     tx = -(bx + bw / 2.0) * scale
@@ -506,13 +591,16 @@ def normalize_motif_svg(raw_svg: str, *, max_color_slots: int | None = None) -> 
     )
 
     motif_id = "recraft-" + hashlib.sha256(geometry.encode("utf-8")).hexdigest()[:12]
-    return MotifDef(
+    motif = MotifDef(
         id=motif_id,
         symbol=_symbol(motif_id, geometry),
         bbox_mm=_UNIT_BBOX,
         anchor=_ORIGIN,
         color_slots=color_slots,
     )
+    if render_check:
+        _render_structure_gate(motif, edge_seam_tol=edge_seam_tol)
+    return motif
 
 
 def slot_render_symbols(motif: MotifDef) -> list[tuple[str, str]]:

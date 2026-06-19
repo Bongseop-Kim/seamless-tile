@@ -231,9 +231,13 @@ def create_motif(
     except Exception as exc:  # any generator failure is an upstream (5xx-class) error
         raise RecraftError(f"Recraft generation failed: {exc}") from exc
 
+    settings = get_settings()
     motif = normalize_motif_svg(
         _flatten_unsuitable(raw_svg),
-        max_color_slots=get_settings().recraft_max_color_slots,
+        max_color_slots=settings.recraft_max_color_slots,
+        max_aspect_ratio=settings.motif_max_aspect_ratio,
+        edge_seam_tol=settings.motif_edge_seam_tol,
+        render_check=settings.motif_render_check,
     )
     motif_id = register_motif(motif)
     if use_cache:
@@ -484,7 +488,7 @@ def generate_via_recraft(
         return _motif_svg_cache[key]
 
     generator = _resolve_client(client)
-    max_slots = get_settings().recraft_max_color_slots
+    settings = get_settings()
 
     errors: list[str] | None = None
     for _ in range(2):  # initial attempt + one suitability-gate regeneration
@@ -496,7 +500,11 @@ def generate_via_recraft(
             raise RecraftError(f"Recraft generation failed: {exc}") from exc
         try:
             motif = normalize_motif_svg(
-                _flatten_unsuitable(raw), max_color_slots=max_slots
+                _flatten_unsuitable(raw),
+                max_color_slots=settings.recraft_max_color_slots,
+                max_aspect_ratio=settings.motif_max_aspect_ratio,
+                edge_seam_tol=settings.motif_edge_seam_tol,
+                render_check=settings.motif_render_check,
             )
         except (sanitize.SanitizeError, ValueError) as exc:
             errors = [str(exc)]

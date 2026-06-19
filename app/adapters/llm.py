@@ -19,6 +19,7 @@ import re
 from typing import Protocol, runtime_checkable
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
+from app.core.config import get_settings
 from app.motifs import facets
 from app.motifs.registry import MOTIFS, normalize_motif_svg, register_motif
 from app.render.sanitize import SanitizeError
@@ -388,10 +389,12 @@ def generate_motif_svg(
     """Generate, sanitize, and register a single-color motif SVG for a spec (miss path).
 
     Deterministic: the same spec freezes to the same SVG, so the content-hash
-    ``motif_id`` is stable. Tier-1 gate (spec §6.4): on a sanitize/structure failure
-    the model is re-prompted once; a second failure (or no client) raises
-    :class:`AdapterClientError` (the route maps that to 502). Persistence is the
-    best-effort write-through inside :func:`register_motif` (never raises here).
+    ``motif_id`` is stable. Tier-1 gate (spec §6.4/§8): ``sanitize`` + structural
+    heuristics (drawable, non-degenerate, bbox aspect ratio, and — when a renderer is
+    installed — render-error / bbox-overflow seam). On a failure the model is
+    re-prompted once; a second failure (or no client) raises :class:`AdapterClientError`
+    (the route maps that to 502). Persistence is the best-effort write-through inside
+    :func:`register_motif` (never raises here).
 
     ``embedding`` (S11) is the descriptor vector the resolver already computed for the
     miss; it is persisted with the motif so later requests can soft-match it.
@@ -401,12 +404,18 @@ def generate_motif_svg(
         return _motif_svg_cache[key]
 
     llm = _resolve_client(client)
+    settings = get_settings()
 
     errors: list[str] | None = None
     for _ in range(2):  # initial attempt + one Tier-1 regeneration
         svg = _extract_svg(llm.complete(_build_svg_prompt(spec, errors=errors)))
         try:
-            motif = normalize_motif_svg(svg)
+            motif = normalize_motif_svg(
+                svg,
+                max_aspect_ratio=settings.motif_max_aspect_ratio,
+                edge_seam_tol=settings.motif_edge_seam_tol,
+                render_check=settings.motif_render_check,
+            )
         except (SanitizeError, ValueError) as exc:
             errors = [str(exc)]
             continue

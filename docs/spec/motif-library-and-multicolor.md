@@ -365,6 +365,10 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
 
 - **Tier1(자동, 요청 경로 내)**: `sanitize`(이미 강제) + 구조 휴리스틱(drawable 존재, degenerate
   아님, bbox 비율, 렌더 에러 없음, 배치 후 seamless 유지). **비전 LLM 의미검사는 비용상 보류**(D14).
+  구현은 `app/motifs/registry.py`의 `normalize_motif_svg`(임계값은 `Settings.motif_*`). "배치 후
+  seamless 유지"는 모티프를 **여백 타일로 1회 렌더해 선언 bbox를 벗어나는 overflow를 `edge_seam`으로
+  거르는 휴리스틱**이며(렌더러 미설치 시 #4·#5는 graceful skip, 순수 기하 #3은 항상 실행), 실제 타일
+  seamless는 엔진 by-construction 보장(대칭 overflow는 edge_seam이 못 잡는 휴리스틱 한계 수용).
 - **Tier2(사람, 비동기)**: 사람이 보고 `curated` 승격. 공유 샘플링 풀엔 `curated`만 들어가므로
   품질 바닥이 유지된다.
 - 인기 상위(head) 명세는 **미리 고퀄로 시드**(검수 부담↓), 롱테일은 온디맨드 생성 후 검수로 성장.
@@ -445,6 +449,8 @@ P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시 
 - **Recraft 적합성 실측 (M1)**: 샘플 SVG가 sanitize 통과율·평탄화 가능성·색 수 분포. 색 상한 N 결정.
 - **τ 절대값**: 전략 확정(D13). 모델(OpenAI 3-small) 확정됐으니 **소량 라벨셋으로 실측 보정**.
 - **통제 어휘 목록**: `subject`·`part`의 **실제 허용값** 확정 + LLM 매핑 가이드/검증(M2).
-- **Tier1 구조 휴리스틱 기준값**: degenerate 판정, bbox 비율 범위, seam 임계(`00-overview` `edge_seam≤2.0`와 정합).
+- **Tier1 구조 휴리스틱 기준값**: 구현 완료(`normalize_motif_svg`). 초기값 — bbox 비율 `max:min ≤ 20`
+  (`motif_max_aspect_ratio`), seam `edge_seam ≤ 2.0`(`motif_edge_seam_tol`, `00-overview`와 정합), 렌더러
+  부재 시 graceful skip(`motif_render_check`로 일괄 토글). **실제 모티프로 임계 보정은 후속**(비율/seam 튜닝).
 - **variant_group "핵심 facet" 범위**: 통제 facet만 vs expression 포함 — 그룹 입자 결정(D16 구체화).
 - **캐시 무효화 규칙 (§6.4)**: Tier2 반려·삭제 시 인메모리/어댑터 캐시/DB 일관성 전파.

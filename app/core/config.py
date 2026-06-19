@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     recraft_response_format: str = "url"  # env: RECRAFT_RESPONSE_FORMAT (url | b64_json)
     recraft_base_url: str = "https://external.api.recraft.ai/v1"  # env: RECRAFT_BASE_URL
 
+    # Motif Tier1 structural heuristics (spec §8/§12). The intake gate
+    # (normalize_motif_svg) rejects structurally bad motifs in the request path.
+    # - max_aspect_ratio: reject a too-thin/elongated bbox (longest/shortest side).
+    # - edge_seam_tol: per-channel mean edge_seam tolerance for the render-based
+    #   overflow guard (aligned with 00-overview edge_seam <= 2.0).
+    # - render_check: master switch for the render-dependent checks (#4 render error
+    #   + #5 edge_seam); when off, or when no SVG renderer is installed, those checks
+    #   are skipped (best-effort; the pure-geometry checks still run).
+    motif_max_aspect_ratio: float = 20.0  # env: MOTIF_MAX_ASPECT_RATIO
+    motif_edge_seam_tol: float = 2.0  # env: MOTIF_EDGE_SEAM_TOL
+    motif_render_check: bool = True  # env: MOTIF_RENDER_CHECK
+
     @field_validator("motif_similarity_tau")
     @classmethod
     def _validate_motif_similarity_tau(cls, value: float) -> float:
@@ -62,6 +74,20 @@ class Settings(BaseSettings):
     def _validate_recraft_max_color_slots(cls, value: int) -> int:
         if value < 1:
             raise ValueError("recraft_max_color_slots must be at least 1")
+        return value
+
+    @field_validator("motif_max_aspect_ratio")
+    @classmethod
+    def _validate_motif_max_aspect_ratio(cls, value: float) -> float:
+        if value <= 1.0:
+            raise ValueError("motif_max_aspect_ratio must be greater than 1")
+        return value
+
+    @field_validator("motif_edge_seam_tol")
+    @classmethod
+    def _validate_motif_edge_seam_tol(cls, value: float) -> float:
+        if value <= 0.0:
+            raise ValueError("motif_edge_seam_tol must be greater than 0")
         return value
 
 
