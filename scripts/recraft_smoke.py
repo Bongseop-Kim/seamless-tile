@@ -58,11 +58,15 @@ def main() -> int:
     print(f"model    : {client._model}  style={client._style}  format={client._response_format}")
     print("calling Recraft ...", flush=True)
     t0 = time.perf_counter()
-    raw = client.generate(args.prompt)
+    try:
+        raw = client.generate(args.prompt)
+    except Exception as exc:
+        print(f"Recraft API call failed: {exc}", file=sys.stderr)
+        return 1
     print(f"received : {len(raw)} bytes in {time.perf_counter() - t0:.1f}s")
 
     os.makedirs(args.out, exist_ok=True)
-    stamp = f"{_slug(args.prompt)}-{int(time.time())}"
+    stamp = f"{_slug(args.prompt)}-{time.time_ns()}"
     raw_path = os.path.join(args.out, f"{stamp}.raw.svg")
     with open(raw_path, "w", encoding="utf-8") as fh:
         fh.write(raw)

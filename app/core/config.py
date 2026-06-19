@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,6 +49,20 @@ class Settings(BaseSettings):
     recraft_size: str = "1024x1024"  # env: RECRAFT_SIZE
     recraft_response_format: str = "url"  # env: RECRAFT_RESPONSE_FORMAT (url | b64_json)
     recraft_base_url: str = "https://external.api.recraft.ai/v1"  # env: RECRAFT_BASE_URL
+
+    @field_validator("motif_similarity_tau")
+    @classmethod
+    def _validate_motif_similarity_tau(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("motif_similarity_tau must be between 0 and 1")
+        return value
+
+    @field_validator("recraft_max_color_slots")
+    @classmethod
+    def _validate_recraft_max_color_slots(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("recraft_max_color_slots must be at least 1")
+        return value
 
 
 @lru_cache

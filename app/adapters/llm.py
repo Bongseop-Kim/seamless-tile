@@ -185,11 +185,12 @@ def _strip_code_fence(text: str) -> str:
     s = text.strip()
     if not s.startswith("```"):
         return s
-    s = s.split("\n", 1)[1] if "\n" in s else ""
-    s = s.rstrip()
-    if s.endswith("```"):
-        s = s[:-3]
-    return s.strip()
+    match = re.fullmatch(
+        r"```[ \t]*(?:[A-Za-z0-9_-]+)?[ \t]*(?:\r?\n)?(?P<body>.*?)```",
+        s,
+        flags=re.DOTALL,
+    )
+    return match.group("body").strip() if match else s
 
 
 def _split_intent_and_specs(raw: dict) -> tuple[dict, list[dict]]:
@@ -229,6 +230,10 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
                 f"motif_specs[{i}] missing 'part' (one of {sorted(facets.PART_VOCAB)})"
             )
             continue
+        for field in ("view", "expression", "style", "description"):
+            value = spec.get(field)
+            if value is not None and not isinstance(value, str):
+                errors.append(f"motif_specs[{i}] field '{field}' must be a string")
         try:
             facets.validate_facets(subject, part)
         except ValueError as exc:

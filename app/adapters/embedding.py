@@ -19,11 +19,13 @@ are normalized to :class:`~app.adapters.base.AdapterClientError`.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Protocol, runtime_checkable
 
 from app.adapters.base import AdapterClientError, cache_key
 
 DEFAULT_MODEL = "text-embedding-3-small"
+EMBEDDING_CACHE_MAX_SIZE = 512
 
 
 @runtime_checkable
@@ -78,7 +80,7 @@ def get_default_embedding_client() -> EmbeddingClient | None:
 
 
 # Process-local freeze cache: same (model, text) -> same vector within the process.
-_embedding_cache: dict[str, list[float]] = {}
+_embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
 
 
 def clear_embedding_cache() -> None:
@@ -104,10 +106,19 @@ def embed_query(
     model = getattr(resolved, "model", DEFAULT_MODEL)
     key = cache_key({"k": "embedding", "model": model, "text": text})
     if use_cache and key in _embedding_cache:
+        _embedding_cache.move_to_end(key)
         return _embedding_cache[key]
-    vector = resolved.embed(text)
+    try:
+        vector = resolved.embed(text)
+    except EmbeddingError:
+        raise
+    except Exception as exc:
+        raise EmbeddingError(f"embedding request failed for model {model!r}: {exc}") from exc
     if use_cache:
         _embedding_cache[key] = vector
+        _embedding_cache.move_to_end(key)
+        if len(_embedding_cache) > EMBEDDING_CACHE_MAX_SIZE:
+            _embedding_cache.popitem(last=False)
     return vector
 
 

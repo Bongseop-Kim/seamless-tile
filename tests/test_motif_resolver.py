@@ -282,7 +282,7 @@ def _miss_intent_and_specs():
     """An intent whose first motif layer is a placeholder to be resolved-on-miss; the
     bee layer references a built-in directly (no spec) and must stay untouched."""
     intent = mvp_intent()
-    motif_layers = [l for l in intent["layers"] if l["type"] == "motif"]
+    motif_layers = [layer for layer in intent["layers"] if layer["type"] == "motif"]
     motif_layers[0]["params"]["motif_id"] = "pig"  # placeholder
     specs = [{"layer_id": motif_layers[0]["id"], "subject": "pig", "part": "face",
               "description": "smiling pig face"}]
@@ -298,10 +298,10 @@ def test_route_prompt_miss_generates_and_composes():
     assert body["candidates"]
     # the resolved (concrete) motif id was injected into the candidate intent
     motif_ids = {
-        l["params"]["motif_id"]
+        layer["params"]["motif_id"]
         for c in body["candidates"]
-        for l in c["intent"]["layers"]
-        if l["type"] == "motif"
+        for layer in c["intent"]["layers"]
+        if layer["type"] == "motif"
     }
     assert any(m.startswith("recraft-") for m in motif_ids)  # generated motif present
     assert "bee" in motif_ids  # unspecced built-in layer preserved
@@ -349,7 +349,8 @@ def test_resolver_soft_similarity_generates_below_tau(monkeypatch):
 
 def test_resolver_tau_boundary(monkeypatch):
     # query vs candidate cosine is exactly 0.7.
-    rec = lambda: _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    def rec():
+        return _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
     query = [0.7, 0.714142842854285]  # |query| == 1.0, dot with [1,0] == 0.7
 
     _set_tau(monkeypatch, 0.7)  # 0.7 >= 0.7 -> reuse

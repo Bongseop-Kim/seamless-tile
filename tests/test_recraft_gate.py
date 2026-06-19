@@ -198,6 +198,7 @@ def test_generate_via_recraft_unconfigured_raises():
 
 
 def _multicolor_intent(motif_id: str, slots: dict[str, str]) -> dict:
+    background_slot = "p0" if "p0" in slots else sorted(slots)[0]
     return {
         "intent_version": 1,
         "canvas": {"tile_mm": 48, "dpi": 300},
@@ -207,7 +208,7 @@ def _multicolor_intent(motif_id: str, slots: dict[str, str]) -> dict:
         "colorways": [{"id": "default", "mapping": dict(slots)}],
         "layers": [
             {"id": "bg", "type": "background", "z_order": 0,
-             "params": {"color": list(slots)[0]}},
+             "params": {"color": background_slot}},
             {"id": "shape", "type": "motif", "z_order": 1,
              "params": {"motif_id": motif_id, "size_mm": 10.0,
                         "colors": {"s0": "p0", "s1": "p1"}},

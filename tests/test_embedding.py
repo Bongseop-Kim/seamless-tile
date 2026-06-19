@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.adapters.embedding import (
+    EMBEDDING_CACHE_MAX_SIZE,
     EmbeddingError,
     clear_embedding_cache,
     client_from_settings,
@@ -80,6 +81,27 @@ def test_embed_query_propagates_upstream_error():
 
     with pytest.raises(EmbeddingError):
         embed_query("x", client=_Boom(), use_cache=False)
+
+
+def test_embed_query_normalizes_unexpected_error():
+    class _Boom:
+        model = "m"
+
+        def embed(self, text):
+            raise RuntimeError("down")
+
+    with pytest.raises(EmbeddingError, match="down"):
+        embed_query("x", client=_Boom(), use_cache=False)
+
+
+def test_embed_query_cache_is_bounded_lru():
+    fake = _FakeEmbed()
+    for i in range(EMBEDDING_CACHE_MAX_SIZE + 1):
+        embed_query(f"text-{i}", client=fake)
+    assert fake.calls == EMBEDDING_CACHE_MAX_SIZE + 1
+
+    embed_query("text-0", client=fake)
+    assert fake.calls == EMBEDDING_CACHE_MAX_SIZE + 2
 
 
 def test_client_from_settings_none_without_key():

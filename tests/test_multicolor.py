@@ -21,6 +21,7 @@ from app.motifs.registry import (
     register_motif,
     slot_render_symbols,
 )
+from app.motifs.store import clear_default_store
 from app.render.raster import find_renderer, rasterize
 from app.validate.intent import IntentInvalid, validate_intent
 
@@ -47,6 +48,7 @@ _THREE_COLOR = _svg(
 @pytest.fixture(autouse=True)
 def _clean():
     def _purge():
+        clear_default_store()
         for key in [k for k in MOTIFS if k.startswith("recraft-")]:
             del MOTIFS[key]
 
@@ -397,7 +399,7 @@ def test_multicolor_renders_each_slot_color_in_pixels():
     motif = normalize_motif_svg(_TWO_COLOR)
     register_motif(motif)
     # Bind to colors that are NOT the authoring red/blue: proves tokenization swapped them.
-    slots = {"p0": "#00cc00", "p1": "#cc00cc"}  # ground=p0(green) too; motif overlays
+    slots = {"bg": "#eeeeee", "p0": "#00cc00", "p1": "#cc00cc"}
     raw = _intent(motif.id, {"colors": {"s0": "p0", "s1": "p1"}}, slots)
     raw["layers"][1]["params"]["size_mm"] = 11.0
     result = validate_intent(raw)

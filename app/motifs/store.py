@@ -199,6 +199,18 @@ def _vector_to_text(embedding: list[float] | None) -> str | None:
     return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
 
 
+def _facet_where_clause(subject: str | None, part: str | None) -> tuple[str, tuple[str, ...]]:
+    clauses: list[str] = []
+    params: list[str] = []
+    for column, value in (("subject", subject), ("part", part)):
+        if value is None:
+            clauses.append(f"{column} IS NULL")
+        else:
+            clauses.append(f"{column} = %s")
+            params.append(value)
+    return " AND ".join(clauses), tuple(params)
+
+
 class PostgresMotifStore:
     """Sync psycopg 3 store. One connection per operation (see module docstring)."""
 
@@ -209,7 +221,7 @@ class PostgresMotifStore:
         # Lazy import so this module loads (and tests collect) without the driver.
         import psycopg
 
-        return psycopg.connect(self._dsn, autocommit=True)
+        return psycopg.connect(self._dsn, autocommit=True, connect_timeout=5)
 
     def upsert(self, record: MotifRecord) -> None:
         try:
@@ -220,7 +232,7 @@ class PostgresMotifStore:
                     " expression, style, description, tags, source, status, quality, "
                     " variant_group, embedding) "
                     "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
-                    " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
+                    " %s, %s, %s::jsonb, %s, %s, %s, %s, %s::extensions.vector) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         record.id,
@@ -234,7 +246,7 @@ class PostgresMotifStore:
                         record.expression,
                         record.style,
                         record.description,
-                        list(record.tags),
+                        json.dumps(list(record.tags)),
                         record.source,
                         record.status,
                         record.quality,
@@ -269,10 +281,11 @@ class PostgresMotifStore:
     def find_by_facets(self, subject: str | None, part: str | None) -> list[MotifRecord]:
         try:
             with self._connect() as conn, conn.cursor() as cur:
+                where, params = _facet_where_clause(subject, part)
                 cur.execute(
                     f"SELECT {_SELECT_LIST} FROM motifs "
-                    "WHERE subject = %s AND part = %s ORDER BY id",
-                    (subject, part),
+                    f"WHERE {where} ORDER BY id",
+                    params,
                 )
                 rows = cur.fetchall()
         except Exception as exc:

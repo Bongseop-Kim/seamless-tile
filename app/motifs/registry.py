@@ -148,7 +148,6 @@ def register_motif(
     # propagate, unlike a DB outage (swallowed in _write_through). Keeping this out of
     # the persistence path also decouples validation from whether a store is configured.
     facets.validate_facets(subject, part)
-    MOTIFS[motif.id] = motif
     _write_through(
         motif,
         subject=subject,
@@ -163,6 +162,7 @@ def register_motif(
         color_slots=color_slots or list(motif.color_slots),
         embedding=embedding,
     )
+    MOTIFS[motif.id] = motif
     return motif.id
 
 
@@ -180,20 +180,20 @@ def _write_through(motif: MotifDef, **facet_kwargs) -> None:
     store = get_default_store()
     if store is None:
         return  # graceful: unconfigured persistence is a no-op
+    variant_group = facets.variant_group_key(
+        facet_kwargs.get("subject"), facet_kwargs.get("part")
+    )
+    record = MotifRecord(
+        id=motif.id,
+        symbol=motif.symbol,
+        bbox_mm=motif.bbox_mm,
+        anchor=motif.anchor,
+        variant_group=variant_group,
+        **facet_kwargs,
+    )
     try:
-        variant_group = facets.variant_group_key(
-            facet_kwargs.get("subject"), facet_kwargs.get("part")
-        )
-        record = MotifRecord(
-            id=motif.id,
-            symbol=motif.symbol,
-            bbox_mm=motif.bbox_mm,
-            anchor=motif.anchor,
-            variant_group=variant_group,
-            **facet_kwargs,
-        )
         store.upsert(record)  # ON CONFLICT DO NOTHING => idempotent
-    except Exception:  # validation / DB failure is non-fatal at authoring time
+    except Exception:  # DB failure is non-fatal at authoring time
         logger.warning("motif write-through failed for %s", motif.id, exc_info=True)
 
 

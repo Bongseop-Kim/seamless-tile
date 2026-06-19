@@ -169,6 +169,10 @@ CREATE INDEX ON motifs (subject, part);
 CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 ```
 
+위 SQL은 기준 정의(reference)다. 실제 DB migration 생성·실행은 React 모노레포가 담당하며,
+이 레포는 Supabase migration, `supabase db push/reset`, 임의 DDL을 실행하지 않는다. ivfflat
+인덱스도 행 수가 충분해지는 시점에 React 모노레포 migration으로 조율해 추가한다.
+
 **facet 어휘 전략 (D10)**: 객관식/주관식은 *창의성*이 아니라 *검색* 축이다. 창의적 해석은
 LLM이 앞단에서 끝내고, facet은 "저장·조회 키"일 뿐이다. 그래서 **주관식(자유 텍스트+임베딩) 위주**로
 가되, **정확성 가드레일로 `subject`·`part`만 통제 어휘**로 둔다.
@@ -371,18 +375,25 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
 
 ## 10. 영향 받는 코드 지점
 
-| 영역 | 파일 | 변경 |
-|---|---|---|
-| 멀티컬러 정규화 | `app/motifs/registry.py` (`normalize_motif_svg`, `_recolor_to_slot`, `MotifDef`) | 색→슬롯 보존(DFS순), `color_slots` 추가, id=슬롯화 기하 해시 |
-| 멀티컬러 합성 | `app/engine/composition.py` (compose, `:111` 가드) | `colors` 거부 제거. `<symbol>` colorway-무관 유지 + **인스턴스 색 바인딩**(굽기 X, D15) |
-| 멀티컬러 검증 | `app/validate/intent.py` | `colors`가 `color_slots` 전부 덮는지 + 팔레트 존재 + 미바인딩 슬롯 규칙 |
-| 모티프 영속화 | (신규) `app/motifs/store.py` + 부팅 훅 | **Supabase** CRUD, 레지스트리 복원, variant_group(D16) |
-| 임베딩 클라이언트 | (신규) `app/adapters/embedding.py` | OpenAI `text-embedding-3-small` 호출(어댑터, freeze/cache) |
-| 오케스트레이션 글루 | (신규) `app/adapters/motif_resolver.py` 또는 generate 경로 | 명세→정확매칭/하드필터/유사도→생성→주입 + 에러 매핑(§6.4) |
-| 명세 추출 | `app/adapters/llm.py` (`_build_prompt`, `build_intent`) | intent + 모티프 명세 산출 + **facet 어휘 주입·검증**(M2) |
-| 생성 소스 | `app/adapters/recraft.py` (`create_motif`) | 멀티컬러 활용·라우팅 연결 + **적합성 게이트**(M1) |
-| 변형 샘플링 | `app/engine/candidates.py` | variant 다양성 축 + resolved-intent 보존 |
-| (선택) 재현 핀 | `app/engine/determinism.py`,`app/api/schemas/generate.py` | `ReproMeta.resolved_motif_ids` 추가 시에만(§7.3) |
+| 순서 | 영역 | 파일 | 변경 |
+|---:|---|---|---|
+| 1 | 멀티컬러 정규화 | (수정) `app/motifs/registry.py` (`normalize_motif_svg`, `_recolor_to_slot`, `MotifDef`) | 색→슬롯 보존(DFS순), `color_slots` 추가, id=슬롯화 기하 해시 |
+| 2 | 멀티컬러 합성 | (수정) `app/engine/composition.py` (compose, `:111` 가드) | `colors` 거부 제거. `<symbol>` colorway-무관 유지 + **인스턴스 색 바인딩**(굽기 X, D15) |
+| 3 | 멀티컬러 검증 | (수정) `app/validate/intent.py` | `colors`가 `color_slots` 전부 덮는지 + 팔레트 존재 + 미바인딩 슬롯 규칙 |
+| 4 | 모티프 영속화 | (수정) `app/motifs/store.py` + 부팅 훅 | **Supabase** CRUD, 레지스트리 복원, variant_group(D16). resolver보다 먼저 필요 |
+| 5 | 임베딩 클라이언트 | (수정) `app/adapters/embedding.py` | OpenAI `text-embedding-3-small` 호출(어댑터, freeze/cache) |
+| 6 | 오케스트레이션 글루 | (수정) `app/adapters/motif_resolver.py` | 명세→정확매칭/하드필터/유사도→생성→주입 + 에러 매핑(§6.4) |
+| 7 | 명세 추출 | (수정) `app/adapters/llm.py` (`_build_prompt`, `build_intent`) | intent + 모티프 명세 산출 + **facet 어휘 주입·검증**(M2) |
+| 8 | 생성 소스 | (수정) `app/adapters/recraft.py` (`create_motif`) | 멀티컬러 활용·라우팅 연결 + **적합성 게이트**(M1) |
+| 9 | 변형 샘플링 | (수정) `app/engine/candidates.py` | variant 다양성 축 + resolved-intent 보존 |
+
+모티프 영속화 경계:
+- Supabase DSN은 서버 사이드 환경 변수(`SUPABASE_DB_URL`)에만 저장하며 클라이언트 설정·응답·프론트엔드
+  번들에 노출하지 않는다.
+- `motifs` 테이블 접근은 `app/motifs/store.py`를 통해서만 수행한다. 다른 모듈의 직접 SQL/DSN 접근은
+  금지한다.
+- §7.3에 따라 `ReproMeta.resolved_motif_ids` 같은 별도 재현 핀은 현 범위 밖이며, 재현 단위는
+  resolved-intent 스냅샷이다.
 
 ---
 
@@ -393,7 +404,7 @@ P0  모티프 DB(Supabase) + 글루 + LLM 단색 생성 + 정확매칭/하드필
       (ivfflat·임베딩 호출 없음. exact descriptor + subject/part 필터만, D18)
 P1  임베딩 유사도(OpenAI) + 변형 샘플링(시드) + variant_group(D16)        ← 카탈로그 차오르며 가치↑
 P2  멀티컬러 엔진(§4, 슬롯확장 D15) + Recraft 연결(§6.2 게이트)            ← Recraft 가치 실현
-P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시) ivfflat 인덱스
+P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시 React 모노레포 migration으로) ivfflat 인덱스
 ```
 - **P0**: 현행 단색 엔진으로 끝까지 동작 + 영속화. 임베딩/τ/풀 없이 **정확매칭+하드필터**만(콜드스타트
   dead-code 회피, 리뷰 M3). 모델은 확정됐으나 P0엔 임베딩 호출을 넣지 않는다.

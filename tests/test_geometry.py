@@ -56,6 +56,22 @@ def test_path_cubic_uses_control_points_overestimate():
     assert geom.element_bbox(_el('<path d="M0 0 C0 10 10 10 10 0"/>')) == (0.0, 0.0, 10.0, 10.0)
 
 
+def test_path_smooth_cubic_includes_reflected_control_point():
+    box = geom.element_bbox(_el('<path d="M10 0 C20 0 20 20 10 20 S10 40 10 40"/>'))
+    assert box == (0.0, 0.0, 20.0, 40.0)
+
+
+def test_path_smooth_quadratic_includes_reflected_control_point():
+    box = geom.element_bbox(_el('<path d="M10 0 Q20 20 10 20 T10 40"/>'))
+    assert box == (0.0, 0.0, 20.0, 40.0)
+
+
+def test_rotated_large_arc_bbox_uses_arc_extrema():
+    box = geom.element_bbox(_el('<path d="M0 0 A100 1 45 1 1 10 0"/>'))
+    assert box is not None
+    assert box[1] < -40.0 or box[3] > 40.0
+
+
 def test_nested_group_translate_applies():
     box = geom.element_bbox(
         _el('<g transform="translate(100,0)"><rect x="0" y="0" width="10" height="10"/></g>')
@@ -91,3 +107,14 @@ def test_bbox_of_multiple_siblings():
 def test_empty_group_is_none():
     assert geom.element_bbox(_el("<g></g>")) is None
     assert geom.bbox_of([_el("<defs></defs>")]) is None
+
+
+def test_defs_and_symbol_children_do_not_contribute_bbox():
+    box = geom.element_bbox(
+        _el(
+            '<svg><defs><rect x="1000" y="1000" width="50" height="50"/></defs>'
+            '<symbol><rect x="500" y="500" width="50" height="50"/></symbol>'
+            '<rect x="0" y="0" width="10" height="10"/></svg>'
+        )
+    )
+    assert box == (0.0, 0.0, 10.0, 10.0)

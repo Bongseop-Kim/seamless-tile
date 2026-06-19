@@ -152,3 +152,14 @@ def test_register_rejects_out_of_vocab_part():
     with pytest.raises(ValueError):
         register_motif(motif, part="banana")
     assert motif.id not in MOTIFS  # validation happens before the registry mutation
+
+
+def test_facet_where_clause_handles_nulls():
+    assert store_mod._facet_where_clause(None, "face") == (
+        "subject IS NULL AND part = %s",
+        ("face",),
+    )
+    assert store_mod._facet_where_clause("pig", None) == (
+        "subject = %s AND part IS NULL",
+        ("pig",),
+    )
