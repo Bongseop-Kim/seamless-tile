@@ -232,7 +232,7 @@ class PostgresMotifStore:
                     " expression, style, description, tags, source, status, quality, "
                     " variant_group, embedding) "
                     "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
-                    " %s, %s, %s::jsonb, %s, %s, %s, %s, %s::extensions.vector) "
+                    " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         record.id,
@@ -246,7 +246,7 @@ class PostgresMotifStore:
                         record.expression,
                         record.style,
                         record.description,
-                        json.dumps(list(record.tags)),
+                        list(record.tags),
                         record.source,
                         record.status,
                         record.quality,
