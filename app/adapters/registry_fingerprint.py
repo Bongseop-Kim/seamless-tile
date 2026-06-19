@@ -14,7 +14,15 @@ from __future__ import annotations
 
 from app.core.config import REGISTRY_VERSION
 from app.engine.determinism import stable_hash
+from app.motifs.registry import curated_pool_epoch
 from app.motifs.store import MotifStore, MotifStoreError
+
+# Process-local memo of the last fingerprint: (store, epoch, version). The store is a
+# boot-installed singleton, so this collapses the per-request curated-pool query to a
+# single DB round-trip per pool change (audit C1). Keyed by object identity (`is`, not
+# id(): a strong ref here prevents id-recycling false hits across short-lived test stores)
+# plus the curated_pool_epoch bumped on every promote/reject/curated-register.
+_cache: tuple[object, int, str] | None = None
 
 
 def registry_version_for(store: MotifStore | None) -> str:
@@ -27,15 +35,25 @@ def registry_version_for(store: MotifStore | None) -> str:
     ``f"{REGISTRY_VERSION}+pool.{hex8}"`` where ``hex8`` is the leading 8 hex digits of the
     sha256 over the sorted curated ids. Pure function of the pool contents: no time,
     randomness, or store-order dependence (ids are re-sorted here).
+
+    The result is memoized per (store, curated-pool epoch); a transient store error
+    degrades to baseline without caching, so the next request retries.
     """
     if store is None:
         return REGISTRY_VERSION
+    global _cache
+    epoch = curated_pool_epoch()
+    if _cache is not None and _cache[0] is store and _cache[1] == epoch:
+        return _cache[2]
     try:
         records = store.find_by_status("curated")
     except MotifStoreError:
-        return REGISTRY_VERSION
+        return REGISTRY_VERSION  # transient outage: degrade, do not cache
     pool_ids = sorted(rec.id for rec in records)
     if not pool_ids:
-        return REGISTRY_VERSION
-    hex8 = format(stable_hash("\n".join(pool_ids)), "064x")[:8]
-    return f"{REGISTRY_VERSION}+pool.{hex8}"
+        version = REGISTRY_VERSION
+    else:
+        hex8 = format(stable_hash("\n".join(pool_ids)), "064x")[:8]
+        version = f"{REGISTRY_VERSION}+pool.{hex8}"
+    _cache = (store, epoch, version)
+    return version

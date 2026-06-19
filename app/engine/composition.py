@@ -11,6 +11,7 @@ from __future__ import annotations
 from app.engine.determinism import sorted_layers
 from app.engine.intent import Intent, Layer, MotifLayer
 from app.engine.palette import Palette
+from app.core.config import get_settings
 from app.engine.placement import Instance, place
 from app.engine.primitives import build_primitive
 from app.engine.seamless import clone_instances, super_tile
@@ -61,9 +62,18 @@ def compose(intent: Intent, palette: Palette, colorway_id: str | None = None) ->
         f'<rect x="0" y="0" width="{fmt(width)}" height="{fmt(height)}" '
         'fill="url(#tile)"/>'
     )
+    document = render_svg_document(body, width, height, defs=defs)
+    # Bound output size before the sanitize re-parse (which ~doubles peak memory) so a
+    # pathological intent cannot emit a gigabyte-scale response body (audit A3).
+    size = len(document.encode("utf-8"))
+    if size > get_settings().max_svg_bytes:
+        raise ValueError(
+            f"composed SVG {size} bytes exceeds max_svg_bytes "
+            f"{get_settings().max_svg_bytes}"
+        )
     # Final allowlist gate: trusted engine output passes through unchanged, while any
     # regression that emits a disallowed tag/attr/href is caught here (enumerate guard).
-    return sanitize_svg(render_svg_document(body, width, height, defs=defs))
+    return sanitize_svg(document)
 
 
 def _render_layer(

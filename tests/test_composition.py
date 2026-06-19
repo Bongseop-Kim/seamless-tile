@@ -1,6 +1,9 @@
 import xml.etree.ElementTree as ET
 from collections import Counter
 
+import pytest
+
+from app.core.config import Settings
 from app.engine.composition import _instance_transform, compose
 from app.engine.placement import Instance
 from app.motifs.registry import MotifDef
@@ -13,6 +16,18 @@ NS = "{http://www.w3.org/2000/svg}"
 def _compose_mvp(colorway_id: str | None = None):
     result = validate_intent(mvp_intent())
     return result, compose(result.intent, result.palette, colorway_id)
+
+
+def test_compose_rejects_oversized_svg(monkeypatch):
+    """A3: the composed document is size-capped before the sanitize re-parse."""
+    import app.engine.composition as comp
+
+    monkeypatch.setattr(
+        comp, "get_settings", lambda: Settings(_env_file=None, max_svg_bytes=10)
+    )
+    result = validate_intent(mvp_intent())
+    with pytest.raises(ValueError):
+        compose(result.intent, result.palette)
 
 
 def _hrefs(root) -> Counter:

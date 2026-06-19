@@ -1,8 +1,10 @@
 import copy
 
 import pytest
+from pydantic import ValidationError
 
 from app.engine.determinism import ReproMeta, seeded_rng, sorted_layers
+from app.engine.intent import ScatterSpec
 from app.validate.intent import IntentInvalid, validate_intent
 
 
@@ -72,6 +74,38 @@ def mvp_intent() -> dict:
             },
         ],
     }
+
+
+def test_palette_slot_count_capped():
+    """A2: an over-cap list is a structural reject (max_length -> IntentInvalid)."""
+    intent = mvp_intent()
+    intent["palette"]["slots"] = [{"id": f"s{i}", "hex": "#000000"} for i in range(65)]
+    with pytest.raises(IntentInvalid):
+        validate_intent(intent)
+
+
+def test_scatter_count_capped():
+    """A2: scatter count is bounded so one intent cannot request unbounded work."""
+    with pytest.raises(ValidationError):
+        ScatterSpec(mode="poisson", min_dist_mm=1.0, count=10_001)
+
+
+def test_tile_mm_ceiling_enforced():
+    """A4: tile_mm is bounded on the generate path (was export-only)."""
+    intent = mvp_intent()
+    intent["canvas"]["tile_mm"] = 3000  # > max_tile_mm (2000)
+    with pytest.raises(IntentInvalid) as exc:
+        validate_intent(intent)
+    assert "max_tile_mm" in str(exc.value)
+
+
+def test_motif_size_exceeding_tile_rejected():
+    """A7: size_mm > tile_mm breaks the clone precondition -> reject at stage-0."""
+    intent = mvp_intent()
+    intent["layers"][2]["params"]["size_mm"] = 60.0  # tile_mm is 48
+    with pytest.raises(IntentInvalid) as exc:
+        validate_intent(intent)
+    assert "size_mm" in str(exc.value)
 
 
 def test_mvp_intent_is_valid():

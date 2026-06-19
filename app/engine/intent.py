@@ -35,7 +35,7 @@ class ColorSlotSpec(BaseModel):
 class PaletteSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    slots: list[ColorSlotSpec] = Field(min_length=1)
+    slots: list[ColorSlotSpec] = Field(min_length=1, max_length=64)
 
 
 class ColorwaySpec(BaseModel):
@@ -84,9 +84,9 @@ class ScatterSpec(BaseModel):
 
     mode: Literal["poisson", "sateen"] = "poisson"
     min_dist_mm: float | None = Field(default=None, gt=0)
-    count: int | None = Field(default=None, gt=0)
-    sateen_n: int | None = Field(default=None, gt=1)
-    sateen_step: int | None = Field(default=None, gt=0)
+    count: int | None = Field(default=None, gt=0, le=10_000)
+    sateen_n: int | None = Field(default=None, gt=1, le=1_024)
+    sateen_step: int | None = Field(default=None, gt=0, le=1_024)
 
 
 class PointSetSpec(BaseModel):
@@ -94,7 +94,7 @@ class PointSetSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    points: list[tuple[float, float]] = Field(min_length=1)
+    points: list[tuple[float, float]] = Field(min_length=1, max_length=10_000)
 
 
 class Placement(BaseModel):
@@ -154,7 +154,7 @@ class StripeParams(BaseModel):
 
     angle: float
     period_mm: float = Field(gt=0)
-    bands: list[Band] = Field(min_length=1)
+    bands: list[Band] = Field(min_length=1, max_length=256)
 
 
 class MotifParams(BaseModel):
@@ -239,6 +239,6 @@ class Intent(BaseModel):
     seed: int = 0
     production: Production = Field(default_factory=Production)
     palette: PaletteSpec
-    colorways: list[ColorwaySpec] = Field(min_length=1)
-    layers: list[Layer] = Field(min_length=1)
+    colorways: list[ColorwaySpec] = Field(min_length=1, max_length=32)
+    layers: list[Layer] = Field(min_length=1, max_length=64)
     symmetry: SymmetrySpec | None = None

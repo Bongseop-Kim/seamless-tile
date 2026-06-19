@@ -66,6 +66,22 @@ def allover_lattice_intent(drop_fraction=0.5, drop_axis="column") -> dict:
     }
 
 
+def test_lattice_instance_budget_rejected_in_validate():
+    """A1: a tiny cell that still divides the tile blows up instance count -> 422."""
+    intent = allover_lattice_intent()
+    intent["layers"][1]["placement"]["lattice"]["cell_w_mm"] = 0.1
+    intent["layers"][1]["placement"]["lattice"]["cell_h_mm"] = 0.1  # 480*480 = 230400
+    with pytest.raises(IntentInvalid) as exc:
+        validate_intent(intent)
+    assert "max_placement_instances" in str(exc.value)
+
+
+def test_place_lattice_rejects_excessive_instance_count():
+    """A1: defensive guard for direct engine callers that bypass validate_intent."""
+    with pytest.raises(ValueError):
+        place_lattice(_lattice(cell_w_mm=0.1, cell_h_mm=0.1), TILE)
+
+
 # --- geometry: absorbs repeat.py block/half_drop/brick ------------------------
 
 

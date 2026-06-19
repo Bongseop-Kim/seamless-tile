@@ -227,6 +227,8 @@ def register_motif(
         embedding=embedding,
     )
     MOTIFS[motif.id] = motif
+    if status == "curated":
+        _bump_curated_pool_epoch()
     return motif.id
 
 
@@ -304,6 +306,7 @@ def promote_motif(motif_id: str) -> None:
     from app.motifs.store import _resolve_store
 
     _resolve_store(None).set_status(motif_id, "curated")
+    _bump_curated_pool_epoch()
 
 
 def reject_motif(motif_id: str) -> None:
@@ -328,6 +331,7 @@ def reject_motif(motif_id: str) -> None:
     _resolve_store(None).delete(motif_id)
     MOTIFS.pop(motif_id, None)
     _flush_motif_id_caches()
+    _bump_curated_pool_epoch()  # the deleted row may have been curated
 
 
 def _flush_motif_id_caches() -> None:
@@ -338,6 +342,25 @@ def _flush_motif_id_caches() -> None:
     llm.clear_motif_svg_cache()
     recraft.clear_motif_cache()
     recraft.clear_recraft_motif_cache()
+
+
+# Monotonic counter bumped whenever the curated sampling pool changes (promote / reject /
+# curated-register). Lets `adapters.registry_fingerprint.registry_version_for` memoize its
+# per-request pool fingerprint and invalidate on curation instead of querying the store on
+# every generate request. Process-local, the same scope as the cache flush in `reject_motif`
+# (a separately running server keeps its own counter; mutations are expected to go through
+# this module's promote/reject API).
+_curated_pool_epoch = 0
+
+
+def curated_pool_epoch() -> int:
+    """Current curated-pool epoch (bumped on every curated-pool mutation)."""
+    return _curated_pool_epoch
+
+
+def _bump_curated_pool_epoch() -> None:
+    global _curated_pool_epoch
+    _curated_pool_epoch += 1
 
 
 def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:

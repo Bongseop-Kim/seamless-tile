@@ -7,6 +7,7 @@ deterministic, order-independent function of the curated motif ids only.
 
 from app.adapters.registry_fingerprint import registry_version_for
 from app.core.config import REGISTRY_VERSION
+from app.motifs.registry import _bump_curated_pool_epoch
 from app.motifs.store import MotifRecord, MotifStoreError
 
 
@@ -81,3 +82,34 @@ def test_auto_rows_excluded_from_fingerprint():
         _FakeStore(_rec("m1"), _rec("m2"), _rec("z9", status="auto"))
     )
     assert base == with_auto
+
+
+class _CountingStore(_FakeStore):
+    """Tracks how many times the curated pool was queried (cache-hit verification)."""
+
+    def __init__(self, *records: MotifRecord) -> None:
+        super().__init__(*records)
+        self.calls = 0
+
+    def find_by_status(self, status: str) -> list[MotifRecord]:
+        self.calls += 1
+        return super().find_by_status(status)
+
+
+def test_result_is_memoized_per_store_and_epoch():
+    # C1: a steady curated pool collapses to a single DB round-trip across requests.
+    store = _CountingStore(_rec("m1"), _rec("m2"))
+    first = registry_version_for(store)
+    second = registry_version_for(store)
+    assert first == second
+    assert store.calls == 1  # second call served from cache
+
+
+def test_curation_epoch_bump_invalidates_cache():
+    # C1: promote/reject bump the epoch, forcing a recompute on the next request.
+    store = _CountingStore(_rec("m1"), _rec("m2"))
+    registry_version_for(store)
+    assert store.calls == 1
+    _bump_curated_pool_epoch()  # stands in for promote_motif / reject_motif
+    registry_version_for(store)
+    assert store.calls == 2

@@ -48,6 +48,15 @@ def test_assert_invariants_reject_non_tiling_diagonal():
         assert_seamless_invariants(intent)
 
 
+def test_assert_invariants_reject_motif_larger_than_tile():
+    """A7: by-construction guard rejects size_mm > tile_mm (clone self-overlap)."""
+    raw = mvp_intent()
+    raw["layers"][2]["params"]["size_mm"] = 60.0  # tile_mm is 48
+    intent = Intent.model_validate(raw)  # bypass validate_intent (which also rejects)
+    with pytest.raises(AssertionError):
+        assert_seamless_invariants(intent)
+
+
 def test_validate_rejects_non_tiling_diagonal():
     raw = mvp_intent()
     raw["layers"][1]["params"]["angle"] = -32

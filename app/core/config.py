@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     max_dpi: int = 1200
     max_tile_mm: float = 2000.0
 
+    # Resource ceilings bounding a single intent's work/output (DoS guard, audit A1/A3).
+    # max_placement_instances caps a layer's enumerated placement points; max_svg_bytes
+    # caps the composed document before the sanitize re-parse (same order as the export
+    # input cap ExportRequest.svg). Tunable per deployment.
+    max_placement_instances: int = 50_000
+    max_svg_bytes: int = 2_000_000
+
     # Supabase persistence (session 9). The motif store is "configured" iff
     # supabase_db_url is set; unset => in-memory registry only (tests, local dev).
     supabase_db_url: str | None = None  # postgresql://...  (env: SUPABASE_DB_URL)
@@ -88,6 +95,13 @@ class Settings(BaseSettings):
     def _validate_motif_edge_seam_tol(cls, value: float) -> float:
         if value <= 0.0:
             raise ValueError("motif_edge_seam_tol must be greater than 0")
+        return value
+
+    @field_validator("max_placement_instances", "max_svg_bytes")
+    @classmethod
+    def _validate_positive_ceiling(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("resource ceiling must be at least 1")
         return value
 
 

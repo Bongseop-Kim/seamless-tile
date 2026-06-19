@@ -129,6 +129,11 @@ def assert_seamless_invariants(intent: Intent) -> None:
                     f"requires tile_mm == k*period_mm*hypot(p, q)"
                 )
         elif layer.type == "motif":
+            if layer.params.size_mm > tile:
+                raise AssertionError(
+                    f"layer {layer.id!r}: motif size_mm {layer.params.size_mm} exceeds "
+                    f"tile_mm {tile} (boundary clones would self-overlap)"
+                )
             placement = layer.placement
             if placement is None:
                 continue
