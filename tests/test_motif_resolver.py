@@ -2,11 +2,14 @@
 inject -> engine. All LLM calls are scripted; no network, no DB."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.adapters.embedding as emb_adapter
 import app.adapters.llm as llm_adapter
+import app.adapters.motif_resolver as motif_resolver
 from app.adapters.base import AdapterClientError, AdapterResult
 from app.adapters.llm import (
     build_intent as llm_build_intent,
@@ -15,8 +18,9 @@ from app.adapters.llm import (
 )
 from app.adapters.motif_resolver import resolve_motifs
 from app.main import app
+from app.motifs import store as store_mod
 from app.motifs.registry import MOTIFS, get_motif
-from app.motifs.store import MotifRecord
+from app.motifs.store import MotifRecord, MotifStoreError
 from app.validate.intent import IntentInvalid
 from tests.test_intent import mvp_intent
 
@@ -34,6 +38,9 @@ def _clean():
         llm_adapter.clear_intent_cache()
         llm_adapter.clear_motif_svg_cache()
         set_default_client(None)
+        emb_adapter.clear_embedding_cache()
+        emb_adapter.set_default_embedding_client(None)
+        store_mod.clear_default_store()
         for key in [k for k in MOTIFS if k.startswith("recraft-")]:
             del MOTIFS[key]
 
@@ -74,6 +81,37 @@ class _FakeStore:
             (r for r in self.rows if r.subject == subject and r.part == part),
             key=lambda r: r.id,
         )
+
+    def find_by_variant_group(self, variant_group, *, status="curated"):
+        return sorted(
+            (
+                r
+                for r in self.rows
+                if r.variant_group == variant_group and r.status == status
+            ),
+            key=lambda r: r.id,
+        )
+
+
+class _FixedEmbed:
+    """Embedding client returning a fixed vector regardless of text (model id fixed)."""
+
+    def __init__(self, vector, model="fake-embed") -> None:
+        self.model = model
+        self.vector = list(vector)
+
+    def embed(self, text: str) -> list[float]:
+        return list(self.vector)
+
+
+def _set_tau(monkeypatch, tau: float) -> None:
+    monkeypatch.setattr(
+        motif_resolver, "get_settings", lambda: SimpleNamespace(motif_similarity_tau=tau)
+    )
+
+
+def _layer_intent() -> dict:
+    return {"layers": [{"id": "m", "type": "motif", "params": {"motif_id": "ph", "color": "a"}}]}
 
 
 def _record(id_, subject, part, **facets) -> MotifRecord:
@@ -274,3 +312,157 @@ def test_route_prompt_same_seed_is_deterministic():
     svgs_a = [c["svg"] for c in a.json()["candidates"]]
     svgs_b = [c["svg"] for c in b.json()["candidates"]]
     assert svgs_a == svgs_b  # byte-identical across repeats (caches + content-hash id)
+
+
+# --- S11: embedding soft similarity (τ gate) --------------------------------
+
+
+def test_resolver_soft_similarity_reuses_above_tau(monkeypatch):
+    # Not an exact match (view differs) -> soft path. cos=1.0 >= τ -> reuse.
+    # llm_client=None: any generation attempt would raise, so a clean return proves reuse.
+    _set_tau(monkeypatch, 0.6)
+    rec = _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    store = _FakeStore(rec)
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=store, llm_client=None, embedding_client=_FixedEmbed([1.0, 0.0]),
+    )
+    assert out["layers"][0]["params"]["motif_id"] == "recraft-sim"
+
+
+def test_resolver_soft_similarity_generates_below_tau(monkeypatch):
+    _set_tau(monkeypatch, 0.6)
+    rec = _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    store = _FakeStore(rec)
+    llm = _ScriptedLLM(_GOOD_SVG)
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=store, llm_client=llm, embedding_client=_FixedEmbed([0.0, 1.0]),  # cos=0.0
+    )
+    assert out["layers"][0]["params"]["motif_id"].startswith("recraft-")
+    assert len(llm.calls) == 1  # below τ -> generated
+
+
+def test_resolver_tau_boundary(monkeypatch):
+    # query vs candidate cosine is exactly 0.7.
+    rec = lambda: _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    query = [0.7, 0.714142842854285]  # |query| == 1.0, dot with [1,0] == 0.7
+
+    _set_tau(monkeypatch, 0.7)  # 0.7 >= 0.7 -> reuse
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=_FakeStore(rec()), llm_client=None, embedding_client=_FixedEmbed(query),
+    )
+    assert out["layers"][0]["params"]["motif_id"] == "recraft-sim"
+
+    _set_tau(monkeypatch, 0.71)  # 0.7 < 0.71 -> generate
+    llm = _ScriptedLLM(_GOOD_SVG)
+    resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=_FakeStore(rec()), llm_client=llm, embedding_client=_FixedEmbed(query),
+    )
+    assert len(llm.calls) == 1
+
+
+def test_resolver_embedding_unconfigured_falls_back_to_lowest_id():
+    # No embedding client -> embed_query returns None -> S10 hard-filter reuse (lowest id).
+    rec = _record("recraft-aaa", "pig", "face", view="side", embedding=[1.0, 0.0])
+    store = _FakeStore(rec)
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=store, llm_client=None, embedding_client=None,
+    )
+    assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
+
+
+def test_resolver_embedding_error_is_fail_soft(monkeypatch):
+    _set_tau(monkeypatch, 0.6)
+
+    class _BoomEmbed:
+        model = "m"
+
+        def embed(self, text):
+            raise AdapterClientError("embed upstream down")
+
+    rec = _record("recraft-aaa", "pig", "face", view="side", embedding=[1.0, 0.0])
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=_FakeStore(rec), llm_client=None, embedding_client=_BoomEmbed(),
+    )
+    # fail-soft: reuse (not a 502, not a regenerate)
+    assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
+
+
+def test_resolver_dimension_mismatch_excluded_falls_back(monkeypatch):
+    _set_tau(monkeypatch, 0.6)
+    # candidate embedding dim (3) != query dim (2) -> excluded -> S10 fallback reuse.
+    rec = _record("recraft-aaa", "pig", "face", view="side", embedding=[1.0, 0.0, 0.0])
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=_FakeStore(rec), llm_client=None, embedding_client=_FixedEmbed([1.0, 0.0]),
+    )
+    assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
+
+
+def test_resolver_miss_persists_query_embedding(monkeypatch):
+    _set_tau(monkeypatch, 0.99)  # force a miss despite a hard-filter candidate
+    rec = _record("recraft-other", "pig", "face", view="side", embedding=[1.0, 0.0])
+    store = _FakeStore(rec)
+    store_mod.set_default_store(store)  # generation write-through targets the default store
+    llm = _ScriptedLLM(_GOOD_SVG)
+    query = [0.0, 1.0]
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],
+        store=store, llm_client=llm, embedding_client=_FixedEmbed(query),
+    )
+    new_id = out["layers"][0]["params"]["motif_id"]
+    assert len(llm.calls) == 1  # generated
+    stored = store.get(new_id)
+    assert stored is not None and stored.embedding == query
+
+
+def test_resolver_hit_samples_from_curated_pool(monkeypatch):
+    # Two curated variants in one group; seed varies which variant the hit resolves to.
+    _set_tau(monkeypatch, 0.6)
+    grp = "grp1"
+    r1 = _record("recraft-aaa", "pig", "face", view="side",
+                 variant_group=grp, status="curated", embedding=[1.0, 0.0])
+    r2 = _record("recraft-bbb", "pig", "face", view="side",
+                 variant_group=grp, status="curated", embedding=[1.0, 0.0])
+    store = _FakeStore(r1, r2)
+    chosen = {
+        resolve_motifs(
+            _layer_intent(), [_spec(view="front")],
+            store=store, llm_client=None, embedding_client=_FixedEmbed([1.0, 0.0]), seed=s,
+        )["layers"][0]["params"]["motif_id"]
+        for s in range(20)
+    }
+    assert chosen == {"recraft-aaa", "recraft-bbb"}  # criterion 3 through the full resolver
+
+
+def test_resolver_same_inputs_deterministic(monkeypatch):
+    # Criterion 2 (in-process): same prompt+seed+registry_version -> same resolved id.
+    _set_tau(monkeypatch, 0.6)
+    rec = _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    store = _FakeStore(rec)
+    emb = _FixedEmbed([1.0, 0.0])
+    a = resolve_motifs(_layer_intent(), [_spec(view="front")],
+                       store=store, llm_client=None, embedding_client=emb, seed=3)
+    b = resolve_motifs(_layer_intent(), [_spec(view="front")],
+                       store=store, llm_client=None, embedding_client=emb, seed=3)
+    assert a == b
+
+
+def test_resolver_variant_pool_query_error_falls_back_to_match():
+    # A flaky pool query must not break the request: fall back to the matched motif.
+    class _PoolBoomStore(_FakeStore):
+        def find_by_variant_group(self, variant_group, *, status="curated"):
+            raise MotifStoreError("variant-group query down")
+
+    rec = _record("recraft-aaa", "pig", "face", view="front", variant_group="g1")
+    store = _PoolBoomStore(rec)
+    out = resolve_motifs(
+        _layer_intent(), [_spec(view="front")],  # exact match -> hit -> variant pool path
+        store=store, llm_client=None, embedding_client=None,
+    )
+    assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"

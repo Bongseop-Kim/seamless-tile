@@ -22,9 +22,18 @@ class Settings(BaseSettings):
 
     # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
     # GeminiClient as the default LLM client at boot; unset => no default (tests inject
-    # fakes). Embeddings (OpenAI) are a separate S11 concern, not configured here.
+    # fakes).
     gemini_api_key: str | None = None  # env: GEMINI_API_KEY
     gemini_model: str = "gemini-2.5-flash-lite"  # chat model id passed to GeminiClient (P0)
+
+    # Embedding model (session 11, D12). When openai_api_key is set, app.main installs an
+    # OpenAIEmbeddingClient as the default; unset => motif resolver skips the soft-
+    # similarity stage and falls back to the S10 exact/hard-filter behavior (graceful).
+    # motif_similarity_tau is the cosine threshold for "reuse vs generate"; it is a
+    # reuse-first start value (spec §6.1/D13) pending empirical calibration (spec §12).
+    openai_api_key: str | None = None  # env: OPENAI_API_KEY
+    embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
+    motif_similarity_tau: float = 0.60  # env: MOTIF_SIMILARITY_TAU
 
 
 @lru_cache
@@ -33,6 +42,11 @@ def get_settings() -> Settings:
 
 
 # Code versions recorded in candidate reproduction metadata (not runtime settings).
+# Bump REGISTRY_VERSION whenever the curated sampling pool changes (spec §7.3/D17): a
+# one-off (unsaved) request's variant selection depends on `% len(pool)`, so pool growth
+# can change results; the bump seals "(prompt, seed, registry_version) -> same result".
+# In S11 the curated pool is degenerate (<=1, Tier2 promotion is S14), so no bump fires
+# yet -- this is the documented contract, exercised in earnest from S14.
 ENGINE_VERSION = "0.1.0"
 REGISTRY_VERSION = "0.1.0"
 

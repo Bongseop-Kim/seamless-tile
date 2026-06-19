@@ -18,6 +18,7 @@ from app.api.schemas.generate import (
     GenerateResponse,
 )
 from app.adapters.base import AdapterClientError
+from app.adapters.embedding import get_default_embedding_client
 from app.adapters.image import build_intent as image_build_intent
 from app.adapters.llm import build_intent as llm_build_intent
 from app.adapters.motif_resolver import resolve_motifs
@@ -87,8 +88,21 @@ async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
     # Selection is deterministic; miss-path generation is frozen by the adapter cache.
     # IntentInvalid -> 422, generation/client failure -> 502 (same mapping as adapters).
     if motif_specs:
+        # Unify the seed: the engine falls back to `intent.seed` when request.seed is
+        # None (candidates.py), so variant selection must see the SAME effective seed or
+        # the two stages would diverge. `or 0` is intentionally avoided (it would conflate
+        # an explicit seed=0 with None).
+        effective_seed = (
+            request.seed if request.seed is not None else int(intent_raw.get("seed") or 0)
+        )
         intent_raw = _run_adapter(
-            lambda: resolve_motifs(intent_raw, motif_specs, store=get_default_store())
+            lambda: resolve_motifs(
+                intent_raw,
+                motif_specs,
+                store=get_default_store(),
+                embedding_client=get_default_embedding_client(),
+                seed=effective_seed,
+            )
         )
 
     started = time.perf_counter()

@@ -7,6 +7,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.adapters.embedding import client_from_settings as embedding_client_from_settings
+from app.adapters.embedding import set_default_embedding_client
 from app.adapters.gemini import client_from_settings
 from app.adapters.llm import set_default_client
 from app.api.routes import export, generate, health, palettes
@@ -54,6 +56,15 @@ async def lifespan(app: FastAPI):
     logger.info(
         "LLM client %s",
         "configured (Gemini)" if llm_client is not None else "unconfigured (inject per-call)",
+    )
+
+    # Install the embedding client (OpenAI) when a key is configured; unset => the motif
+    # resolver skips the soft-similarity stage and falls back to S10 behavior.
+    embedding_client = embedding_client_from_settings(settings)
+    set_default_embedding_client(embedding_client)
+    logger.info(
+        "embedding client %s",
+        "configured (OpenAI)" if embedding_client is not None else "unconfigured (skip soft match)",
     )
     yield
     # One connection per operation — nothing to tear down.

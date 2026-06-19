@@ -33,8 +33,9 @@ class MotifRecord:
     columns. ``MotifDef`` carries no facet metadata, so the record adds it.
 
     ``color_slots`` is stored now (spec §5.1 column) but P0 motifs are single-color, so
-    it defaults to ``["s0"]``; real multi-slot values arrive in S12. ``embedding`` is
-    intentionally absent here in P0 (the column exists, nullable, unused — search is S11).
+    it defaults to ``["s0"]``; real multi-slot values arrive in S12. ``embedding`` is the
+    descriptor vector (S11, D12); ``None`` for rows persisted before embeddings existed
+    or when no embedding client was configured at generation time.
     """
 
     id: str
@@ -53,6 +54,7 @@ class MotifRecord:
     quality: float | None = None
     variant_group: str | None = None
     color_slots: list[str] = field(default_factory=lambda: ["s0"])
+    embedding: list[float] | None = None
 
     def to_motif_def(self) -> MotifDef:
         return MotifDef(
@@ -84,6 +86,17 @@ class MotifStore(Protocol):
 
         Empty list == clean miss (NOT an exception), like :meth:`get`. Used by the
         motif resolver's exact-match / hard filter (spec §6.1, P0).
+        """
+        ...
+
+    def find_by_variant_group(
+        self, variant_group: str, *, status: str = "curated"
+    ) -> list[MotifRecord]:
+        """The sampling pool for a variant_group: rows with the given status, by id.
+
+        Defaults to ``status='curated'`` (only curated variants enter the seed-sampling
+        pool, spec §7.4). Empty list == no pool (degenerate; the resolver falls back to
+        the matched motif). Used by the variant selection step (spec §7.1, S11).
         """
         ...
 
@@ -126,8 +139,9 @@ def clear_default_store() -> None:
     set_default_store(None)
 
 
-# Persisted columns. NOTE: 'embedding' is deliberately omitted from P0 reads/writes
-# (the column is nullable and unused until S11).
+# Persisted columns, in the order `_row_to_record` unpacks them. `embedding` (S11) is
+# last; it is a pgvector `vector` column, so reads cast it to text (a stable `'[...]'`
+# form parsed by `json.loads`) rather than relying on the default driver representation.
 _COLUMNS = (
     "id",
     "symbol",
@@ -145,7 +159,21 @@ _COLUMNS = (
     "status",
     "quality",
     "variant_group",
+    "embedding",
 )
+
+# SELECT expression list: same columns/order as `_COLUMNS`, but the pgvector column is
+# emitted as `embedding::text` so the round-trip parse in `_row_to_record` is stable.
+_SELECT_LIST = ", ".join(
+    "embedding::text" if col == "embedding" else col for col in _COLUMNS
+)
+
+
+def _vector_to_text(embedding: list[float] | None) -> str | None:
+    """Serialize a vector to pgvector's text input form ``'[a,b,c]'`` (or ``None``)."""
+    if embedding is None:
+        return None
+    return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
 
 
 class PostgresMotifStore:
@@ -167,9 +195,9 @@ class PostgresMotifStore:
                     "INSERT INTO motifs "
                     "(id, symbol, color_slots, bbox, anchor, subject, part, view, "
                     " expression, style, description, tags, source, status, quality, "
-                    " variant_group) "
+                    " variant_group, embedding) "
                     "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
-                    " %s, %s, %s, %s, %s, %s, %s) "
+                    " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         record.id,
@@ -188,6 +216,7 @@ class PostgresMotifStore:
                         record.status,
                         record.quality,
                         record.variant_group,
+                        _vector_to_text(record.embedding),
                     ),
                 )
         except Exception as exc:  # driver / connection failure
@@ -197,7 +226,7 @@ class PostgresMotifStore:
         try:
             with self._connect() as conn, conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT {', '.join(_COLUMNS)} FROM motifs WHERE id = %s",
+                    f"SELECT {_SELECT_LIST} FROM motifs WHERE id = %s",
                     (motif_id,),
                 )
                 row = cur.fetchone()
@@ -208,7 +237,7 @@ class PostgresMotifStore:
     def all(self) -> list[MotifRecord]:
         try:
             with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(f"SELECT {', '.join(_COLUMNS)} FROM motifs ORDER BY id")
+                cur.execute(f"SELECT {_SELECT_LIST} FROM motifs ORDER BY id")
                 rows = cur.fetchall()
         except Exception as exc:
             raise MotifStoreError(f"motif load failed: {exc}") from exc
@@ -218,13 +247,28 @@ class PostgresMotifStore:
         try:
             with self._connect() as conn, conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT {', '.join(_COLUMNS)} FROM motifs "
+                    f"SELECT {_SELECT_LIST} FROM motifs "
                     "WHERE subject = %s AND part = %s ORDER BY id",
                     (subject, part),
                 )
                 rows = cur.fetchall()
         except Exception as exc:
             raise MotifStoreError(f"motif facet query failed: {exc}") from exc
+        return [_row_to_record(r) for r in rows]
+
+    def find_by_variant_group(
+        self, variant_group: str, *, status: str = "curated"
+    ) -> list[MotifRecord]:
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SELECT_LIST} FROM motifs "
+                    "WHERE variant_group = %s AND status = %s ORDER BY id",
+                    (variant_group, status),
+                )
+                rows = cur.fetchall()
+        except Exception as exc:
+            raise MotifStoreError(f"motif variant-group query failed: {exc}") from exc
         return [_row_to_record(r) for r in rows]
 
 
@@ -246,6 +290,7 @@ def _row_to_record(row) -> MotifRecord:
         status,
         quality,
         variant_group,
+        embedding,
     ) = row
     return MotifRecord(
         id=id_,
@@ -264,6 +309,8 @@ def _row_to_record(row) -> MotifRecord:
         status=status,
         quality=quality,
         variant_group=variant_group,
+        # embedding arrives as `embedding::text` ('[a,b,c]', valid JSON) or NULL.
+        embedding=json.loads(embedding) if embedding else None,
     )
 
 

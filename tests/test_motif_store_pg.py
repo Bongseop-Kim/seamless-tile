@@ -59,3 +59,26 @@ def test_upsert_get_roundtrip_and_idempotent():
             assert cur.fetchone()[0] == 1
     finally:
         _delete(store, _TEST_ID)
+
+
+def test_upsert_get_roundtrip_embedding():
+    # pgvector stores float4, so the round-trip is NOT bit-identical: compare with a
+    # tolerance. NULL embeddings round-trip to None.
+    store = PostgresMotifStore(get_settings().supabase_db_url)
+    vec = [0.1, 0.2, 0.3, -0.5]
+    record = MotifRecord(
+        id=_TEST_ID,
+        symbol='<symbol id="motif-x" overflow="visible"><circle r="0.5"/></symbol>',
+        bbox_mm=(-0.5, -0.5, 0.5, 0.5),
+        anchor=(0.0, 0.0),
+        subject="pig",
+        part="face",
+        embedding=vec,
+    )
+    try:
+        store.upsert(record)
+        got = store.get(_TEST_ID)
+        assert got is not None
+        assert got.embedding == pytest.approx(vec, rel=1e-6)
+    finally:
+        _delete(store, _TEST_ID)

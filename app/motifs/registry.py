@@ -116,6 +116,7 @@ def register_motif(
     tags: list[str] | None = None,
     source: str = "recraft",
     color_slots: list[str] | None = None,
+    embedding: list[float] | None = None,
 ) -> str:
     """Register a normalized motif under its content-hash id (idempotent).
 
@@ -129,7 +130,8 @@ def register_motif(
     always hashes to the same id, so authoring the same shape twice does not diverge.
     The optional facet kwargs are inert for current callers; they let the
     motif-resolution glue (S11+) persist semantic metadata without changing this
-    signature.
+    signature. ``embedding`` (S11, D12) is the descriptor vector persisted alongside the
+    facets so future requests can soft-match this motif.
     """
     # Validate facets up front: an out-of-vocab value is a caller bug and must
     # propagate, unlike a DB outage (swallowed in _write_through). Keeping this out of
@@ -147,6 +149,7 @@ def register_motif(
         tags=tags or [],
         source=source,
         color_slots=color_slots or ["s0"],
+        embedding=embedding,
     )
     return motif.id
 

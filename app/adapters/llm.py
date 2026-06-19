@@ -373,6 +373,7 @@ def generate_motif_svg(
     spec: dict,
     *,
     client: LLMClient | None = None,
+    embedding: list[float] | None = None,
     use_cache: bool = True,
 ) -> str:
     """Generate, sanitize, and register a single-color motif SVG for a spec (miss path).
@@ -382,6 +383,9 @@ def generate_motif_svg(
     the model is re-prompted once; a second failure (or no client) raises
     :class:`AdapterClientError` (the route maps that to 502). Persistence is the
     best-effort write-through inside :func:`register_motif` (never raises here).
+
+    ``embedding`` (S11) is the descriptor vector the resolver already computed for the
+    miss; it is persisted with the motif so later requests can soft-match it.
     """
     key = cache_key({"k": "motif_svg", "spec": _canonical_spec(spec)})
     if use_cache and key in _motif_svg_cache:
@@ -407,6 +411,7 @@ def generate_motif_svg(
             description=spec.get("description"),
             source="llm",
             color_slots=["s0"],
+            embedding=embedding,
         )
         if use_cache:
             _motif_svg_cache[key] = motif_id
