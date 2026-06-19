@@ -435,8 +435,27 @@ create index if not exists motifs_variant_group_idx on motifs (variant_group);
 create index if not exists motifs_subject_part_idx   on motifs (subject, part);
 ```
 
-> P0에는 ivfflat(vector) 인덱스를 두지 않는다 — 카탈로그가 작아 seq scan으로 충분하고, 임베딩
-> 검색은 S11/P3로 미룬다(spec D18).
+> **ivfflat(vector) 인덱스 — 모노레포 핸드오프(S14/P3, D18).** P0~S13에는 두지 않았다(카탈로그가
+> 작아 seq scan으로 충분). 행 수가 충분해지면 모노레포가 아래 인덱스를 추가한다. **이 레포는 DDL을
+> 실행하지 않는다** — 인덱스/스키마 변경은 모노레포의 `supabase/schemas/`로만 한다.
+>
+> ```sql
+> -- 행 수가 충분해진 뒤(D18). lists는 카탈로그 크기에 맞춰 튜닝(대략 rows/1000, 최소 1).
+> create index if not exists motifs_embedding_idx
+>   on motifs using ivfflat (embedding vector_cosine_ops) with (lists = 100);
+> ```
+>
+> **정직한 단서**: 현재 리졸버(`motif_resolver._resolve_one`)는 하드필터(`subject`·`part`)로 후보를
+> 좁힌 뒤 **Python-side 코사인 유사도**(`_best_by_similarity`)로 고른다 — pgvector `ORDER BY embedding`
+> 쿼리가 없으므로 위 인덱스는 *현재 질의 경로에서 쓰이지 않는다*. 인덱스의 가치는 향후 DB-side 벡터
+> 검색(예: `find_by_embedding`, 전역 ANN)을 도입할 때 실현되며, 그 쿼리 경로 추가는 S14 범위 밖이다.
+> ivfflat은 근사(approximate)라 recall 회귀 가능성이 있으므로, DB-side 검색을 도입하는 세션에서 exact
+> (seq/Python) 대비 recall 동등성을 라벨셋으로 검증한다(spec §14 수용기준 4).
+>
+> **REGISTRY_VERSION과 curated 풀(S14).** curated 풀이 바뀌면(시드/승격 배포) 무저장 일회성 요청의
+> 변형 선택(`% len(pool)`)이 달라질 수 있다. 일회성 요청의 정식 재현 단위는 resolved-intent
+> 스냅샷(`CandidateResponse.intent`, spec §7.3)이고, 거친 봉인은 배포 시 `config.REGISTRY_VERSION`
+> 상수를 bump하는 것이다(repro에 기록됨, spec §9.5). 동적 로직이 아니라 배포 시 수동 bump 가이드다.
 
 ## Reference Image 처리 정책
 

@@ -82,3 +82,35 @@ def test_upsert_get_roundtrip_embedding():
         assert got.embedding == pytest.approx(vec, rel=1e-6)
     finally:
         _delete(store, _TEST_ID)
+
+
+def test_set_status_delete_and_find_by_status_roundtrip():
+    # S14: promotion (auto -> curated), the review queue (find_by_status), and rejection
+    # (delete) round-trip through Postgres.
+    store = PostgresMotifStore(get_settings().supabase_db_url)
+    record = MotifRecord(
+        id=_TEST_ID,
+        symbol='<symbol id="motif-x" overflow="visible"><circle r="0.5"/></symbol>',
+        bbox_mm=(-0.5, -0.5, 0.5, 0.5),
+        anchor=(0.0, 0.0),
+        subject="pig",
+        part="face",
+        variant_group="abc123",
+    )  # status defaults to 'auto'
+    try:
+        store.upsert(record)
+        # find_by_status: the new row is in the 'auto' review queue, not 'curated'.
+        assert _TEST_ID in {r.id for r in store.find_by_status("auto")}
+        assert _TEST_ID not in {r.id for r in store.find_by_status("curated")}
+
+        # set_status: promote auto -> curated.
+        store.set_status(_TEST_ID, "curated")
+        got = store.get(_TEST_ID)
+        assert got is not None and got.status == "curated"
+        assert _TEST_ID in {r.id for r in store.find_by_status("curated")}
+
+        # delete: the row is gone.
+        store.delete(_TEST_ID)
+        assert store.get(_TEST_ID) is None
+    finally:
+        _delete(store, _TEST_ID)

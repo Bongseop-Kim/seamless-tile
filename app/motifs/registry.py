@@ -125,6 +125,7 @@ def register_motif(
     description: str | None = None,
     tags: list[str] | None = None,
     source: str = "recraft",
+    status: str = "auto",
     color_slots: list[str] | None = None,
     embedding: list[float] | None = None,
 ) -> str:
@@ -158,6 +159,7 @@ def register_motif(
         description=description,
         tags=tags or [],
         source=source,
+        status=status,
         color_slots=color_slots or list(motif.color_slots),
         embedding=embedding,
     )
@@ -221,6 +223,57 @@ def hydrate_from_store(store: "MotifStore") -> int:
     for rec in records:
         MOTIFS.setdefault(rec.id, rec.to_motif_def())
     return len(records)
+
+
+def promote_motif(motif_id: str) -> None:
+    """Promote a persisted motif from 'auto' to 'curated' (spec §8 Tier2).
+
+    Only curated variants enter the seed-sampling pool (spec §7.4), so this is what
+    activates a motif for variant sampling. The in-memory ``MOTIFS`` dict holds only
+    geometry (no status), so nothing in-process needs to change — the variant pool
+    query reads the status from the store on the next request.
+
+    Curation is an explicit admin action, so unlike authoring write-through a missing
+    store (``MotifStoreNotConfigured``) or a DB failure (``MotifStoreError``)
+    propagates rather than being swallowed.
+    """
+    from app.motifs.store import _resolve_store
+
+    _resolve_store(None).set_status(motif_id, "curated")
+
+
+def reject_motif(motif_id: str) -> None:
+    """Reject a motif, propagating removal across DB, in-memory and caches (spec §6.4).
+
+    Keeps the three layers consistent: the store row is deleted, the in-memory
+    ``MOTIFS`` entry is evicted, and the adapter caches that map a spec/prompt to a
+    motif id are flushed, so a deleted motif can never be re-served from a warm cache.
+    A full flush is deliberate — curation is a rare manual action, so dropping warm
+    caches is cheaper and safer than maintaining per-id reverse indices. The intent and
+    embedding caches hold no concrete motif id, so they are left intact. The flush is
+    process-local (the caches are module-level globals): a separately running server
+    keeps its own caches and must be restarted after a reject.
+
+    Built-in motifs (``circle``/``bee``) are code constants, not catalog rows, and
+    cannot be rejected.
+    """
+    if motif_id in {_CIRCLE.id, _BEE.id}:
+        raise ValueError(f"cannot reject built-in motif {motif_id!r}")
+    from app.motifs.store import _resolve_store
+
+    _resolve_store(None).delete(motif_id)
+    MOTIFS.pop(motif_id, None)
+    _flush_motif_id_caches()
+
+
+def _flush_motif_id_caches() -> None:
+    """Flush adapter caches whose values are motif ids (spec §6.4 cache invalidation)."""
+    # Lazy import: the adapters import this module, so a top-level import is a cycle.
+    from app.adapters import llm, recraft
+
+    llm.clear_motif_svg_cache()
+    recraft.clear_motif_cache()
+    recraft.clear_recraft_motif_cache()
 
 
 def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:

@@ -102,6 +102,27 @@ class MotifStore(Protocol):
         """
         ...
 
+    def find_by_status(self, status: str) -> list[MotifRecord]:
+        """Rows with the given status, ordered by id (the curation/review queue).
+
+        Used by the curation CLI to list pending (``status='auto'``) motifs. Empty
+        list == none pending (NOT an exception), like :meth:`find_by_facets`.
+        """
+        ...
+
+    def set_status(self, motif_id: str, status: str) -> None:
+        """Transition a motif's status (e.g. 'auto' -> 'curated'): promotion (spec §8).
+
+        A no-op when ``motif_id`` is absent (0 rows updated). Unlike :meth:`upsert`
+        (ON CONFLICT DO NOTHING), this UPDATEs an existing row, which is the only way
+        to promote a persisted motif into the curated sampling pool (spec §7.4).
+        """
+        ...
+
+    def delete(self, motif_id: str) -> None:
+        """Remove a motif row (rejection, spec §6.4/§8). A no-op when absent."""
+        ...
+
 
 class MotifStoreError(AdapterClientError):
     """The motif store dependency is unavailable or failed (502-class)."""
@@ -272,6 +293,36 @@ class PostgresMotifStore:
         except Exception as exc:
             raise MotifStoreError(f"motif variant-group query failed: {exc}") from exc
         return [_row_to_record(r) for r in rows]
+
+    def find_by_status(self, status: str) -> list[MotifRecord]:
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SELECT_LIST} FROM motifs "
+                    "WHERE status = %s ORDER BY id",
+                    (status,),
+                )
+                rows = cur.fetchall()
+        except Exception as exc:
+            raise MotifStoreError(f"motif status query failed: {exc}") from exc
+        return [_row_to_record(r) for r in rows]
+
+    def set_status(self, motif_id: str, status: str) -> None:
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE motifs SET status = %s WHERE id = %s",
+                    (status, motif_id),
+                )
+        except Exception as exc:
+            raise MotifStoreError(f"motif status update failed: {exc}") from exc
+
+    def delete(self, motif_id: str) -> None:
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM motifs WHERE id = %s", (motif_id,))
+        except Exception as exc:
+            raise MotifStoreError(f"motif delete failed: {exc}") from exc
 
 
 def _row_to_record(row) -> MotifRecord:
