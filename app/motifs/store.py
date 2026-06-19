@@ -32,8 +32,9 @@ class MotifRecord:
     """Bridges a :class:`MotifDef` (id/symbol/bbox/anchor) with the facet + persistence
     columns. ``MotifDef`` carries no facet metadata, so the record adds it.
 
-    ``color_slots`` is stored now (spec §5.1 column) but P0 motifs are single-color, so
-    it defaults to ``["s0"]``; real multi-slot values arrive in S12. ``embedding`` is the
+    ``color_slots`` is the motif-local slot list (spec §5.1 column); it defaults to
+    ``["s0"]`` for single-color motifs and carries the multi-slot values produced by the
+    S12 multicolor engine (``normalize_motif_svg``). ``embedding`` is the
     descriptor vector (S11, D12); ``None`` for rows persisted before embeddings existed
     or when no embedding client was configured at generation time.
     """
@@ -62,6 +63,7 @@ class MotifRecord:
             symbol=self.symbol,
             bbox_mm=tuple(self.bbox_mm),  # re-tuple in case it arrived as a jsonb list
             anchor=tuple(self.anchor),
+            color_slots=tuple(self.color_slots),
         )
 
 

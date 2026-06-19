@@ -41,12 +41,21 @@ Anchor = tuple[float, float]  # (x, y) in mm
 
 @dataclass(frozen=True)
 class MotifDef:
-    """Normalized motif intake contract exposed to Placement/Composition."""
+    """Normalized motif intake contract exposed to Placement/Composition.
+
+    ``color_slots`` are the motif-local color slots (``s0, s1, …``) in document DFS
+    first-appearance order (D15). A single-color motif keeps the legacy convention:
+    one slot ``("s0",)`` bound to ``currentColor`` in ``symbol``. A multi-color motif
+    stores ``symbol`` with slot *tokens* (``fill="s0"`` …) — colorway-agnostic and used
+    only for hashing/storage; composition derives renderable per-slot symbols from it
+    (see ``slot_render_symbols``).
+    """
 
     id: str
     symbol: str
     bbox_mm: BBox
     anchor: Anchor
+    color_slots: tuple[str, ...] = ("s0",)
 
 
 # Nominal unit box: extent 1.0, centered on the anchor at the origin.
@@ -148,7 +157,7 @@ def register_motif(
         description=description,
         tags=tags or [],
         source=source,
-        color_slots=color_slots or ["s0"],
+        color_slots=color_slots or list(motif.color_slots),
         embedding=embedding,
     )
     return motif.id
@@ -232,21 +241,78 @@ def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:
     return 0.0, 0.0, w, h
 
 
-def _recolor_to_slot(el: ET.Element) -> None:
-    """Replace concrete fill/stroke colors with the ``currentColor`` slot reference.
+def _norm_color(value: str) -> str | None:
+    """Normalized comparison key for a concrete paint value, or ``None`` for a
+    non-color paint (``none`` / internal ``url(#…)``) that carries no slot.
 
-    Single-color normalization (matches the built-in motif convention). ``none`` and
-    internal ``url(#…)`` paints are left intact. Multi-color slot binding is future work.
+    ``currentColor`` is intentionally treated as a concrete value: a pure-``currentColor``
+    motif stays single-color (1 distinct -> legacy path), but when mixed with concrete
+    colors it is promoted to its own slot token (multicolor motifs bind every color
+    explicitly — no implicit inherited paint survives into a per-slot symbol).
     """
-    for node in el.iter():
-        for attr in ("fill", "stroke"):
-            value = node.get(attr)
-            if value is None:
-                continue
-            low = value.strip().lower()
-            if low == "none" or low.startswith("url("):
-                continue
-            node.set(attr, "currentColor")
+    low = value.strip().lower()
+    if low == "none" or low.startswith("url("):
+        return None
+    return low
+
+
+def _distinct_colors(children: list[ET.Element]) -> list[str]:
+    """Distinct concrete paint values across ``children`` in document DFS
+    first-appearance order (deterministic slot ordering, D15)."""
+    order: list[str] = []
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                norm = _norm_color(value)
+                if norm is not None and norm not in order:
+                    order.append(norm)
+    return order
+
+
+def _recolor_single(children: list[ET.Element]) -> None:
+    """Legacy single-color normalization: every concrete fill/stroke -> ``currentColor``
+    (``none`` / internal ``url(#…)`` left intact). Byte-identical to the pre-multicolor
+    behavior, preserving single-color motif ids and rendered output."""
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                if _norm_color(value) is None:
+                    continue
+                node.set(attr, "currentColor")
+
+
+def _slotize_colors(children: list[ET.Element]) -> tuple[str, ...]:
+    """Replace concrete fill/stroke colors with motif-local slot tokens and return the
+    ordered ``color_slots`` (D15).
+
+    A motif with <=1 distinct concrete color keeps the legacy single-color convention
+    (``currentColor`` + ``("s0",)``) so its id and rendered output are unchanged. A
+    multi-color motif maps each distinct color (DFS first-appearance order) to a token
+    ``s0, s1, …`` written as the attribute value; the colorway-agnostic ``<symbol>`` is
+    expanded to renderable per-slot symbols at composition time (``slot_render_symbols``).
+    """
+    order = _distinct_colors(children)
+    if len(order) <= 1:
+        _recolor_single(children)
+        return ("s0",)
+    token = {color: f"s{i}" for i, color in enumerate(order)}
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                norm = _norm_color(value)
+                if norm is None:
+                    continue
+                node.set(attr, token[norm])
+    return tuple(f"s{i}" for i in range(len(order)))
 
 
 # Elements that actually paint. A motif whose geometry is only non-rendering
@@ -280,11 +346,12 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
        centered on the origin) with a single wrapping ``<g transform>`` — no per-path
        coordinate rewriting (pixel-tight bbox flattening is out of scope; the viewBox
        is the authoring frame).
-    3. Substitute concrete colors with the ``currentColor`` slot reference
-       (single-color; multi-color slot binding is future work).
+    3. Map concrete colors to motif-local slots (D15): a single-color motif keeps the
+       legacy ``currentColor`` convention (``color_slots=("s0",)``); a multi-color motif
+       writes slot tokens (``fill="s0"`` …) in document DFS first-appearance order.
     4. Wrap in a single ``<symbol>`` and derive a content-hash ``motif_id`` from the
-       **normalized** geometry, so the same shape always hashes to the same id (the
-       cache-hit guarantee).
+       **normalized, slotified** geometry, so the same shape always hashes to the same
+       id regardless of colorway (the cache-hit guarantee).
     """
     root = sanitize.parse_svg(raw_svg)
     sanitize.validate_tree(root)
@@ -299,8 +366,7 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
     children = list(root)
     if not _has_drawable(children):
         raise ValueError("motif SVG has no drawable geometry")
-    for child in children:
-        _recolor_to_slot(child)
+    color_slots = _slotize_colors(children)
     inner = "".join(ET.tostring(child, encoding="unicode") for child in children)
     geometry = (
         f'<g transform="translate({fmt(tx)} {fmt(ty)}) scale({fmt(scale)})">'
@@ -313,4 +379,35 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
         symbol=_symbol(motif_id, geometry),
         bbox_mm=_UNIT_BBOX,
         anchor=_ORIGIN,
+        color_slots=color_slots,
     )
+
+
+def slot_render_symbols(motif: MotifDef) -> list[tuple[str, str]]:
+    """Per-slot, colorway-agnostic ``<symbol>`` definitions for composition (D15).
+
+    A single-color motif renders through its original ``currentColor`` symbol unchanged
+    (id ``motif-{id}``), preserving the legacy single-color output byte-for-byte.
+
+    A multi-color motif expands to one symbol per slot (id ``motif-{id}-s{k}``): the
+    active slot's token becomes ``currentColor`` and every other slot's token becomes
+    ``none``. The concrete color is bound per ``<use color>`` instance, so each symbol
+    stays colorway-agnostic and dedupes by id. Returned in ``color_slots`` order.
+
+    Token substitution is exact-match on ``fill="s{k}"`` / ``stroke="s{k}"`` (the closing
+    quote prevents an ``s1`` vs ``s10`` substring collision) over the symbol string this
+    module itself emits, so no re-parse is needed and the result is deterministic.
+    """
+    if len(motif.color_slots) <= 1:
+        return [(f"motif-{motif.id}", motif.symbol)]
+    out: list[tuple[str, str]] = []
+    for k in range(len(motif.color_slots)):
+        body = motif.symbol
+        for j, slot in enumerate(motif.color_slots):
+            repl = "currentColor" if j == k else "none"
+            body = body.replace(f'fill="{slot}"', f'fill="{repl}"')
+            body = body.replace(f'stroke="{slot}"', f'stroke="{repl}"')
+        sym_id = f"motif-{motif.id}-s{k}"
+        body = body.replace(f'id="motif-{motif.id}"', f'id="{sym_id}"', 1)
+        out.append((sym_id, body))
+    return out

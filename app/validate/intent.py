@@ -21,6 +21,7 @@ from app.core.config import ALLOWED_DPI
 from app.engine.intent import Intent
 from app.engine.palette import ColorSlot, Colorway, Palette, out_of_gamut
 from app.engine.units import divides, snap_angle, snap_spacing, stripe_tiles
+from app.motifs.registry import get_motif
 
 
 class IntentInvalid(Exception):
@@ -238,6 +239,31 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                 errors.append(
                     f"layer {layer.id!r} references unknown color slot {slot_id!r}"
                 )
+
+        if layer.type == "motif":
+            # Cross-check the colors<->color_slots contract against the registered
+            # motif. An unregistered motif_id is left to compose (unchanged behavior);
+            # only a *found* motif is enforced here so a stale catalog can't 422
+            # spuriously. Unbound slots are rejected (no `currentColor` leak).
+            try:
+                motif = get_motif(layer.params.motif_id)
+            except ValueError:
+                motif = None
+            if motif is not None:
+                slots = set(motif.color_slots)
+                if layer.params.colors is not None:
+                    keys = set(layer.params.colors)
+                    if keys != slots:
+                        errors.append(
+                            f"layer {layer.id!r}: colors bind {sorted(keys)} but motif "
+                            f"{motif.id!r} has color_slots {sorted(slots)} (every slot "
+                            f"must be bound exactly once; no unbound slots)"
+                        )
+                elif layer.params.color is not None and slots != {"s0"}:
+                    errors.append(
+                        f"layer {layer.id!r}: motif {motif.id!r} is multi-color "
+                        f"(color_slots {sorted(slots)}); use a `colors` mapping"
+                    )
 
         if layer.type == "stripe":
             snapped = snap_angle(layer.params.angle, tile, layer.params.period_mm)
