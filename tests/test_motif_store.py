@@ -72,13 +72,13 @@ def test_register_writes_through_to_store():
     fake = _FakeStore()
     set_default_store(fake)
     motif = normalize_motif_svg(_svg('<circle cx="50" cy="50" r="40" fill="#abc"/>'))
-    motif_id = register_motif(motif, subject="dot", part="whole")
+    motif_id = register_motif(motif, subject="dot", scope="whole")
 
     assert motif_id in fake.rows
     rec = fake.rows[motif_id]
     assert rec.variant_group  # non-null, computed from facets
     assert rec.subject == "dot"
-    assert rec.part == "whole"
+    assert rec.scope == "whole"
     assert rec.symbol == motif.symbol
 
 
@@ -145,21 +145,15 @@ def test_write_through_swallows_store_error():
     assert motif_id in MOTIFS
 
 
-def test_register_rejects_out_of_vocab_part():
+def test_register_rejects_out_of_vocab_scope():
     # A controlled-vocab violation is a caller bug: it must propagate (not be swallowed
     # like a DB error) and must not register the motif. Holds with no store configured.
     motif = normalize_motif_svg(_svg('<circle cx="50" cy="50" r="40" fill="#abc"/>'))
     with pytest.raises(ValueError):
-        register_motif(motif, part="banana")
+        register_motif(motif, scope="banana")
     assert motif.id not in MOTIFS  # validation happens before the registry mutation
 
 
 def test_facet_where_clause_handles_nulls():
-    assert store_mod._facet_where_clause(None, "face") == (
-        "subject IS NULL AND part = %s",
-        ("face",),
-    )
-    assert store_mod._facet_where_clause("pig", None) == (
-        "subject = %s AND part IS NULL",
-        ("pig",),
-    )
+    assert store_mod._facet_where_clause("whole") == ("scope = %s", ("whole",))
+    assert store_mod._facet_where_clause(None) == ("scope IS NULL", ())

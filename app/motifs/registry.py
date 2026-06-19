@@ -181,7 +181,7 @@ def register_motif(
     motif: MotifDef,
     *,
     subject: str | None = None,
-    part: str | None = None,
+    scope: str | None = None,
     view: str | None = None,
     expression: str | None = None,
     style: str | None = None,
@@ -204,17 +204,18 @@ def register_motif(
     always hashes to the same id, so authoring the same shape twice does not diverge.
     The optional facet kwargs are inert for current callers; they let the
     motif-resolution glue (S11+) persist semantic metadata without changing this
-    signature. ``embedding`` (S11, D12) is the descriptor vector persisted alongside the
-    facets so future requests can soft-match this motif.
+    signature. ``subject`` is free text; ``scope`` is the one controlled facet (D10).
+    ``embedding`` (S11, D12) is the descriptor vector persisted alongside the facets so
+    future requests can soft-match this motif.
     """
     # Validate facets up front: an out-of-vocab value is a caller bug and must
     # propagate, unlike a DB outage (swallowed in _write_through). Keeping this out of
     # the persistence path also decouples validation from whether a store is configured.
-    facets.validate_facets(subject, part)
+    facets.validate_facets(scope)
     _write_through(
         motif,
         subject=subject,
-        part=part,
+        scope=scope,
         view=view,
         expression=expression,
         style=style,
@@ -244,7 +245,7 @@ def _write_through(motif: MotifDef, **facet_kwargs) -> None:
     if store is None:
         return  # graceful: unconfigured persistence is a no-op
     variant_group = facets.variant_group_key(
-        facet_kwargs.get("subject"), facet_kwargs.get("part")
+        facet_kwargs.get("subject"), facet_kwargs.get("scope")
     )
     record = MotifRecord(
         id=motif.id,

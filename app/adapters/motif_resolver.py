@@ -6,7 +6,7 @@ selection is a *pure, deterministic* step; the non-deterministic pieces (embeddi
 search, miss-path SVG generation) are frozen by adapter caches, so the determinism
 contract holds: the engine only ever sees an intent with concrete motif ids.
 
-Retrieval (spec §6.1, D18): **exact descriptor match** → **subject/part hard filter** →
+Retrieval (spec §6.1, D18): **exact descriptor match** → **scope hard filter** →
 **embedding soft similarity (τ gate)** → **generate-on-miss**. Every hit routes through
 the variant_group's curated sampling pool (§7.1); when that pool is empty (degenerate
 until S14 curation), it falls back to the matched motif. The embedding stage is
@@ -29,8 +29,8 @@ from app.engine import determinism
 from app.motifs import facets
 from app.motifs.store import MotifStoreError, get_default_store
 
-# Facets that define an "exact descriptor" (controlled + light free facets, P0).
-_EXACT_FACETS = ("subject", "part", "view", "expression", "style")
+# Facets that define an "exact descriptor" (subject + scope + light free facets, P0).
+_EXACT_FACETS = ("subject", "scope", "view", "expression", "style")
 
 # Valid explicit generation-source overrides on a motif spec (D11).
 _SOURCE_OVERRIDES = {"llm", "recraft"}
@@ -59,19 +59,20 @@ def _descriptor_text(spec: dict) -> str:
 
     Prefers an explicit ``description``; otherwise synthesizes one from the facets with a
     FIXED algorithm so two implementations produce the same string: empty facets are
-    dropped, tokens are single-spaced, and there are no dangling commas.
+    dropped, tokens are single-spaced, and there are no dangling commas. ``scope`` is a
+    granularity guardrail (whole/partial), not a meaning token, so it is deliberately
+    left out of the embedding text — it already separates candidates via the hard filter.
     """
     description = (spec.get("description") or "").strip()
     if description:
         return description
     subject = (spec.get("subject") or "").strip()
-    part = (spec.get("part") or "").strip()
     expression = (spec.get("expression") or "").strip()
     style = (spec.get("style") or "").strip()
     view = (spec.get("view") or "").strip()
-    head = " ".join(t for t in (expression, subject, part) if t)
+    head = " ".join(t for t in (expression, subject) if t)
     view_clause = f"{view} view" if view else ""
-    return ", ".join(part_ for part_ in (head, view_clause, style) if part_)
+    return ", ".join(seg for seg in (head, view_clause, style) if seg)
 
 
 def _exact_match(spec: dict, candidates: list) -> str | None:
@@ -140,14 +141,14 @@ def _select_variant(store, variant_group, seed: int, fallback_id: str) -> str:
 def _resolve_one(
     spec: dict, *, store, llm_client, recraft_client, embedding_client, seed: int
 ) -> str:
-    # Normalize the controlled facets so the DB filter, the exact-match comparison, and
-    # the generated motif's stored facets all agree (NFC + strip + casefold).
-    subject = facets.normalize_facet(spec.get("subject"))
-    part = facets.normalize_facet(spec.get("part"))
+    # Normalize the controlled facet so the DB filter, the exact-match comparison, and
+    # the generated motif's stored facets all agree (NFC + strip + casefold). `scope` is
+    # the only hard filter; `subject` (free text) discrimination is the embedding's job.
+    scope = facets.normalize_facet(spec.get("scope"))
     query_vec: list[float] | None = None
-    if subject and part and store is not None:
+    if scope and store is not None:
         try:
-            candidates = store.find_by_facets(subject, part)
+            candidates = store.find_by_facets(scope)
         except MotifStoreError:
             # A flaky DB read is treated as a miss (graceful, spec §6.4): regeneration is
             # idempotent via the content-hash id, so correctness is preserved.
@@ -242,7 +243,7 @@ def resolve_motifs(
             )
         except AdapterClientError:
             failed.add(lid)
-            reasons[lid] = f"{spec.get('subject', '?')}/{spec.get('part', '?')}"
+            reasons[lid] = f"{spec.get('subject', '?')}/{spec.get('scope', '?')}"
             continue
         layer.setdefault("params", {})["motif_id"] = motif_id
 

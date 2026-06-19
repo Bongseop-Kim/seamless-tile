@@ -7,7 +7,7 @@ from a baseline rather than an empty pool. Each entry is registered with
 + ON CONFLICT DO NOTHING make re-running the script idempotent.
 
 To exercise variant diversity (pool >= 2), several entries share the same
-(subject, part) -> the same variant_group, so one spec resolves to different curated
+(subject, scope) -> the same variant_group, so one spec resolves to different curated
 variants per seed (spec §7.1).
 
 Needs SUPABASE_DB_URL (server-side only; bypasses RLS — CLAUDE.md). The runtime never
@@ -35,13 +35,13 @@ def _svg(inner: str) -> str:
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{inner}</svg>'
 
 
-# Each entry: subject + part (controlled facets -> variant_group) + a free-text
-# descriptor + the motif SVG. Entries sharing (subject, part) form one variant pool;
+# Each entry: subject (free text) + scope (controlled facet -> variant_group) + a free-text
+# descriptor + the motif SVG. Entries sharing (subject, scope) form one variant pool;
 # `flower/whole` and `leaf/whole` each carry >= 2 variants to demonstrate pool >= 2.
 HEAD_CATALOG: list[dict] = [
     {
         "subject": "flower",
-        "part": "whole",
+        "scope": "whole",
         "description": "five-petal flower, flat",
         "style": "flat",
         "svg": _svg(
@@ -55,7 +55,7 @@ HEAD_CATALOG: list[dict] = [
     },
     {
         "subject": "flower",
-        "part": "whole",
+        "scope": "whole",
         "description": "four-petal flower, flat",
         "style": "flat",
         "svg": _svg(
@@ -68,7 +68,7 @@ HEAD_CATALOG: list[dict] = [
     },
     {
         "subject": "flower",
-        "part": "whole",
+        "scope": "whole",
         "description": "six-petal flower, flat",
         "style": "flat",
         "svg": _svg(
@@ -83,14 +83,14 @@ HEAD_CATALOG: list[dict] = [
     },
     {
         "subject": "leaf",
-        "part": "whole",
+        "scope": "whole",
         "description": "pointed leaf, flat",
         "style": "flat",
         "svg": _svg('<path d="M50 10 C20 40 20 70 50 90 C80 70 80 40 50 10 Z" fill="#66bb6a"/>'),
     },
     {
         "subject": "leaf",
-        "part": "whole",
+        "scope": "whole",
         "description": "rounded leaf, flat",
         "style": "flat",
         "svg": _svg('<path d="M20 50 C40 20 70 20 85 50 C70 80 40 80 20 50 Z" fill="#81c784"/>'),
@@ -112,7 +112,7 @@ def seed(store) -> list[str]:
         motif_id = register_motif(
             motif,
             subject=entry["subject"],
-            part=entry["part"],
+            scope=entry["scope"],
             description=entry.get("description"),
             style=entry.get("style"),
             source="seed",
@@ -130,7 +130,7 @@ def main() -> int:
     ids = seed(store)
     print(f"seeded {len(ids)} curated motif(s):")
     for entry, motif_id in zip(HEAD_CATALOG, ids):
-        print(f"  {motif_id}  {entry['subject']}/{entry['part']}  {entry['description']}")
+        print(f"  {motif_id}  {entry['subject']}/{entry['scope']}  {entry['description']}")
     return 0
 
 

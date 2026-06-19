@@ -155,7 +155,7 @@ def test_llm_adapter_rejects_non_string_optional_spec_facets():
             {
                 "layer_id": "circle_on_stripe",
                 "subject": "pig",
-                "part": "face",
+                "scope": "partial",
                 "view": 7,
             }
         ],
@@ -166,7 +166,7 @@ def test_llm_adapter_rejects_non_string_optional_spec_facets():
             {
                 "layer_id": "circle_on_stripe",
                 "subject": "pig",
-                "part": "face",
+                "scope": "partial",
                 "view": "front",
             }
         ],

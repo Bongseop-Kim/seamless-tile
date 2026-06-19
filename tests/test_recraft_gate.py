@@ -34,7 +34,7 @@ def _svg(inner: str, viewbox: str = "0 0 100 100") -> str:
 
 
 def _spec(**extra) -> dict:
-    return {"layer_id": "m", "subject": "pig", "part": "face", **extra}
+    return {"layer_id": "m", "subject": "pig", "scope": "partial", **extra}
 
 
 class _FakeRecraft:

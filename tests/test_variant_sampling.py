@@ -61,23 +61,23 @@ def test_select_variant_group_changes_choice_independently_of_seed():
 
 
 def test_descriptor_text_prefers_description():
-    spec = {"description": "smiling pig face", "subject": "pig", "part": "face"}
+    spec = {"description": "smiling pig face", "subject": "pig", "scope": "partial"}
     assert _descriptor_text(spec) == "smiling pig face"
 
 
 def test_descriptor_text_synthesizes_from_facets():
-    spec = {"subject": "pig", "part": "face", "view": "front", "style": "flat",
+    spec = {"subject": "pig", "scope": "partial", "view": "front", "style": "flat",
             "expression": "smiling"}
-    assert _descriptor_text(spec) == "smiling pig face, front view, flat"
+    assert _descriptor_text(spec) == "smiling pig, front view, flat"
 
 
 def test_descriptor_text_drops_empty_facets_no_dangling_punctuation():
-    text = _descriptor_text({"subject": "pig", "part": "face"})
-    assert text == "pig face"
+    text = _descriptor_text({"subject": "pig", "scope": "partial"})
+    assert text == "pig"
     assert "  " not in text  # no double spaces from missing facets
     assert not text.endswith(",") and ", ," not in text
 
 
 def test_descriptor_text_blank_description_falls_through_to_facets():
-    spec = {"description": "   ", "subject": "pig", "part": "face"}
-    assert _descriptor_text(spec) == "pig face"
+    spec = {"description": "   ", "subject": "pig", "scope": "partial"}
+    assert _descriptor_text(spec) == "pig"

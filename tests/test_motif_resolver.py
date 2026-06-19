@@ -79,10 +79,10 @@ class _FakeStore:
     def all(self) -> list[MotifRecord]:
         return sorted(self.rows, key=lambda r: r.id)
 
-    def find_by_facets(self, subject, part) -> list[MotifRecord]:
-        self.facet_queries.append((subject, part))
+    def find_by_facets(self, scope) -> list[MotifRecord]:
+        self.facet_queries.append(scope)
         return sorted(
-            (r for r in self.rows if r.subject == subject and r.part == part),
+            (r for r in self.rows if r.scope == scope),
             key=lambda r: r.id,
         )
 
@@ -118,20 +118,20 @@ def _layer_intent() -> dict:
     return {"layers": [{"id": "m", "type": "motif", "params": {"motif_id": "ph", "color": "a"}}]}
 
 
-def _record(id_, subject, part, **facets) -> MotifRecord:
+def _record(id_, subject, scope, **facets) -> MotifRecord:
     return MotifRecord(
         id=id_,
         symbol=f'<symbol id="{id_}"><path d="M0 0H1V1H0Z"/></symbol>',
         bbox_mm=(-0.5, -0.5, 0.5, 0.5),
         anchor=(0.0, 0.0),
         subject=subject,
-        part=part,
+        scope=scope,
         **facets,
     )
 
 
-def _spec(layer_id="m", subject="pig", part="face", **extra) -> dict:
-    return {"layer_id": layer_id, "subject": subject, "part": part, **extra}
+def _spec(layer_id="m", subject="pig", scope="partial", **extra) -> dict:
+    return {"layer_id": layer_id, "subject": subject, "scope": scope, **extra}
 
 
 # --- generate_motif_svg (miss path) ----------------------------------------
@@ -164,7 +164,7 @@ def test_generate_motif_svg_exhausted_raises_client_error():
 
 
 def test_resolver_exact_match_reuses_without_generating():
-    rec = _record("recraft-aaa", "pig", "face", view="front", style="flat")
+    rec = _record("recraft-aaa", "pig", "partial", view="front", style="flat")
     store = _FakeStore(rec)
     intent = {"layers": [{"id": "m", "type": "motif", "params": {"motif_id": "ph", "color": "a"}}]}
     out = resolve_motifs(
@@ -174,10 +174,10 @@ def test_resolver_exact_match_reuses_without_generating():
 
 
 def test_resolver_hard_filter_hit_picks_lowest_id():
-    # Two same-(subject,part) rows, neither an exact descriptor match -> lowest id wins.
+    # Two same-(subject,scope) rows, neither an exact descriptor match -> lowest id wins.
     store = _FakeStore(
-        _record("recraft-bbb", "pig", "face", view="side"),
-        _record("recraft-aaa", "pig", "face", view="back"),
+        _record("recraft-bbb", "pig", "partial", view="side"),
+        _record("recraft-aaa", "pig", "partial", view="back"),
     )
     intent = {"layers": [{"id": "m", "type": "motif", "params": {"motif_id": "ph", "color": "a"}}]}
     out = resolve_motifs(intent, [_spec(view="front")], store=store, llm_client=object())
@@ -215,16 +215,16 @@ def test_resolver_normalizes_facets_for_reuse():
     # Differently-cased / padded facets must still reuse an existing motif (not
     # regenerate). llm_client=None means any generation attempt would raise, so a clean
     # return proves the normalized exact-match fired.
-    rec = _record("recraft-aaa", "pig", "face", view="front")
+    rec = _record("recraft-aaa", "pig", "partial", view="front")
     store = _FakeStore(rec)
     intent = {"layers": [{"id": "m", "type": "motif", "params": {"motif_id": "ph", "color": "a"}}]}
-    spec = {"layer_id": "m", "subject": "  Pig ", "part": "FACE", "view": "Front"}
+    spec = {"layer_id": "m", "subject": "  Pig ", "scope": "Partial", "view": "Front"}
     out = resolve_motifs(intent, [spec], store=store, llm_client=None)
     assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
 
 
-def test_resolver_missing_part_skips_query_and_generates():
-    store = _FakeStore(_record("recraft-x", "pig", "face"))
+def test_resolver_missing_scope_skips_query_and_generates():
+    store = _FakeStore(_record("recraft-x", "pig", "partial"))
     llm = _ScriptedLLM(_GOOD_SVG)
     intent = {"layers": [{"id": "m", "type": "motif", "params": {"motif_id": "ph"}}]}
     out = resolve_motifs(intent, [{"layer_id": "m", "subject": "pig"}], store=store, llm_client=llm)
@@ -241,7 +241,7 @@ def _wrapped(intent: dict, specs: list[dict]) -> str:
 
 def test_build_intent_returns_motif_specs():
     intent = mvp_intent()
-    specs = [{"layer_id": "circle_on_stripe", "subject": "pig", "part": "face"}]
+    specs = [{"layer_id": "circle_on_stripe", "subject": "pig", "scope": "partial"}]
     llm = _ScriptedLLM(_wrapped(intent, specs))
     res = llm_build_intent("pig pattern", client=llm, use_cache=False)
     assert isinstance(res, AdapterResult)
@@ -255,20 +255,20 @@ def test_build_intent_bare_intent_has_no_specs():
     assert res.motif_specs == []
 
 
-def test_build_intent_out_of_vocab_part_reprompts_then_422():
+def test_build_intent_out_of_vocab_scope_reprompts_then_422():
     intent = mvp_intent()
-    bad = [{"layer_id": "circle_on_stripe", "subject": "pig", "part": "nostril"}]  # not in PART_VOCAB
+    bad = [{"layer_id": "circle_on_stripe", "subject": "pig", "scope": "bogus"}]  # not in SCOPE_VOCAB
     llm = _ScriptedLLM(_wrapped(intent, bad), _wrapped(intent, bad))
     with pytest.raises(IntentInvalid):
         llm_build_intent("x", client=llm, use_cache=False)
     assert len(llm.calls) == 2  # initial + one re-prompt, then give up
-    assert "nostril" in llm.calls[1] or "part" in llm.calls[1]  # vocab error fed back
+    assert "bogus" in llm.calls[1] or "scope" in llm.calls[1]  # vocab error fed back
 
 
 def test_build_intent_out_of_vocab_then_valid_recovers():
     intent = mvp_intent()
-    bad = [{"layer_id": "circle_on_stripe", "subject": "pig", "part": "nostril"}]
-    good = [{"layer_id": "circle_on_stripe", "subject": "pig", "part": "face"}]
+    bad = [{"layer_id": "circle_on_stripe", "subject": "pig", "scope": "bogus"}]
+    good = [{"layer_id": "circle_on_stripe", "subject": "pig", "scope": "whole"}]
     llm = _ScriptedLLM(_wrapped(intent, bad), _wrapped(intent, good))
     res = llm_build_intent("x", client=llm, use_cache=False)
     assert res.motif_specs == good
@@ -284,7 +284,7 @@ def _miss_intent_and_specs():
     intent = mvp_intent()
     motif_layers = [layer for layer in intent["layers"] if layer["type"] == "motif"]
     motif_layers[0]["params"]["motif_id"] = "pig"  # placeholder
-    specs = [{"layer_id": motif_layers[0]["id"], "subject": "pig", "part": "face",
+    specs = [{"layer_id": motif_layers[0]["id"], "subject": "pig", "scope": "partial",
               "description": "smiling pig face"}]
     return intent, specs
 
@@ -325,7 +325,7 @@ def test_resolver_soft_similarity_reuses_above_tau(monkeypatch):
     # Not an exact match (view differs) -> soft path. cos=1.0 >= τ -> reuse.
     # llm_client=None: any generation attempt would raise, so a clean return proves reuse.
     _set_tau(monkeypatch, 0.6)
-    rec = _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    rec = _record("recraft-sim", "pig", "partial", view="side", embedding=[1.0, 0.0])
     store = _FakeStore(rec)
     out = resolve_motifs(
         _layer_intent(), [_spec(view="front")],
@@ -336,7 +336,7 @@ def test_resolver_soft_similarity_reuses_above_tau(monkeypatch):
 
 def test_resolver_soft_similarity_generates_below_tau(monkeypatch):
     _set_tau(monkeypatch, 0.6)
-    rec = _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    rec = _record("recraft-sim", "pig", "partial", view="side", embedding=[1.0, 0.0])
     store = _FakeStore(rec)
     llm = _ScriptedLLM(_GOOD_SVG)
     out = resolve_motifs(
@@ -350,7 +350,7 @@ def test_resolver_soft_similarity_generates_below_tau(monkeypatch):
 def test_resolver_tau_boundary(monkeypatch):
     # query vs candidate cosine is exactly 0.7.
     def rec():
-        return _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+        return _record("recraft-sim", "pig", "partial", view="side", embedding=[1.0, 0.0])
     query = [0.7, 0.714142842854285]  # |query| == 1.0, dot with [1,0] == 0.7
 
     _set_tau(monkeypatch, 0.7)  # 0.7 >= 0.7 -> reuse
@@ -371,7 +371,7 @@ def test_resolver_tau_boundary(monkeypatch):
 
 def test_resolver_embedding_unconfigured_falls_back_to_lowest_id():
     # No embedding client -> embed_query returns None -> S10 hard-filter reuse (lowest id).
-    rec = _record("recraft-aaa", "pig", "face", view="side", embedding=[1.0, 0.0])
+    rec = _record("recraft-aaa", "pig", "partial", view="side", embedding=[1.0, 0.0])
     store = _FakeStore(rec)
     out = resolve_motifs(
         _layer_intent(), [_spec(view="front")],
@@ -389,7 +389,7 @@ def test_resolver_embedding_error_is_fail_soft(monkeypatch):
         def embed(self, text):
             raise AdapterClientError("embed upstream down")
 
-    rec = _record("recraft-aaa", "pig", "face", view="side", embedding=[1.0, 0.0])
+    rec = _record("recraft-aaa", "pig", "partial", view="side", embedding=[1.0, 0.0])
     out = resolve_motifs(
         _layer_intent(), [_spec(view="front")],
         store=_FakeStore(rec), llm_client=None, embedding_client=_BoomEmbed(),
@@ -401,7 +401,7 @@ def test_resolver_embedding_error_is_fail_soft(monkeypatch):
 def test_resolver_dimension_mismatch_excluded_falls_back(monkeypatch):
     _set_tau(monkeypatch, 0.6)
     # candidate embedding dim (3) != query dim (2) -> excluded -> S10 fallback reuse.
-    rec = _record("recraft-aaa", "pig", "face", view="side", embedding=[1.0, 0.0, 0.0])
+    rec = _record("recraft-aaa", "pig", "partial", view="side", embedding=[1.0, 0.0, 0.0])
     out = resolve_motifs(
         _layer_intent(), [_spec(view="front")],
         store=_FakeStore(rec), llm_client=None, embedding_client=_FixedEmbed([1.0, 0.0]),
@@ -411,7 +411,7 @@ def test_resolver_dimension_mismatch_excluded_falls_back(monkeypatch):
 
 def test_resolver_miss_persists_query_embedding(monkeypatch):
     _set_tau(monkeypatch, 0.99)  # force a miss despite a hard-filter candidate
-    rec = _record("recraft-other", "pig", "face", view="side", embedding=[1.0, 0.0])
+    rec = _record("recraft-other", "pig", "partial", view="side", embedding=[1.0, 0.0])
     store = _FakeStore(rec)
     store_mod.set_default_store(store)  # generation write-through targets the default store
     llm = _ScriptedLLM(_GOOD_SVG)
@@ -430,9 +430,9 @@ def test_resolver_hit_samples_from_curated_pool(monkeypatch):
     # Two curated variants in one group; seed varies which variant the hit resolves to.
     _set_tau(monkeypatch, 0.6)
     grp = "grp1"
-    r1 = _record("recraft-aaa", "pig", "face", view="side",
+    r1 = _record("recraft-aaa", "pig", "partial", view="side",
                  variant_group=grp, status="curated", embedding=[1.0, 0.0])
-    r2 = _record("recraft-bbb", "pig", "face", view="side",
+    r2 = _record("recraft-bbb", "pig", "partial", view="side",
                  variant_group=grp, status="curated", embedding=[1.0, 0.0])
     store = _FakeStore(r1, r2)
     chosen = {
@@ -448,7 +448,7 @@ def test_resolver_hit_samples_from_curated_pool(monkeypatch):
 def test_resolver_same_inputs_deterministic(monkeypatch):
     # Criterion 2 (in-process): same prompt+seed+registry_version -> same resolved id.
     _set_tau(monkeypatch, 0.6)
-    rec = _record("recraft-sim", "pig", "face", view="side", embedding=[1.0, 0.0])
+    rec = _record("recraft-sim", "pig", "partial", view="side", embedding=[1.0, 0.0])
     store = _FakeStore(rec)
     emb = _FixedEmbed([1.0, 0.0])
     a = resolve_motifs(_layer_intent(), [_spec(view="front")],
@@ -464,7 +464,7 @@ def test_resolver_variant_pool_query_error_falls_back_to_match():
         def find_by_variant_group(self, variant_group, *, status="curated"):
             raise MotifStoreError("variant-group query down")
 
-    rec = _record("recraft-aaa", "pig", "face", view="front", variant_group="g1")
+    rec = _record("recraft-aaa", "pig", "partial", view="front", variant_group="g1")
     store = _PoolBoomStore(rec)
     out = resolve_motifs(
         _layer_intent(), [_spec(view="front")],  # exact match -> hit -> variant pool path
@@ -576,8 +576,8 @@ def test_resolver_partial_success_drops_failed_motif():
     out = resolve_motifs(
         _multi_motif_intent(),
         [
-            _spec(layer_id="m1", subject="pig", part="face"),
-            _spec(layer_id="m2", subject="bee", part="wing"),
+            _spec(layer_id="m1", subject="pig", scope="partial"),
+            _spec(layer_id="m2", subject="bee", scope="partial"),
         ],
         store=_FakeStore(),
         llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
@@ -585,7 +585,7 @@ def test_resolver_partial_success_drops_failed_motif():
     )
     assert [layer["id"] for layer in out["layers"]] == ["m1"]  # m2 dropped
     assert out["layers"][0]["params"]["motif_id"]  # m1 resolved
-    assert any("m2" in w and "bee/wing" in w for w in warnings)
+    assert any("m2" in w and "bee/partial" in w for w in warnings)
 
 
 def test_resolver_all_motifs_fail_raises_502_class():
@@ -593,8 +593,8 @@ def test_resolver_all_motifs_fail_raises_502_class():
         resolve_motifs(
             _multi_motif_intent(),
             [
-                _spec(layer_id="m1", subject="pig", part="face"),
-                _spec(layer_id="m2", subject="bee", part="wing"),
+                _spec(layer_id="m1", subject="pig", scope="partial"),
+                _spec(layer_id="m2", subject="bee", scope="partial"),
             ],
             store=_FakeStore(),
             llm_client=_ScriptedLLM(_BAD_SVG, _BAD_SVG),
@@ -632,8 +632,8 @@ def test_resolver_cascade_drops_dependent_layer():
     out = resolve_motifs(
         intent,
         [
-            _spec(layer_id="m_ok", subject="pig", part="face"),
-            _spec(layer_id="m_bad", subject="bee", part="wing"),
+            _spec(layer_id="m_ok", subject="pig", scope="partial"),
+            _spec(layer_id="m_bad", subject="bee", scope="partial"),
         ],
         store=_FakeStore(),
         llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
@@ -662,8 +662,8 @@ def test_resolver_cascade_to_empty_raises_502_class():
         resolve_motifs(
             intent,
             [
-                _spec(layer_id="m_ok", subject="pig", part="face"),
-                _spec(layer_id="m_bad", subject="bee", part="wing"),
+                _spec(layer_id="m_ok", subject="pig", scope="partial"),
+                _spec(layer_id="m_bad", subject="bee", scope="partial"),
             ],
             store=_FakeStore(),
             llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
@@ -677,8 +677,8 @@ def test_resolver_partial_success_is_deterministic():
         out = resolve_motifs(
             _multi_motif_intent(),
             [
-                _spec(layer_id="m1", subject="pig", part="face"),
-                _spec(layer_id="m2", subject="bee", part="wing"),
+                _spec(layer_id="m1", subject="pig", scope="partial"),
+                _spec(layer_id="m2", subject="bee", scope="partial"),
             ],
             store=_FakeStore(),
             llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
@@ -699,7 +699,7 @@ def test_route_prompt_partial_success_returns_200_with_warning():
     motif_layers = [layer for layer in intent["layers"] if layer["type"] == "motif"]
     # add a second spec that exhausts the gate and gets dropped (partial success)
     specs = specs + [
-        {"layer_id": motif_layers[1]["id"], "subject": "octopus", "part": "face"}
+        {"layer_id": motif_layers[1]["id"], "subject": "octopus", "scope": "partial"}
     ]
     set_default_client(_ScriptedLLM(_wrapped(intent, specs), _GOOD_SVG, _BAD_SVG))
     resp = client.post("/api/v1/generate", json={"prompt": "x", "seed": 0})

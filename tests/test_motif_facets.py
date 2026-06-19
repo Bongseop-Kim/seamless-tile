@@ -17,11 +17,11 @@ from app.motifs.facets import (
 
 
 def test_variant_group_deterministic_same_input():
-    assert variant_group_key("pig", "face") == variant_group_key("pig", "face")
+    assert variant_group_key("pig", "whole") == variant_group_key("pig", "whole")
 
 
 def test_variant_group_normalization_case_and_whitespace():
-    assert variant_group_key("  PIG ", "Face") == variant_group_key("pig", "face")
+    assert variant_group_key("  PIG ", "Whole") == variant_group_key("pig", "whole")
 
 
 def test_variant_group_normalization_unicode_nfc():
@@ -30,12 +30,12 @@ def test_variant_group_normalization_unicode_nfc():
     decomposed = "cafe" + chr(0x0301)  # 'e' + combining acute accent
     composed = unicodedata.normalize("NFC", decomposed)  # single precomposed code point
     assert composed != decomposed  # genuinely different code-point sequences
-    assert variant_group_key(composed, "face") == variant_group_key(decomposed, "face")
+    assert variant_group_key(composed, "whole") == variant_group_key(decomposed, "whole")
 
 
 def test_variant_group_distinct_facets_differ():
-    assert variant_group_key("pig", "face") != variant_group_key("pig", "feet")
-    assert variant_group_key("pig", "face") != variant_group_key("cow", "face")
+    assert variant_group_key("pig", "whole") != variant_group_key("pig", "partial")
+    assert variant_group_key("pig", "whole") != variant_group_key("cow", "whole")
 
 
 def test_variant_group_none_equals_empty():
@@ -43,7 +43,7 @@ def test_variant_group_none_equals_empty():
 
 
 def test_variant_group_shape_is_hex_of_fixed_len():
-    key = variant_group_key("pig", "face")
+    key = variant_group_key("pig", "whole")
     assert len(key) == VARIANT_GROUP_LEN
     assert all(c in "0123456789abcdef" for c in key)
 
@@ -54,12 +54,12 @@ def test_normalize_facet_none_and_blank_and_trim():
     assert normalize_facet(" Foo ") == "foo"
 
 
-def test_validate_facets_rejects_out_of_vocab_part():
+def test_validate_facets_rejects_out_of_vocab_scope():
     with pytest.raises(ValueError):
-        validate_facets(None, "banana")
+        validate_facets("banana")
 
 
-def test_validate_facets_accepts_known_part_and_none():
-    validate_facets(None, "face")  # in PART_VOCAB
-    validate_facets(None, None)  # unspecified is allowed in P0
-    validate_facets("anything", None)  # subject vocab is open in P0
+def test_validate_facets_accepts_known_scope_and_none():
+    validate_facets("whole")  # in SCOPE_VOCAB
+    validate_facets("partial")  # in SCOPE_VOCAB
+    validate_facets(None)  # unspecified is allowed

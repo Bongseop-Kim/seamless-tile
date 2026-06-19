@@ -428,7 +428,7 @@ def _canonical_spec(spec: dict) -> dict:
     """Normalized facet subset used as the Recraft freeze/cache key (mirrors llm)."""
     return {
         k: facets.normalize_facet(spec.get(k))
-        for k in ("subject", "part", "view", "expression", "style", "description")
+        for k in ("subject", "scope", "view", "expression", "style", "description")
     }
 
 
@@ -447,7 +447,7 @@ def _build_recraft_prompt(spec: dict, *, errors: list[str] | None = None) -> str
         "vector <path>/<g> shapes with solid fills. Avoid raster <image>, <text>, "
         "gradients and filters (they get flattened).",
         f"subject: {spec.get('subject')}",
-        f"part: {spec.get('part')}",
+        f"scope: {spec.get('scope')}",
     ]
     for key in ("view", "expression", "style", "description"):
         if spec.get(key):
@@ -512,7 +512,7 @@ def generate_via_recraft(
         motif_id = register_motif(
             motif,
             subject=facets.normalize_facet(spec.get("subject")) or None,
-            part=facets.normalize_facet(spec.get("part")) or None,
+            scope=facets.normalize_facet(spec.get("scope")) or None,
             view=spec.get("view"),
             expression=spec.get("expression"),
             style=spec.get("style"),
