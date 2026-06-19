@@ -104,6 +104,7 @@ async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
                 embedding_client=get_default_embedding_client(),
                 recraft_client=get_default_recraft_client(),
                 seed=effective_seed,
+                warnings=warnings,
             )
         )
 

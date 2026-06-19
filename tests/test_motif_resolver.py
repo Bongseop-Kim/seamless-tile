@@ -556,3 +556,161 @@ def test_resolver_detailed_without_recraft_client_raises_502_class():
             _layer_intent(), [_spec(complexity="detailed")],
             store=_FakeStore(), llm_client=_ScriptedLLM(_GOOD_SVG), recraft_client=None,
         )
+
+
+# --- §6.4 Tier-1 gate: drop -> partial success / all-fail -> 502 -------------
+
+
+def _multi_motif_intent() -> dict:
+    return {
+        "layers": [
+            {"id": "m1", "type": "motif", "params": {"color": "a"}},
+            {"id": "m2", "type": "motif", "params": {"color": "b"}},
+        ]
+    }
+
+
+def test_resolver_partial_success_drops_failed_motif():
+    # m1 generates clean (1 call), m2 exhausts the gate (2 calls) -> m2 dropped, 200-class.
+    warnings: list[str] = []
+    out = resolve_motifs(
+        _multi_motif_intent(),
+        [
+            _spec(layer_id="m1", subject="pig", part="face"),
+            _spec(layer_id="m2", subject="bee", part="wing"),
+        ],
+        store=_FakeStore(),
+        llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
+        warnings=warnings,
+    )
+    assert [layer["id"] for layer in out["layers"]] == ["m1"]  # m2 dropped
+    assert out["layers"][0]["params"]["motif_id"]  # m1 resolved
+    assert any("m2" in w and "bee/wing" in w for w in warnings)
+
+
+def test_resolver_all_motifs_fail_raises_502_class():
+    with pytest.raises(AdapterClientError):
+        resolve_motifs(
+            _multi_motif_intent(),
+            [
+                _spec(layer_id="m1", subject="pig", part="face"),
+                _spec(layer_id="m2", subject="bee", part="wing"),
+            ],
+            store=_FakeStore(),
+            llm_client=_ScriptedLLM(_BAD_SVG, _BAD_SVG),
+        )
+
+
+def test_resolver_single_failure_without_warnings_kwarg_raises():
+    # Back-compat: the new partial path doesn't crash when no warnings sink is passed,
+    # and a sole failing motif still raises (all-fail -> 502).
+    with pytest.raises(AdapterClientError):
+        resolve_motifs(
+            _layer_intent(),
+            [_spec()],
+            store=_FakeStore(),
+            llm_client=_ScriptedLLM(_BAD_SVG, _BAD_SVG),
+        )
+
+
+def test_resolver_cascade_drops_dependent_layer():
+    # p1 hosts on m_bad (no spec of its own); when m_bad is dropped p1 cascades out,
+    # while the unrelated m_ok survives.
+    intent = {
+        "layers": [
+            {"id": "m_ok", "type": "motif", "params": {"color": "a"}},
+            {"id": "m_bad", "type": "motif", "params": {"color": "b"}},
+            {
+                "id": "p1",
+                "type": "motif",
+                "params": {"color": "c"},
+                "placement": {"type": "path_following", "host_layer": "m_bad"},
+            },
+        ]
+    }
+    warnings: list[str] = []
+    out = resolve_motifs(
+        intent,
+        [
+            _spec(layer_id="m_ok", subject="pig", part="face"),
+            _spec(layer_id="m_bad", subject="bee", part="wing"),
+        ],
+        store=_FakeStore(),
+        llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
+        warnings=warnings,
+    )
+    assert [layer["id"] for layer in out["layers"]] == ["m_ok"]
+    assert any("m_bad" in w and "Tier-1" in w for w in warnings)
+    assert any("p1" in w and "host_layer" in w for w in warnings)
+
+
+def test_resolver_cascade_to_empty_raises_502_class():
+    # m_ok resolves but hosts on m_bad; m_bad fails -> cascade removes m_ok too ->
+    # no survivors -> 502 (not 422).
+    intent = {
+        "layers": [
+            {
+                "id": "m_ok",
+                "type": "motif",
+                "params": {"color": "a"},
+                "placement": {"host_layer": "m_bad"},
+            },
+            {"id": "m_bad", "type": "motif", "params": {"color": "b"}},
+        ]
+    }
+    with pytest.raises(AdapterClientError):
+        resolve_motifs(
+            intent,
+            [
+                _spec(layer_id="m_ok", subject="pig", part="face"),
+                _spec(layer_id="m_bad", subject="bee", part="wing"),
+            ],
+            store=_FakeStore(),
+            llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
+        )
+
+
+def test_resolver_partial_success_is_deterministic():
+    def run():
+        llm_adapter.clear_motif_svg_cache()  # same starting state both runs (no cache leak)
+        warnings: list[str] = []
+        out = resolve_motifs(
+            _multi_motif_intent(),
+            [
+                _spec(layer_id="m1", subject="pig", part="face"),
+                _spec(layer_id="m2", subject="bee", part="wing"),
+            ],
+            store=_FakeStore(),
+            llm_client=_ScriptedLLM(_GOOD_SVG, _BAD_SVG),
+            warnings=warnings,
+        )
+        return out, warnings
+
+    out1, w1 = run()
+    out2, w2 = run()
+    assert out1 == out2
+    assert w1 == w2
+
+
+def test_route_prompt_partial_success_returns_200_with_warning():
+    # Two spec'd motif layers: the first resolves, the second exhausts the gate and is
+    # dropped -> the request still succeeds (partial success) with a drop warning.
+    intent, specs = _miss_intent_and_specs()  # motif_layers[0] -> valid placeholder + spec
+    motif_layers = [layer for layer in intent["layers"] if layer["type"] == "motif"]
+    # add a second spec that exhausts the gate and gets dropped (partial success)
+    specs = specs + [
+        {"layer_id": motif_layers[1]["id"], "subject": "octopus", "part": "face"}
+    ]
+    set_default_client(_ScriptedLLM(_wrapped(intent, specs), _GOOD_SVG, _BAD_SVG))
+    resp = client.post("/api/v1/generate", json={"prompt": "x", "seed": 0})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["candidates"]
+    assert any("dropped" in w for w in body["warnings"])
+
+
+def test_route_prompt_all_motifs_fail_returns_502():
+    intent, specs = _miss_intent_and_specs()
+    set_default_client(_ScriptedLLM(_wrapped(intent, specs), _BAD_SVG, _BAD_SVG))
+    resp = client.post("/api/v1/generate", json={"prompt": "x", "seed": 0})
+    assert resp.status_code == 502, resp.text

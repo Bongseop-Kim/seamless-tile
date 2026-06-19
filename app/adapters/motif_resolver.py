@@ -191,6 +191,7 @@ def resolve_motifs(
     recraft_client=None,
     embedding_client=None,
     seed: int = 0,
+    warnings: list[str] | None = None,
 ) -> dict:
     """Return a copy of ``intent`` with each motif layer's ``params.motif_id`` resolved.
 
@@ -199,29 +200,96 @@ def resolve_motifs(
     seed-sampled from the curated variant pool. ``seed`` must be the SAME effective seed
     the engine composes with (the route unifies it) so variant selection and composition
     agree. Layers without a matching spec are left untouched.
+
+    Tier-1 gate handling (spec §6.4): when a motif exhausts its sanitize/structure gate
+    (the adapter already regenerated once), its layer is dropped instead of failing the
+    whole request, and any layer that hosts on a dropped layer is dropped too (cascade,
+    so a dangling ``host_layer`` cannot turn partial success into a 422). If at least one
+    motif still resolves, the surviving intent is returned and a drop warning per dropped
+    layer is appended to ``warnings`` (partial success → 200). If every attempted motif
+    fails — or the cascade leaves no layers — an :class:`AdapterClientError` is raised
+    (the route maps it to 502).
     """
     if not motif_specs:
         return intent
     if store is None:
         store = get_default_store()
 
+    sink = warnings if warnings is not None else []
     resolved = copy.deepcopy(intent)
     layers_by_id = {
         layer.get("id"): layer
         for layer in resolved.get("layers", [])
         if isinstance(layer, dict)
     }
+    attempted: set[str] = set()
+    failed: set[str] = set()
+    reasons: dict[str, str] = {}
     for spec in motif_specs:
         layer = layers_by_id.get(spec.get("layer_id"))
         if layer is None or layer.get("type") != "motif":
             continue
-        motif_id = _resolve_one(
-            spec,
-            store=store,
-            llm_client=llm_client,
-            recraft_client=recraft_client,
-            embedding_client=embedding_client,
-            seed=seed,
-        )
+        lid = layer.get("id")
+        attempted.add(lid)
+        try:
+            motif_id = _resolve_one(
+                spec,
+                store=store,
+                llm_client=llm_client,
+                recraft_client=recraft_client,
+                embedding_client=embedding_client,
+                seed=seed,
+            )
+        except AdapterClientError:
+            failed.add(lid)
+            reasons[lid] = f"{spec.get('subject', '?')}/{spec.get('part', '?')}"
+            continue
         layer.setdefault("params", {})["motif_id"] = motif_id
+
+    if not failed:
+        return resolved
+
+    # Spec §6.4: every attempted motif failed → 502 (no partial result is meaningful).
+    if not (attempted - failed):
+        raise AdapterClientError(
+            f"all {len(attempted)} motif(s) failed the Tier-1 sanitize/structure gate"
+        )
+
+    # Cascade to a fixpoint: a layer hosting on a dropped layer can no longer compose.
+    dropped = set(failed)
+    while True:
+        grew = False
+        for layer in resolved.get("layers", []):
+            lid = layer.get("id")
+            if lid in dropped:
+                continue
+            host = (layer.get("placement") or {}).get("host_layer")
+            if host in dropped:
+                dropped.add(lid)
+                reasons[lid] = f"host_layer {host!r}"
+                grew = True
+        if not grew:
+            break
+
+    survivors = [
+        layer for layer in resolved.get("layers", []) if layer.get("id") not in dropped
+    ]
+    if not survivors:
+        raise AdapterClientError("motif drop cascade left no composable layers")
+
+    # Warn in layer order (deterministic), distinguishing gate failures from cascades.
+    for layer in resolved.get("layers", []):
+        lid = layer.get("id")
+        if lid not in dropped:
+            continue
+        if lid in failed:
+            sink.append(
+                f"motif layer {lid!r} dropped after Tier-1 gate exhausted "
+                f"({reasons[lid]})"
+            )
+        else:
+            sink.append(
+                f"layer {lid!r} dropped because its {reasons[lid]} was dropped"
+            )
+    resolved["layers"] = survivors
     return resolved
