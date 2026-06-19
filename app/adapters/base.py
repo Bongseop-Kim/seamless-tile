@@ -24,6 +24,10 @@ class AdapterResult:
     intent: dict
     source_fidelity: str = "vector"
     warnings: list[str] = field(default_factory=list)
+    # Motif specs (subject/part/...) the LLM emitted alongside the intent, keyed to
+    # motif layers by `layer_id`. The deterministic motif resolver (S10) consumes these
+    # to inject a concrete motif_id; empty for the intent-direct / image paths.
+    motif_specs: list[dict] = field(default_factory=list)
 
 
 class AdapterClientError(RuntimeError):

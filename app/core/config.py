@@ -18,7 +18,13 @@ class Settings(BaseSettings):
     # Supabase persistence (session 9). The motif store is "configured" iff
     # supabase_db_url is set; unset => in-memory registry only (tests, local dev).
     supabase_db_url: str | None = None  # postgresql://...  (env: SUPABASE_DB_URL)
-    supabase_service_key: str | None = None  # reserved for REST/Storage (S11+); unused in P0
+    supabase_service_key: str | None = None
+
+    # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
+    # GeminiClient as the default LLM client at boot; unset => no default (tests inject
+    # fakes). Embeddings (OpenAI) are a separate S11 concern, not configured here.
+    gemini_api_key: str | None = None  # env: GEMINI_API_KEY
+    gemini_model: str = "gemini-2.5-flash-lite"  # chat model id passed to GeminiClient (P0)
 
 
 @lru_cache

@@ -7,6 +7,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.adapters.gemini import client_from_settings
+from app.adapters.llm import set_default_client
 from app.api.routes import export, generate, health, palettes
 from app.core.config import get_settings
 from app.core.observability import (
@@ -44,6 +46,15 @@ async def lifespan(app: FastAPI):
             logger.warning("motif store hydration skipped (store error)", exc_info=True)
     else:
         logger.info("motif store unconfigured; in-memory registry only")
+
+    # Install the chat LLM (Gemini) as the default client when a key is configured;
+    # unset => no default (the prompt path then needs a per-call injected client).
+    llm_client = client_from_settings(settings)
+    set_default_client(llm_client)
+    logger.info(
+        "LLM client %s",
+        "configured (Gemini)" if llm_client is not None else "unconfigured (inject per-call)",
+    )
     yield
     # One connection per operation — nothing to tear down.
 

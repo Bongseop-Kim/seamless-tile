@@ -79,6 +79,14 @@ class MotifStore(Protocol):
         """All rows, for boot hydration."""
         ...
 
+    def find_by_facets(self, subject: str | None, part: str | None) -> list[MotifRecord]:
+        """Rows whose controlled facets match (subject, part), ordered by id.
+
+        Empty list == clean miss (NOT an exception), like :meth:`get`. Used by the
+        motif resolver's exact-match / hard filter (spec §6.1, P0).
+        """
+        ...
+
 
 class MotifStoreError(AdapterClientError):
     """The motif store dependency is unavailable or failed (502-class)."""
@@ -204,6 +212,19 @@ class PostgresMotifStore:
                 rows = cur.fetchall()
         except Exception as exc:
             raise MotifStoreError(f"motif load failed: {exc}") from exc
+        return [_row_to_record(r) for r in rows]
+
+    def find_by_facets(self, subject: str | None, part: str | None) -> list[MotifRecord]:
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {', '.join(_COLUMNS)} FROM motifs "
+                    "WHERE subject = %s AND part = %s ORDER BY id",
+                    (subject, part),
+                )
+                rows = cur.fetchall()
+        except Exception as exc:
+            raise MotifStoreError(f"motif facet query failed: {exc}") from exc
         return [_row_to_record(r) for r in rows]
 
 
