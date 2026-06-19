@@ -22,6 +22,7 @@ from app.adapters.embedding import get_default_embedding_client
 from app.adapters.image import build_intent as image_build_intent
 from app.adapters.llm import build_intent as llm_build_intent
 from app.adapters.motif_resolver import resolve_motifs
+from app.adapters.recraft import get_default_recraft_client
 from app.core.observability import get_request_id, log_metrics
 from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidates
 from app.motifs.store import get_default_store
@@ -101,6 +102,7 @@ async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
                 motif_specs,
                 store=get_default_store(),
                 embedding_client=get_default_embedding_client(),
+                recraft_client=get_default_recraft_client(),
                 seed=effective_seed,
             )
         )

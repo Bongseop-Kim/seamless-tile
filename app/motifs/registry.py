@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from app.engine.units import fmt
 from app.motifs import facets
+from app.motifs import geometry as geom
 from app.render import sanitize
 
 if TYPE_CHECKING:
@@ -315,6 +316,71 @@ def _slotize_colors(children: list[ET.Element]) -> tuple[str, ...]:
     return tuple(f"s{i}" for i in range(len(order)))
 
 
+def _hex_to_rgb(color: str) -> tuple[int, int, int] | None:
+    """Parse a ``#rgb`` / ``#rrggbb`` token to an ``(r, g, b)`` tuple, else ``None``."""
+    c = color.strip().lower()
+    if not c.startswith("#"):
+        return None
+    h = c[1:]
+    if len(h) == 3:
+        h = "".join(ch * 2 for ch in h)
+    if len(h) != 6:
+        return None
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _quantize_colors(children: list[ET.Element], max_slots: int) -> None:
+    """Deterministically merge concrete colors down to at most ``max_slots`` (§6.2/§12).
+
+    Painterly Recraft output can carry more colors than the slot budget. Merging is a
+    pure function of the colors: repeatedly fuse the two closest hex colors (RGB
+    Euclidean distance; ties broken by hex order, keeping the lexicographically smaller
+    hex as the representative) until the budget is met. Non-hex paints (e.g.
+    ``currentColor``) cannot be measured and are never merged; if the irreducible count
+    still exceeds ``max_slots`` the motif is rejected (``ValueError``) so the caller can
+    regenerate / fall back. Mutates ``children`` in place; ``_slotize_colors`` runs next.
+    """
+    distinct = _distinct_colors(children)
+    if len(distinct) <= max_slots:
+        return
+    rgb = {c: _hex_to_rgb(c) for c in distinct}
+    rep = {c: c for c in distinct}  # original color -> current representative
+    unmergeable = sum(1 for c in distinct if rgb[c] is None)
+    active = sorted(c for c in distinct if rgb[c] is not None)
+    while unmergeable + len(active) > max_slots and len(active) >= 2:
+        best: tuple[int, str, str] | None = None  # (distance, keep_hex, drop_hex)
+        for i in range(len(active)):
+            for j in range(i + 1, len(active)):
+                a, b = active[i], active[j]  # a < b (active is sorted)
+                ra, rb = rgb[a], rgb[b]
+                dist = (ra[0] - rb[0]) ** 2 + (ra[1] - rb[1]) ** 2 + (ra[2] - rb[2]) ** 2
+                cand = (dist, a, b)
+                if best is None or cand < best:
+                    best = cand
+        _, keep, drop = best
+        for color, representative in rep.items():
+            if representative == drop:
+                rep[color] = keep
+        active.remove(drop)
+    if unmergeable + len(active) > max_slots:
+        raise ValueError(
+            f"motif has {len(distinct)} colors that cannot be quantized to "
+            f"{max_slots} slots (too many non-hex paints)"
+        )
+    for child in children:
+        for node in child.iter():
+            for attr in ("fill", "stroke"):
+                value = node.get(attr)
+                if value is None:
+                    continue
+                norm = _norm_color(value)
+                if norm is not None and rep.get(norm, norm) != norm:
+                    node.set(attr, rep[norm])
+
+
 # Elements that actually paint. A motif whose geometry is only non-rendering
 # containers (``<defs>``) or empty would register as an invisible motif.
 _RENDERABLE = frozenset(
@@ -334,7 +400,7 @@ def _has_drawable(elements: list[ET.Element]) -> bool:
     return False
 
 
-def normalize_motif_svg(raw_svg: str) -> MotifDef:
+def normalize_motif_svg(raw_svg: str, *, max_color_slots: int | None = None) -> MotifDef:
     """Normalize an authored/Recraft SVG into the motif intake contract.
 
     Steps (ARCHITECTURE.md "Motif 소스와 registry"):
@@ -342,10 +408,12 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
     1. Parse + allowlist via :mod:`app.render.sanitize` — ``<filter>``, embedded
        raster (``<image>``) and external ``href`` are outside the allowlist and so are
        rejected (a motif must be vector).
-    2. Map the source ``viewBox`` frame into the normalized unit box (extent ``1.0``,
-       centered on the origin) with a single wrapping ``<g transform>`` — no per-path
-       coordinate rewriting (pixel-tight bbox flattening is out of scope; the viewBox
-       is the authoring frame).
+    2. Frame on the **tight bounding box of the actual geometry** (not the source
+       viewBox): map that bbox's center onto the origin and its longest side onto ``1.0``
+       with a single wrapping ``<g transform>``. This makes the object *fill* the unit
+       box so ``size_mm`` controls its real rendered size (the source viewBox, which may
+       leave wide margins around a small object, is only validated for sanity). A motif
+       is a single object placed/repeated by the engine — not a pre-composed scene.
     3. Map concrete colors to motif-local slots (D15): a single-color motif keeps the
        legacy ``currentColor`` convention (``color_slots=("s0",)``); a multi-color motif
        writes slot tokens (``fill="s0"`` …) in document DFS first-appearance order.
@@ -356,16 +424,27 @@ def normalize_motif_svg(raw_svg: str) -> MotifDef:
     root = sanitize.parse_svg(raw_svg)
     sanitize.validate_tree(root)
 
-    min_x, min_y, w, h = _parse_viewbox(root)
-    extent = max(w, h)
-    scale = 1.0 / extent
-    # Map the source-frame center onto the origin and the longest side onto 1.0.
-    tx = -(min_x + w / 2.0) * scale
-    ty = -(min_y + h / 2.0) * scale
+    _parse_viewbox(root)  # validate the source frame (rejects missing / non-positive viewBox)
 
     children = list(root)
     if not _has_drawable(children):
         raise ValueError("motif SVG has no drawable geometry")
+
+    bbox = geom.bbox_of(children)
+    if bbox is None:
+        raise ValueError("motif SVG has no measurable geometry")
+    bx, by, bx2, by2 = bbox
+    bw, bh = bx2 - bx, by2 - by
+    extent = max(bw, bh)
+    if extent <= 0:
+        raise ValueError("motif SVG geometry has zero extent")
+    scale = 1.0 / extent
+    # Map the tight-geometry center onto the origin and the longest side onto 1.0.
+    tx = -(bx + bw / 2.0) * scale
+    ty = -(by + bh / 2.0) * scale
+
+    if max_color_slots is not None:
+        _quantize_colors(children, max_color_slots)
     color_slots = _slotize_colors(children)
     inner = "".join(ET.tostring(child, encoding="unicode") for child in children)
     geometry = (

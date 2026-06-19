@@ -5,3 +5,5 @@ __pycache__/
 .env
 .omc/
 .serena/
+recraft_out/
+examples/output/

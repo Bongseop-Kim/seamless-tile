@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
     motif_similarity_tau: float = 0.60  # env: MOTIF_SIMILARITY_TAU
 
+    # Recraft motif generation (session 13, D11/M1). The detailed/painterly miss path
+    # routes to Recraft; its output is path-flattened and its color count capped to this
+    # many slots (excess colors are deterministically merged; spec §6.2/§12).
+    recraft_max_color_slots: int = 6  # env: RECRAFT_MAX_COLOR_SLOTS
+    # Recraft vector API. When recraft_api_key is set, app.main installs a
+    # RecraftHTTPClient as the default Recraft client at boot; unset => detailed misses
+    # surface 502 (no generator). The vector endpoint returns an SVG file per slot.
+    recraft_api_key: str | None = None  # env: RECRAFT_API_KEY
+    recraft_model: str = "recraftv4_1_vector"  # env: RECRAFT_MODEL (a *_vector model)
+    recraft_style: str = ""  # env: RECRAFT_STYLE (optional; vector model drives SVG output)
+    recraft_size: str = "1024x1024"  # env: RECRAFT_SIZE
+    recraft_response_format: str = "url"  # env: RECRAFT_RESPONSE_FORMAT (url | b64_json)
+    recraft_base_url: str = "https://external.api.recraft.ai/v1"  # env: RECRAFT_BASE_URL
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -11,6 +11,8 @@ from app.adapters.embedding import client_from_settings as embedding_client_from
 from app.adapters.embedding import set_default_embedding_client
 from app.adapters.gemini import client_from_settings
 from app.adapters.llm import set_default_client
+from app.adapters.recraft import client_from_settings as recraft_client_from_settings
+from app.adapters.recraft import set_default_recraft_client
 from app.api.routes import export, generate, health, palettes
 from app.core.config import get_settings
 from app.core.observability import (
@@ -65,6 +67,15 @@ async def lifespan(app: FastAPI):
     logger.info(
         "embedding client %s",
         "configured (OpenAI)" if embedding_client is not None else "unconfigured (skip soft match)",
+    )
+
+    # Install the Recraft vector client when a key is configured; unset => detailed/
+    # multicolor misses (D11 routing) surface a 502 (no generator).
+    recraft_client = recraft_client_from_settings(settings)
+    set_default_recraft_client(recraft_client)
+    logger.info(
+        "Recraft client %s",
+        "configured" if recraft_client is not None else "unconfigured (detailed miss -> 502)",
     )
     yield
     # One connection per operation — nothing to tear down.

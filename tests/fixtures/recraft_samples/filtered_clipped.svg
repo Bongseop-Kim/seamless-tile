@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><filter id="f"><feGaussianBlur stdDeviation="3"/></filter><clipPath id="c"><circle cx="50" cy="50" r="45"/></clipPath></defs><path d="M20 20 H80 V80 H20 Z" fill="#3344aa" filter="url(#f)" clip-path="url(#c)"/></svg>

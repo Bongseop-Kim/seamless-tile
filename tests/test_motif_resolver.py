@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import app.adapters.embedding as emb_adapter
 import app.adapters.llm as llm_adapter
 import app.adapters.motif_resolver as motif_resolver
+import app.adapters.recraft as recraft_adapter
 from app.adapters.base import AdapterClientError, AdapterResult
 from app.adapters.llm import (
     build_intent as llm_build_intent,
@@ -40,6 +41,9 @@ def _clean():
         set_default_client(None)
         emb_adapter.clear_embedding_cache()
         emb_adapter.set_default_embedding_client(None)
+        recraft_adapter.clear_motif_cache()
+        recraft_adapter.clear_recraft_motif_cache()
+        recraft_adapter.set_default_recraft_client(None)
         store_mod.clear_default_store()
         for key in [k for k in MOTIFS if k.startswith("recraft-")]:
             del MOTIFS[key]
@@ -466,3 +470,88 @@ def test_resolver_variant_pool_query_error_falls_back_to_match():
         store=store, llm_client=None, embedding_client=None,
     )
     assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
+
+
+# --- S13: complexity-based generation-source routing (D8/D11) ----------------
+
+
+class _FakeRecraft:
+    """Returns a fixed SVG; counts calls so routing is observable."""
+
+    def __init__(self, svg: str) -> None:
+        self._svg = svg
+        self.calls = 0
+
+    def generate(self, prompt: str) -> str:
+        self.calls += 1
+        return self._svg
+
+
+# Two solid colors -> a multicolor motif only the Recraft path can produce here.
+_RECRAFT_SVG = (
+    '<svg viewBox="0 0 12 12">'
+    '<rect x="0" y="0" width="6" height="12" fill="#ff0000"/>'
+    '<rect x="6" y="0" width="6" height="12" fill="#0000ff"/></svg>'
+)
+
+
+def test_resolver_routes_detailed_to_recraft():
+    llm = _ScriptedLLM(_GOOD_SVG)
+    rc = _FakeRecraft(_RECRAFT_SVG)
+    out = resolve_motifs(
+        _layer_intent(), [_spec(complexity="detailed")],
+        store=_FakeStore(), llm_client=llm, recraft_client=rc,
+    )
+    mid = out["layers"][0]["params"]["motif_id"]
+    assert mid.startswith("recraft-")
+    assert rc.calls == 1 and len(llm.calls) == 0  # routed to Recraft, not the LLM
+    assert get_motif(mid).color_slots == ("s0", "s1")  # multicolor slots preserved
+
+
+def test_resolver_routes_simple_to_llm():
+    llm = _ScriptedLLM(_GOOD_SVG)
+    rc = _FakeRecraft(_RECRAFT_SVG)
+    resolve_motifs(
+        _layer_intent(), [_spec(complexity="simple")],
+        store=_FakeStore(), llm_client=llm, recraft_client=rc,
+    )
+    assert len(llm.calls) == 1 and rc.calls == 0
+
+
+def test_resolver_defaults_missing_complexity_to_llm():
+    llm = _ScriptedLLM(_GOOD_SVG)
+    rc = _FakeRecraft(_RECRAFT_SVG)
+    resolve_motifs(
+        _layer_intent(), [_spec()],  # no complexity hint
+        store=_FakeStore(), llm_client=llm, recraft_client=rc,
+    )
+    assert len(llm.calls) == 1 and rc.calls == 0
+
+
+def test_resolver_source_override_forces_recraft():
+    llm = _ScriptedLLM(_GOOD_SVG)
+    rc = _FakeRecraft(_RECRAFT_SVG)
+    resolve_motifs(  # simple complexity, but explicit override wins
+        _layer_intent(), [_spec(complexity="simple", source="recraft")],
+        store=_FakeStore(), llm_client=llm, recraft_client=rc,
+    )
+    assert rc.calls == 1 and len(llm.calls) == 0
+
+
+def test_resolver_source_override_forces_llm():
+    llm = _ScriptedLLM(_GOOD_SVG)
+    rc = _FakeRecraft(_RECRAFT_SVG)
+    resolve_motifs(  # detailed complexity, but explicit override wins
+        _layer_intent(), [_spec(complexity="detailed", source="llm")],
+        store=_FakeStore(), llm_client=llm, recraft_client=rc,
+    )
+    assert len(llm.calls) == 1 and rc.calls == 0
+
+
+def test_resolver_detailed_without_recraft_client_raises_502_class():
+    # Recraft unset + detailed routing -> RecraftNotConfigured (AdapterClientError -> 502).
+    with pytest.raises(AdapterClientError):
+        resolve_motifs(
+            _layer_intent(), [_spec(complexity="detailed")],
+            store=_FakeStore(), llm_client=_ScriptedLLM(_GOOD_SVG), recraft_client=None,
+        )

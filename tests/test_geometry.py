@@ -1,0 +1,93 @@
+"""Session-13 follow-up: deterministic SVG geometry bbox parser (app/motifs/geometry).
+
+Powers tight-bbox framing in normalize and full-canvas background detection in the
+Recraft gate. Bezier/arc bounds are a safe over-estimate (control points / radius box).
+"""
+
+import xml.etree.ElementTree as ET
+
+import pytest
+
+from app.motifs import geometry as geom
+
+
+def _el(markup: str) -> ET.Element:
+    return ET.fromstring(markup)
+
+
+def test_rect_bbox():
+    assert geom.element_bbox(_el('<rect x="10" y="20" width="30" height="40"/>')) == (
+        10.0, 20.0, 40.0, 60.0,
+    )
+
+
+def test_circle_bbox():
+    assert geom.element_bbox(_el('<circle cx="50" cy="50" r="10"/>')) == (40.0, 40.0, 60.0, 60.0)
+
+
+def test_ellipse_bbox():
+    assert geom.element_bbox(_el('<ellipse cx="50" cy="30" rx="20" ry="10"/>')) == (
+        30.0, 20.0, 70.0, 40.0,
+    )
+
+
+def test_line_bbox():
+    assert geom.element_bbox(_el('<line x1="5" y1="9" x2="15" y2="3"/>')) == (5.0, 3.0, 15.0, 9.0)
+
+
+def test_polygon_bbox():
+    assert geom.element_bbox(_el('<polygon points="0,0 10,0 10,10 0,10"/>')) == (
+        0.0, 0.0, 10.0, 10.0,
+    )
+
+
+def test_path_abs_h_v_commands():
+    # M/H/V/Z rectangle.
+    assert geom.element_bbox(_el('<path d="M2 2 H10 V10 H2 Z"/>')) == (2.0, 2.0, 10.0, 10.0)
+
+
+def test_path_relative_commands():
+    # m5 5 then relative lines forming a 10x10 box from (5,5).
+    assert geom.element_bbox(_el('<path d="m5 5 l10 0 l0 10 z"/>')) == (5.0, 5.0, 15.0, 15.0)
+
+
+def test_path_cubic_uses_control_points_overestimate():
+    # Control points (0,10) and (10,10) bound the curve; endpoints (0,0),(10,0).
+    assert geom.element_bbox(_el('<path d="M0 0 C0 10 10 10 10 0"/>')) == (0.0, 0.0, 10.0, 10.0)
+
+
+def test_nested_group_translate_applies():
+    box = geom.element_bbox(
+        _el('<g transform="translate(100,0)"><rect x="0" y="0" width="10" height="10"/></g>')
+    )
+    assert box == (100.0, 0.0, 110.0, 10.0)
+
+
+def test_nested_group_scale_applies():
+    box = geom.element_bbox(
+        _el('<g transform="scale(2)"><rect x="0" y="0" width="10" height="10"/></g>')
+    )
+    assert box == (0.0, 0.0, 20.0, 20.0)
+
+
+def test_compound_transform_translate_then_scale():
+    box = geom.element_bbox(
+        _el('<g transform="translate(5,5) scale(2)"><rect x="0" y="0" width="10" height="10"/></g>')
+    )
+    assert box == (5.0, 5.0, 25.0, 25.0)
+
+
+def test_matrix_transform():
+    m = geom.parse_transform("matrix(2 0 0 3 1 1)")
+    assert geom._apply(m, 10.0, 10.0) == pytest.approx((21.0, 31.0))
+
+
+def test_bbox_of_multiple_siblings():
+    a = _el('<rect x="0" y="0" width="10" height="10"/>')
+    b = _el('<rect x="20" y="20" width="10" height="10"/>')
+    assert geom.bbox_of([a, b]) == (0.0, 0.0, 30.0, 30.0)
+
+
+def test_empty_group_is_none():
+    assert geom.element_bbox(_el("<g></g>")) is None
+    assert geom.bbox_of([_el("<defs></defs>")]) is None

@@ -133,6 +133,7 @@ def _build_prompt(
                 "view": "front",
                 "style": "flat",
                 "description": "small solid dot",
+                "complexity": "simple",
             }
         ],
     }
@@ -155,6 +156,9 @@ def _build_prompt(
         "- Each motif_specs entry needs: subject (free text, required), part "
         f"(REQUIRED, one of: {part_vocab}), optional view/expression/style, and a short "
         "English description used for retrieval.",
+        '- Optionally add "complexity": "detailed" for painterly / multi-color motifs '
+        '(routed to the Recraft generator), or "simple" for single-color geometric '
+        "motifs (the default; routed to the LLM).",
         "- layer params colors reference palette slot ids, never raw hex.",
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
