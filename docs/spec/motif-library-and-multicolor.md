@@ -312,9 +312,25 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
 - 같은 (프롬프트, seed) → 항상 같은 변형(재현). seed만 바꾸면 다른 변형(다양성).
 - **랜덤 금지** — 결정성 계약 보존.
 
-### 7.2 후보 팬아웃과 결합
-- `candidate_count`로 후보를 만들 때 **후보마다 다른 변형**을 뽑게 해 한 요청에 다양한 시안 제시
-  (`app/engine/candidates.py`의 다양성 축에 "motif variant" 추가).
+### 7.2 후보 팬아웃과 결합 (후속 — 필요 시 구현)
+- **목표**: `candidate_count`로 후보를 만들 때 **후보마다 다른 변형**을 뽑게 해 한 요청에 다양한
+  시안 제시(`app/engine/candidates.py`의 다양성 축에 "motif variant" 추가).
+- **현황**: 미구현. `resolve_motifs()`가 요청당 1회·단일 seed로 `motif_id`를 레이어에 고정한 뒤
+  `generate_candidates`가 돌므로, 한 요청의 N개 후보는 모티프 변형을 공유한다(다양성 축은
+  symmetry/drop_fraction/seed뿐). 요청 seed를 바꾸면 변형이 바뀌는 **요청-레벨 결정성은 정상** —
+  누락은 "한 요청 내 후보 간" 다양성에 한정된다.
+- **보류 판단(correctness 아님, 제품/UX 결정)**: 결정성·재현성을 깨는 버그가 아니라 품질 향상
+  기능이다. 가치는 §8 안전망 논리에 있다 — Tier1이 의미검사를 안 하므로(명세와 안 맞는 모티프가
+  나갈 수 있음) 그 완충재가 "후보 N개"인데, 가장 틀리기 쉬운 축이 모티프 모양 자체라 같은 변형을
+  N개 내보내면 그 축에서 완충이 무력화된다.
+- **실효 전제**: 풀 ≥2(같은 `variant_group`에 curated 변형 2개 이상)일 때만 의미. 롱테일 온디맨드
+  명세는 풀=1 → 자연 degrade(§7.4). S14 시드가 head/인기 명세는 ≥2로 만들어 둠. **head 트래픽
+  비중이 의미 있을 때 구현 권장, tail 위주면 §7.4 degrade에 기대 보류.**
+- **구현 시 주의**: 단순 축 추가가 아니다. (1) `_candidate_id`가 `layout:colorway:seed`만 해싱하므로
+  모티프만 다른 후보끼리 **id가 충돌** — motif_id(또는 resolved-intent 해시)를 접어 넣어야 한다.
+  (2) rank_key·dedup·diversity 경고가 layout_id 중심이라 **layout 다양성 vs motif 변형 다양성의
+  우선순위 결정**이 필요(후보 N개에 두 축 배분). 재현은 resolved-intent 스냅샷(§7.3) 기반이라
+  후보별 intent가 달라져도 깨지지 않는다.
 
 ### 7.3 재현성 (풀 성장 대비 — 리뷰 C2·M5, D17)
 - ⚠️ 정정: `ReproMeta`/`ReproResponse`에는 **`motif_id` 필드가 없다**(`determinism.py`,
