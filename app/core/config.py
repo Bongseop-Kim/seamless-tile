@@ -97,11 +97,14 @@ def get_settings() -> Settings:
 
 
 # Code versions recorded in candidate reproduction metadata (not runtime settings).
-# Bump REGISTRY_VERSION whenever the curated sampling pool changes (spec §7.3/D17): a
-# one-off (unsaved) request's variant selection depends on `% len(pool)`, so pool growth
-# can change results; the bump seals "(prompt, seed, registry_version) -> same result".
-# In S11 the curated pool is degenerate (<=1, Tier2 promotion is S14), so no bump fires
-# yet -- this is the documented contract, exercised in earnest from S14.
+# A one-off (unsaved) request's variant selection depends on `% len(pool)`, so curated
+# pool growth can change results; the seal "(prompt, seed, registry_version) -> same
+# result" (spec §7.3/D17) only holds if the version tracks the pool. The pool is mutable
+# DB state (promotion via the curation CLI), so REGISTRY_VERSION is NOT bumped by hand for
+# pool changes -- `adapters.registry_fingerprint.registry_version_for` derives the stamped
+# value at request time as `REGISTRY_VERSION + "+pool.<hex8>"` over the curated ids. An
+# empty/absent pool stamps the bare baseline below (degenerate S11 == today's value).
+# Bump REGISTRY_VERSION by hand ONLY for repro-format / registry-schema changes.
 ENGINE_VERSION = "0.1.0"
 REGISTRY_VERSION = "0.1.0"
 

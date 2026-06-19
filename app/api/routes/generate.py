@@ -23,6 +23,7 @@ from app.adapters.image import build_intent as image_build_intent
 from app.adapters.llm import build_intent as llm_build_intent
 from app.adapters.motif_resolver import resolve_motifs
 from app.adapters.recraft import get_default_recraft_client
+from app.adapters.registry_fingerprint import registry_version_for
 from app.core.observability import get_request_id, log_metrics
 from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidates
 from app.motifs.store import get_default_store
@@ -108,6 +109,10 @@ async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
             )
         )
 
+    # Derive the repro seal once per request from the live curated pool (spec §7.3/D17):
+    # the version moves with the pool, so unsaved (prompt, seed) requests stay reproducible
+    # within a pool snapshot. Store absent/empty/erroring -> baseline (see helper).
+    reg_version = registry_version_for(get_default_store())
     started = time.perf_counter()
     try:
         result = generate_candidates(
@@ -116,6 +121,7 @@ async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
             seed=request.seed,
             colorway=request.colorway,
             source_fidelity=source_fidelity,
+            registry_version=reg_version,
         )
     except IntentInvalid as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from None
