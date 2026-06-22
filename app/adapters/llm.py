@@ -345,17 +345,6 @@ def _extract_svg(text: str) -> str:
     return match.group(0) if match else text.strip()
 
 
-def _canonical_spec(spec: dict) -> dict:
-    """The normalized facet subset that determines the rendered motif (cache key/freeze).
-
-    Normalizing (NFC/strip/casefold) collapses trivial text variants to one frozen entry
-    so equivalent specs reuse the same generated motif id."""
-    return {
-        k: facets.normalize_facet(spec.get(k))
-        for k in ("subject", "scope", "view", "expression", "style", "description")
-    }
-
-
 def _build_svg_prompt(spec: dict, *, errors: list[str] | None = None) -> str:
     lines = [
         "Draw ONE small motif as a single inline SVG. Output ONLY the SVG markup — "
@@ -400,7 +389,7 @@ def generate_motif_svg(
     ``embedding`` (S11) is the descriptor vector the resolver already computed for the
     miss; it is persisted with the motif so later requests can soft-match it.
     """
-    key = cache_key({"k": "motif_svg", "spec": _canonical_spec(spec)})
+    key = cache_key({"k": "motif_svg", "spec": facets.canonical_spec(spec)})
     if use_cache and key in _motif_svg_cache:
         return _motif_svg_cache[key]
 

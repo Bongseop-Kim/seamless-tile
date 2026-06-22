@@ -20,6 +20,7 @@ with no Supabase env. Explicit callers that go through ``_resolve_store`` get a
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -218,119 +219,105 @@ class PostgresMotifStore:
 
         return psycopg.connect(self._dsn, autocommit=True, connect_timeout=5)
 
-    def upsert(self, record: MotifRecord) -> None:
+    @contextmanager
+    def _cursor(self, op: str):
+        """Yield a cursor for one operation, wrapping any driver/connection failure as
+        a ``MotifStoreError`` tagged with ``op`` ("motif <op> failed: ...")."""
         try:
             with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO motifs "
-                    "(id, symbol, color_slots, bbox, anchor, subject, scope, view, "
-                    " expression, style, description, tags, source, status, quality, "
-                    " variant_group, embedding) "
-                    "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
-                    " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
-                    "ON CONFLICT (id) DO NOTHING",
-                    (
-                        record.id,
-                        record.symbol,
-                        json.dumps(list(record.color_slots)),
-                        json.dumps(list(record.bbox_mm)),
-                        json.dumps(list(record.anchor)),
-                        record.subject,
-                        record.scope,
-                        record.view,
-                        record.expression,
-                        record.style,
-                        record.description,
-                        list(record.tags),
-                        record.source,
-                        record.status,
-                        record.quality,
-                        record.variant_group,
-                        _vector_to_text(record.embedding),
-                    ),
-                )
+                yield cur
         except Exception as exc:  # driver / connection failure
-            raise MotifStoreError(f"motif upsert failed: {exc}") from exc
+            raise MotifStoreError(f"motif {op} failed: {exc}") from exc
+
+    def upsert(self, record: MotifRecord) -> None:
+        with self._cursor("upsert") as cur:
+            cur.execute(
+                "INSERT INTO motifs "
+                "(id, symbol, color_slots, bbox, anchor, subject, scope, view, "
+                " expression, style, description, tags, source, status, quality, "
+                " variant_group, embedding) "
+                "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
+                " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
+                "ON CONFLICT (id) DO NOTHING",
+                (
+                    record.id,
+                    record.symbol,
+                    json.dumps(list(record.color_slots)),
+                    json.dumps(list(record.bbox_mm)),
+                    json.dumps(list(record.anchor)),
+                    record.subject,
+                    record.scope,
+                    record.view,
+                    record.expression,
+                    record.style,
+                    record.description,
+                    list(record.tags),
+                    record.source,
+                    record.status,
+                    record.quality,
+                    record.variant_group,
+                    _vector_to_text(record.embedding),
+                ),
+            )
 
     def get(self, motif_id: str) -> MotifRecord | None:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT {_SELECT_LIST} FROM motifs WHERE id = %s",
-                    (motif_id,),
-                )
-                row = cur.fetchone()
-        except Exception as exc:
-            raise MotifStoreError(f"motif get failed: {exc}") from exc
+        with self._cursor("get") as cur:
+            cur.execute(
+                f"SELECT {_SELECT_LIST} FROM motifs WHERE id = %s",
+                (motif_id,),
+            )
+            row = cur.fetchone()
         return _row_to_record(row) if row else None
 
     def all(self) -> list[MotifRecord]:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(f"SELECT {_SELECT_LIST} FROM motifs ORDER BY id")
-                rows = cur.fetchall()
-        except Exception as exc:
-            raise MotifStoreError(f"motif load failed: {exc}") from exc
+        with self._cursor("load") as cur:
+            cur.execute(f"SELECT {_SELECT_LIST} FROM motifs ORDER BY id")
+            rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
     def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                where, params = _facet_where_clause(scope)
-                cur.execute(
-                    f"SELECT {_SELECT_LIST} FROM motifs "
-                    f"WHERE {where} ORDER BY id",
-                    params,
-                )
-                rows = cur.fetchall()
-        except Exception as exc:
-            raise MotifStoreError(f"motif facet query failed: {exc}") from exc
+        with self._cursor("facet query") as cur:
+            where, params = _facet_where_clause(scope)
+            cur.execute(
+                f"SELECT {_SELECT_LIST} FROM motifs "
+                f"WHERE {where} ORDER BY id",
+                params,
+            )
+            rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
     def find_by_variant_group(
         self, variant_group: str, *, status: str = "curated"
     ) -> list[MotifRecord]:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT {_SELECT_LIST} FROM motifs "
-                    "WHERE variant_group = %s AND status = %s ORDER BY id",
-                    (variant_group, status),
-                )
-                rows = cur.fetchall()
-        except Exception as exc:
-            raise MotifStoreError(f"motif variant-group query failed: {exc}") from exc
+        with self._cursor("variant-group query") as cur:
+            cur.execute(
+                f"SELECT {_SELECT_LIST} FROM motifs "
+                "WHERE variant_group = %s AND status = %s ORDER BY id",
+                (variant_group, status),
+            )
+            rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
     def find_by_status(self, status: str) -> list[MotifRecord]:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT {_SELECT_LIST} FROM motifs "
-                    "WHERE status = %s ORDER BY id",
-                    (status,),
-                )
-                rows = cur.fetchall()
-        except Exception as exc:
-            raise MotifStoreError(f"motif status query failed: {exc}") from exc
+        with self._cursor("status query") as cur:
+            cur.execute(
+                f"SELECT {_SELECT_LIST} FROM motifs "
+                "WHERE status = %s ORDER BY id",
+                (status,),
+            )
+            rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
     def set_status(self, motif_id: str, status: str) -> None:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE motifs SET status = %s WHERE id = %s",
-                    (status, motif_id),
-                )
-        except Exception as exc:
-            raise MotifStoreError(f"motif status update failed: {exc}") from exc
+        with self._cursor("status update") as cur:
+            cur.execute(
+                "UPDATE motifs SET status = %s WHERE id = %s",
+                (status, motif_id),
+            )
 
     def delete(self, motif_id: str) -> None:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                cur.execute("DELETE FROM motifs WHERE id = %s", (motif_id,))
-        except Exception as exc:
-            raise MotifStoreError(f"motif delete failed: {exc}") from exc
+        with self._cursor("delete") as cur:
+            cur.execute("DELETE FROM motifs WHERE id = %s", (motif_id,))
 
 
 def _row_to_record(row) -> MotifRecord:

@@ -1,7 +1,6 @@
-import math
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,8 +20,8 @@ class Settings(BaseSettings):
     # max_placement_instances caps a layer's enumerated placement points; max_svg_bytes
     # caps the composed document before the sanitize re-parse (same order as the export
     # input cap ExportRequest.svg). Tunable per deployment.
-    max_placement_instances: int = 50_000
-    max_svg_bytes: int = 2_000_000
+    max_placement_instances: int = Field(50_000, ge=1)
+    max_svg_bytes: int = Field(2_000_000, ge=1)
 
     # Supabase persistence (session 9). The motif store is "configured" iff
     # supabase_db_url is set; unset => in-memory registry only (tests, local dev).
@@ -42,12 +41,12 @@ class Settings(BaseSettings):
     # reuse-first start value (spec §6.1/D13) pending empirical calibration (spec §12).
     openai_api_key: str | None = None  # env: OPENAI_API_KEY
     embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
-    motif_similarity_tau: float = 0.60  # env: MOTIF_SIMILARITY_TAU
+    motif_similarity_tau: float = Field(0.60, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
 
     # Recraft motif generation (session 13, D11/M1). The detailed/painterly miss path
     # routes to Recraft; its output is path-flattened and its color count capped to this
     # many slots (excess colors are deterministically merged; spec §6.2/§12).
-    recraft_max_color_slots: int = 6  # env: RECRAFT_MAX_COLOR_SLOTS
+    recraft_max_color_slots: int = Field(6, ge=1)  # env: RECRAFT_MAX_COLOR_SLOTS
     # Recraft vector API. When recraft_api_key is set, app.main installs a
     # RecraftHTTPClient as the default Recraft client at boot; unset => detailed misses
     # surface 502 (no generator). The vector endpoint returns an SVG file per slot.
@@ -66,48 +65,9 @@ class Settings(BaseSettings):
     # - render_check: master switch for the render-dependent checks (#4 render error
     #   + #5 edge_seam); when off, or when no SVG renderer is installed, those checks
     #   are skipped (best-effort; the pure-geometry checks still run).
-    motif_max_aspect_ratio: float = 20.0  # env: MOTIF_MAX_ASPECT_RATIO
-    motif_edge_seam_tol: float = 2.0  # env: MOTIF_EDGE_SEAM_TOL
+    motif_max_aspect_ratio: float = Field(20.0, gt=1.0, allow_inf_nan=False)  # env: MOTIF_MAX_ASPECT_RATIO
+    motif_edge_seam_tol: float = Field(2.0, gt=0.0, allow_inf_nan=False)  # env: MOTIF_EDGE_SEAM_TOL
     motif_render_check: bool = True  # env: MOTIF_RENDER_CHECK
-
-    @field_validator("motif_similarity_tau")
-    @classmethod
-    def _validate_motif_similarity_tau(cls, value: float) -> float:
-        if not 0.0 <= value <= 1.0:
-            raise ValueError("motif_similarity_tau must be between 0 and 1")
-        return value
-
-    @field_validator("recraft_max_color_slots")
-    @classmethod
-    def _validate_recraft_max_color_slots(cls, value: int) -> int:
-        if value < 1:
-            raise ValueError("recraft_max_color_slots must be at least 1")
-        return value
-
-    @field_validator("motif_max_aspect_ratio")
-    @classmethod
-    def _validate_motif_max_aspect_ratio(cls, value: float) -> float:
-        if not math.isfinite(value):
-            raise ValueError("motif_max_aspect_ratio must be finite")
-        if value <= 1.0:
-            raise ValueError("motif_max_aspect_ratio must be greater than 1")
-        return value
-
-    @field_validator("motif_edge_seam_tol")
-    @classmethod
-    def _validate_motif_edge_seam_tol(cls, value: float) -> float:
-        if not math.isfinite(value):
-            raise ValueError("motif_edge_seam_tol must be finite")
-        if value <= 0.0:
-            raise ValueError("motif_edge_seam_tol must be greater than 0")
-        return value
-
-    @field_validator("max_placement_instances", "max_svg_bytes")
-    @classmethod
-    def _validate_positive_ceiling(cls, value: int) -> int:
-        if value < 1:
-            raise ValueError("resource ceiling must be at least 1")
-        return value
 
 
 @lru_cache
