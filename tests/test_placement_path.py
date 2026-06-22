@@ -114,6 +114,12 @@ def test_phase_mm_wraps_into_closure_period():
     assert pts(wrapped) == pts(in_range)  # out-of-range phase wraps to the same set
 
 
+def test_degenerate_zero_length_lane_returns_no_instances():
+    host = FakeHost([_lane(angle_deg=0.0, p=0, q=0)])
+
+    assert place_path_following(host, _placement(spacing_mm=10.0, phase_mm=3.0), 48.0) == []
+
+
 def test_rotation_follow_path_uses_tangent():
     host = FakeHost([_lane(angle_deg=30.0, p=1, q=2)])
     instances = place_path_following(

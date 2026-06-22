@@ -21,6 +21,18 @@ def test_settings_validates_recraft_max_color_slots():
         Settings(_env_file=None, recraft_max_color_slots=0)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_settings_rejects_non_finite_motif_max_aspect_ratio(value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, motif_max_aspect_ratio=value)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_settings_rejects_non_finite_motif_edge_seam_tol(value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, motif_edge_seam_tol=value)
+
+
 def test_settings_resource_ceiling_defaults():
     s = Settings(_env_file=None)
     assert s.max_placement_instances == 50_000

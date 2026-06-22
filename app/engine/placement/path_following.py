@@ -87,6 +87,8 @@ def place_path_following(
 
     centerline = _resolve_centerline(host, placement, tile_mm)
     length = centerline.length_mm(tile_mm)
+    if length <= 0.0:
+        return []
     # Snap the requested step to an exact divisor of the closure length so the rhythm is
     # uniform across the torus wrap (diagonal lanes rarely divide `length` evenly).
     _, spacing = snap_spacing(length, placement.spacing_mm)

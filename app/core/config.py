@@ -1,3 +1,4 @@
+import math
 from functools import lru_cache
 
 from pydantic import field_validator
@@ -86,6 +87,8 @@ class Settings(BaseSettings):
     @field_validator("motif_max_aspect_ratio")
     @classmethod
     def _validate_motif_max_aspect_ratio(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("motif_max_aspect_ratio must be finite")
         if value <= 1.0:
             raise ValueError("motif_max_aspect_ratio must be greater than 1")
         return value
@@ -93,6 +96,8 @@ class Settings(BaseSettings):
     @field_validator("motif_edge_seam_tol")
     @classmethod
     def _validate_motif_edge_seam_tol(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("motif_edge_seam_tol must be finite")
         if value <= 0.0:
             raise ValueError("motif_edge_seam_tol must be greater than 0")
         return value

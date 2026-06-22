@@ -7,6 +7,7 @@ the LLM/image builder is session 7. Diversification, ranking and de-dup live in
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import asdict
 
@@ -112,7 +113,10 @@ async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
     # Derive the repro seal once per request from the live curated pool (spec §7.3/D17):
     # the version moves with the pool, so unsaved (prompt, seed) requests stay reproducible
     # within a pool snapshot. Store absent/empty/erroring -> baseline (see helper).
-    reg_version = registry_version_for(get_default_store())
+    loop = asyncio.get_event_loop()
+    reg_version = await loop.run_in_executor(
+        None, registry_version_for, get_default_store()
+    )
     started = time.perf_counter()
     try:
         result = generate_candidates(
