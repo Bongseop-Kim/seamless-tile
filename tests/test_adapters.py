@@ -380,7 +380,7 @@ def test_route_prompt_path_returns_candidates(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["candidates"]
-    assert body["candidates"][0]["source_fidelity"] == "vector"
+    assert set(body["candidates"][0]) == {"id", "png_url"}
 
 
 def test_route_image_path_threads_source_fidelity(monkeypatch):
@@ -390,12 +390,19 @@ def test_route_image_path_threads_source_fidelity(monkeypatch):
         )
 
     monkeypatch.setattr(gen_route, "image_build_intent", fake)
+    # source_fidelity is no longer in the response; it is threaded into the generation
+    # log row instead. Capture the row to assert the threading still holds.
+    captured: list = []
+    monkeypatch.setattr(
+        gen_route, "insert_generation_log", lambda row: captured.append(row)
+    )
     resp = client.post("/api/v1/generate", json={"reference_image": "ZmFrZQ=="})
     assert resp.status_code == 200
     body = resp.json()
     assert body["candidates"]
-    assert all(c["source_fidelity"] == "raster_hybrid" for c in body["candidates"])
     assert "texture unfit" in body["warnings"]
+    assert captured, "expected a generation log row"
+    assert all(c["source_fidelity"] == "raster_hybrid" for c in captured[0].candidates)
 
 
 def test_route_adapter_invalid_returns_422(monkeypatch):

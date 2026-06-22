@@ -18,6 +18,7 @@ from app.adapters.llm import (
     set_default_client,
 )
 from app.adapters.motif_resolver import resolve_motifs
+import app.api.routes.generate as gen_route
 from app.main import app
 from app.motifs import store as store_mod
 from app.motifs.registry import MOTIFS, get_motif
@@ -289,32 +290,42 @@ def _miss_intent_and_specs():
     return intent, specs
 
 
-def test_route_prompt_miss_generates_and_composes():
+def test_route_prompt_miss_generates_and_composes(monkeypatch):
     intent, specs = _miss_intent_and_specs()
     set_default_client(_ScriptedLLM(_wrapped(intent, specs), _GOOD_SVG))
+    captured: list = []
+    monkeypatch.setattr(
+        gen_route, "insert_generation_log", lambda row: captured.append(row)
+    )
     resp = client.post("/api/v1/generate", json={"prompt": "돼지 무늬", "seed": 0})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["candidates"]
-    # the resolved (concrete) motif id was injected into the candidate intent
+    assert captured, "expected a generation log row"
+    # the resolved (concrete) motif id was injected into the logged (resolved) intent
     motif_ids = {
         layer["params"]["motif_id"]
-        for c in body["candidates"]
-        for layer in c["intent"]["layers"]
+        for layer in captured[0].intent["layers"]
         if layer["type"] == "motif"
     }
     assert any(m.startswith("recraft-") for m in motif_ids)  # generated motif present
     assert "bee" in motif_ids  # unspecced built-in layer preserved
 
 
-def test_route_prompt_same_seed_is_deterministic():
+def test_route_prompt_same_seed_is_deterministic(monkeypatch):
     intent, specs = _miss_intent_and_specs()
     set_default_client(_ScriptedLLM(_wrapped(intent, specs), _GOOD_SVG))
+    captured: list = []
+    monkeypatch.setattr(
+        gen_route, "insert_generation_log", lambda row: captured.append(row)
+    )
     a = client.post("/api/v1/generate", json={"prompt": "돼지 무늬", "seed": 7})
     b = client.post("/api/v1/generate", json={"prompt": "돼지 무늬", "seed": 7})
     assert a.status_code == b.status_code == 200
-    svgs_a = [c["svg"] for c in a.json()["candidates"]]
-    svgs_b = [c["svg"] for c in b.json()["candidates"]]
+    assert len(captured) == 2
+    # the byte-identical SVG is preserved in the log row (no longer in the response)
+    svgs_a = [c["svg"] for c in captured[0].candidates]
+    svgs_b = [c["svg"] for c in captured[1].candidates]
     assert svgs_a == svgs_b  # byte-identical across repeats (caches + content-hash id)
 
 

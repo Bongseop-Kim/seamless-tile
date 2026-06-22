@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     supabase_db_url: str | None = None  # postgresql://...  (env: SUPABASE_DB_URL)
     supabase_service_key: str | None = None
 
+    # Candidate preview PNGs (generate route). SVG is rendered once at generate time and
+    # uploaded to Supabase Storage; the response carries only the public URL (no re-render
+    # on access). Configured iff supabase_url + supabase_service_key are set; unset =>
+    # preview upload is a graceful no-op (png_url is null + a warning), like the motif store.
+    supabase_url: str | None = None  # https://<ref>.supabase.co  (env: SUPABASE_URL)
+    preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
+    preview_dpi: int = Field(96, ge=1)  # env: PREVIEW_DPI; tile preview raster resolution
+
     # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
     # GeminiClient as the default LLM client at boot; unset => no default (tests inject
     # fakes).
