@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import asdict
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from app.api.schemas.generate import (
     CandidateResponse,
@@ -36,6 +37,94 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 # (the intent is then authoritative); they ARE honored on the prompt/image paths.
 _INTENT_DIRECT_IGNORED = ("prompt", "reference_image", "canvas", "palette")
 
+_GENERATE_DESCRIPTION = """
+`intent`, `reference_image`, `prompt` 중 하나로 seamless SVG candidate를 생성합니다.
+
+입력 우선순위는 `intent > reference_image > prompt`입니다. `intent`를 직접 보내면
+외부 adapter 없이 deterministic engine에 그대로 전달됩니다. `prompt`와
+`reference_image` 경로는 LLM/Recraft/image adapter 설정이 필요하며, 미설정 시
+`502`가 반환될 수 있습니다.
+
+`candidate_count`는 `1..8` 범위입니다. 같은 `intent`, `seed`, `colorway` 조합은
+동일 SVG를 반환합니다.
+""".strip()
+
+_INTENT_DIRECT_EXAMPLE = {
+    "intent": {
+        "intent_version": 1,
+        "canvas": {"tile_mm": 48, "dpi": 300},
+        "seed": 184231,
+        "production": {"method": "digital", "max_colors": 12},
+        "palette": {
+            "slots": [
+                {"id": "ground", "hex": "#10243a", "name": "navy"},
+                {"id": "accent", "hex": "#ef8a7a"},
+            ]
+        },
+        "colorways": [
+            {
+                "id": "default",
+                "name": "default",
+                "mapping": {"ground": "#10243a", "accent": "#ef8a7a"},
+            },
+            {
+                "id": "inverse",
+                "name": "inverse",
+                "mapping": {"ground": "#ef8a7a", "accent": "#10243a"},
+            },
+        ],
+        "layers": [
+            {
+                "id": "ground",
+                "type": "background",
+                "z_order": 0,
+                "params": {"color": "ground"},
+            },
+            {
+                "id": "stripe_base",
+                "type": "stripe",
+                "z_order": 1,
+                "params": {
+                    "angle": -36.87,
+                    "period_mm": 9.6,
+                    "bands": [
+                        {"offset_mm": 0, "width_mm": 4.8, "color": "accent"}
+                    ],
+                },
+            },
+        ],
+    },
+    "candidate_count": 2,
+    "seed": 999,
+}
+
+_GENERATE_OPENAPI_EXAMPLES = {
+    "intent_direct": {
+        "summary": "Intent 직접 입력",
+        "description": "외부 adapter 없이 deterministic engine에 직접 전달되는 intent 요청 예시입니다.",
+        "value": _INTENT_DIRECT_EXAMPLE,
+    },
+    "intent_colorway": {
+        "summary": "Colorway 선택",
+        "description": "`intent.colorways`에 있는 colorway id를 지정해 동일 intent의 색상 변형을 생성합니다.",
+        "value": {
+            **_INTENT_DIRECT_EXAMPLE,
+            "colorway": "inverse",
+            "candidate_count": 1,
+        },
+    },
+    "prompt_adapter": {
+        "summary": "Prompt 입력",
+        "description": "LLM/Recraft adapter 설정이 있을 때 사용하는 제품 surface 요청 예시입니다.",
+        "value": {
+            "prompt": "navy paisley tie with small gold accents",
+            "canvas": {"tile_mm": 48, "dpi": 300},
+            "candidate_count": 4,
+            "seed": 184231,
+        },
+    },
+}
+
 
 def _run_adapter(call):
     """Invoke an adapter, mapping its failures to HTTP status: IntentInvalid -> 422
@@ -48,8 +137,18 @@ def _run_adapter(call):
         raise HTTPException(status_code=502, detail=[str(exc)]) from None
 
 
-@router.post("", response_model=GenerateResponse)
-async def generate_candidate(request: GenerateRequest) -> GenerateResponse:
+@router.post(
+    "",
+    response_model=GenerateResponse,
+    summary="Generate seamless SVG candidates",
+    description=_GENERATE_DESCRIPTION,
+)
+async def generate_candidate(
+    request: Annotated[
+        GenerateRequest,
+        Body(openapi_examples=_GENERATE_OPENAPI_EXAMPLES),
+    ],
+) -> GenerateResponse:
     # Resolve the intent: direct > reference_image > prompt. The adapters live outside
     # the engine; they freeze/cache their (non-deterministic) output so the pipeline
     # below stays deterministic. Adapter IntentInvalid -> 422 (after its own one-shot
