@@ -91,11 +91,12 @@ class ReproMeta:
         seed: int,
         colorway_id: str,
         layout_id: str | None = None,
+        registry_version: str = REGISTRY_VERSION,
     ) -> "ReproMeta":
         return cls(
             intent_version=intent_version,
             engine_version=ENGINE_VERSION,
-            registry_version=REGISTRY_VERSION,
+            registry_version=registry_version,
             seed=seed,
             colorway_id=colorway_id,
             layout_id=layout_id,

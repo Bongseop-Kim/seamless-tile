@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.core.config import REGISTRY_VERSION
 from app.engine.composition import compose
 from app.engine.determinism import ReproMeta, layout_id_for
 from app.engine.seamless import assert_seamless_invariants
@@ -29,11 +30,19 @@ class Candidate:
     layout_id: str | None = None
 
 
-def generate(raw, *, colorway_id: str = "default", seed: int | None = None) -> Candidate:
+def generate(
+    raw,
+    *,
+    colorway_id: str = "default",
+    seed: int | None = None,
+    registry_version: str = REGISTRY_VERSION,
+) -> Candidate:
     """Generate a single seamless SVG candidate from a raw or parsed intent.
 
     ``seed`` overrides the intent's seed in the reproduction metadata when given;
-    otherwise the intent's own seed is recorded.
+    otherwise the intent's own seed is recorded. ``registry_version`` is stamped into
+    the repro meta as-is (the route derives it from the curated pool); it defaults to
+    the baseline constant so direct engine callers stay store-free.
     """
     result = validate_intent(raw)
     effective_seed = result.intent.seed if seed is None else seed
@@ -46,6 +55,7 @@ def generate(raw, *, colorway_id: str = "default", seed: int | None = None) -> C
         seed=effective_seed,
         colorway_id=colorway_id,
         layout_id=layout_id,
+        registry_version=registry_version,
     )
     return Candidate(
         svg=svg,

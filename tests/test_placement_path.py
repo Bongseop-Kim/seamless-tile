@@ -89,6 +89,37 @@ def test_diagonal_spacing_snaps_for_uniform_wrap():
     assert gap != pytest.approx(spacing)  # would equal raw spacing before the fix
 
 
+def test_phase_mm_wraps_into_closure_period():
+    """A6: phase_mm >= lane closure wraps (modulo L) instead of emitting an empty layer.
+
+    Byte-identical for in-range phases (phase % L == phase), so determinism holds; the
+    only behavior change is the out-of-range case that used to silently place nothing.
+    """
+    tile = 48.0
+    host = FakeHost([_lane(angle_deg=0.0, p=0, q=1)])  # axis-aligned: closure L == tile
+    closure = tile * math.hypot(0, 1)
+    spacing = 6.0  # divides the closure exactly (no snap)
+
+    in_range = place_path_following(host, _placement(spacing_mm=spacing, phase_mm=4.0), tile)
+    wrapped = place_path_following(
+        host, _placement(spacing_mm=spacing, phase_mm=4.0 + 3 * closure), tile
+    )
+
+    def pts(insts):
+        return [
+            (round(i.x_mm, 9), round(i.y_mm, 9), round(i.rotation_deg, 9)) for i in insts
+        ]
+
+    assert len(in_range) > 0  # sanity: in-range phase places instances
+    assert pts(wrapped) == pts(in_range)  # out-of-range phase wraps to the same set
+
+
+def test_degenerate_zero_length_lane_returns_no_instances():
+    host = FakeHost([_lane(angle_deg=0.0, p=0, q=0)])
+
+    assert place_path_following(host, _placement(spacing_mm=10.0, phase_mm=3.0), 48.0) == []
+
+
 def test_rotation_follow_path_uses_tangent():
     host = FakeHost([_lane(angle_deg=30.0, p=1, q=2)])
     instances = place_path_following(

@@ -20,10 +20,10 @@ miss면 **LLM이 단색 SVG를 생성·등록**, concrete `motif_id`를 intent�
 S9 완료(모티프 DB 영속화·조회).
 
 ## 범위
-- `llm.build_intent` 확장: intent + **모티프 명세 리스트** 산출. `subject`·`part`는 **통제 어휘 주입 +
-  어휘 외 출력 시 1회 재프롬프트 후 거부**(M2). 채팅 모델 = **Gemini 2.5 Flash-Lite/Flash**(D12).
-- (신규) `app/adapters/motif_resolver.py`: **정확매칭(정규화 descriptor 완전 일치) → `subject`·`part`
-  하드필터** → miss 판정. `part` 미존재 시 false-miss→생성 폴백.
+- `llm.build_intent` 확장: intent + **모티프 명세 리스트** 산출. **`scope`만** 통제 어휘(`whole | partial`)
+  주입 + 어휘 외 출력 시 1회 재프롬프트 후 거부(M2). `subject`는 자유 텍스트(필수). 채팅 모델 = **Gemini 2.5 Flash-Lite/Flash**(D12).
+- (신규) `app/adapters/motif_resolver.py`: **정확매칭(정규화 descriptor 완전 일치) → `scope`
+  하드필터** → miss 판정. `scope` 미지정 시 false-miss→생성 폴백.
 - miss 시 **LLM 단색 SVG 생성** → `normalize_motif_svg` → `register_motif`(S9 경유).
 - concrete `motif_id`를 해당 motif 레이어에 주입 → 엔진 compose.
 - 에러 매핑(§6.4): 명세 실패/어휘 외 → 422, 생성 실패 → 502, 부분 성공 규칙.

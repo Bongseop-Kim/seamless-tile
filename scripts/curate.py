@@ -57,10 +57,10 @@ def _cmd_list(store, status: str) -> int:
         print(f"(no motifs with status={status!r})")
         return 0
     print(f"{len(rows)} motif(s) with status={status!r}:")
-    print(f"{'id':<28} {'subject':<14} {'part':<8} {'source':<8} variant_group")
+    print(f"{'id':<28} {'subject':<14} {'scope':<8} {'source':<8} variant_group")
     for r in rows:
         print(
-            f"{r.id:<28} {(r.subject or '-'):<14} {(r.part or '-'):<8} "
+            f"{r.id:<28} {(r.subject or '-'):<14} {(r.scope or '-'):<8} "
             f"{r.source:<8} {r.variant_group or '-'}"
         )
     return 0

@@ -41,7 +41,7 @@ def test_upsert_get_roundtrip_and_idempotent():
         bbox_mm=(-0.5, -0.5, 0.5, 0.5),
         anchor=(0.0, 0.0),
         subject="pig",
-        part="face",
+        scope="whole",
         view="front",  # exercises the `view` column (a non-reserved keyword) round-trip
         tags=["cute", "baby"],
         variant_group="abc123",
@@ -58,7 +58,7 @@ def test_upsert_get_roundtrip_and_idempotent():
         assert got.color_slots == ["s0"]
         assert got.tags == ["cute", "baby"]
         assert got.subject == "pig"
-        assert got.part == "face"
+        assert got.scope == "whole"
         assert got.view == "front"
 
         # also assert idempotency at the DB layer: exactly one row for this id
@@ -80,7 +80,7 @@ def test_upsert_get_roundtrip_embedding():
         bbox_mm=(-0.5, -0.5, 0.5, 0.5),
         anchor=(0.0, 0.0),
         subject="pig",
-        part="face",
+        scope="whole",
         embedding=vec,
     )
     try:
@@ -102,7 +102,7 @@ def test_set_status_delete_and_find_by_status_roundtrip():
         bbox_mm=(-0.5, -0.5, 0.5, 0.5),
         anchor=(0.0, 0.0),
         subject="pig",
-        part="face",
+        scope="whole",
         variant_group="abc123",
     )  # status defaults to 'auto'
     try:

@@ -6,7 +6,7 @@ selection is a *pure, deterministic* step; the non-deterministic pieces (embeddi
 search, miss-path SVG generation) are frozen by adapter caches, so the determinism
 contract holds: the engine only ever sees an intent with concrete motif ids.
 
-Retrieval (spec §6.1, D18): **exact descriptor match** → **subject/part hard filter** →
+Retrieval (spec §6.1, D18): **exact descriptor match** → **scope hard filter** →
 **embedding soft similarity (τ gate)** → **generate-on-miss**. Every hit routes through
 the variant_group's curated sampling pool (§7.1); when that pool is empty (degenerate
 until S14 curation), it falls back to the matched motif. The embedding stage is
@@ -29,8 +29,8 @@ from app.engine import determinism
 from app.motifs import facets
 from app.motifs.store import MotifStoreError, get_default_store
 
-# Facets that define an "exact descriptor" (controlled + light free facets, P0).
-_EXACT_FACETS = ("subject", "part", "view", "expression", "style")
+# Facets that define an "exact descriptor" (subject + scope + light free facets, P0).
+_EXACT_FACETS = ("subject", "scope", "view", "expression", "style")
 
 # Valid explicit generation-source overrides on a motif spec (D11).
 _SOURCE_OVERRIDES = {"llm", "recraft"}
@@ -59,19 +59,20 @@ def _descriptor_text(spec: dict) -> str:
 
     Prefers an explicit ``description``; otherwise synthesizes one from the facets with a
     FIXED algorithm so two implementations produce the same string: empty facets are
-    dropped, tokens are single-spaced, and there are no dangling commas.
+    dropped, tokens are single-spaced, and there are no dangling commas. ``scope`` is a
+    granularity guardrail (whole/partial), not a meaning token, so it is deliberately
+    left out of the embedding text — it already separates candidates via the hard filter.
     """
     description = (spec.get("description") or "").strip()
     if description:
         return description
     subject = (spec.get("subject") or "").strip()
-    part = (spec.get("part") or "").strip()
     expression = (spec.get("expression") or "").strip()
     style = (spec.get("style") or "").strip()
     view = (spec.get("view") or "").strip()
-    head = " ".join(t for t in (expression, subject, part) if t)
+    head = " ".join(t for t in (expression, subject) if t)
     view_clause = f"{view} view" if view else ""
-    return ", ".join(part_ for part_ in (head, view_clause, style) if part_)
+    return ", ".join(seg for seg in (head, view_clause, style) if seg)
 
 
 def _exact_match(spec: dict, candidates: list) -> str | None:
@@ -140,14 +141,14 @@ def _select_variant(store, variant_group, seed: int, fallback_id: str) -> str:
 def _resolve_one(
     spec: dict, *, store, llm_client, recraft_client, embedding_client, seed: int
 ) -> str:
-    # Normalize the controlled facets so the DB filter, the exact-match comparison, and
-    # the generated motif's stored facets all agree (NFC + strip + casefold).
-    subject = facets.normalize_facet(spec.get("subject"))
-    part = facets.normalize_facet(spec.get("part"))
+    # Normalize the controlled facet so the DB filter, the exact-match comparison, and
+    # the generated motif's stored facets all agree (NFC + strip + casefold). `scope` is
+    # the only hard filter; `subject` (free text) discrimination is the embedding's job.
+    scope = facets.normalize_facet(spec.get("scope"))
     query_vec: list[float] | None = None
-    if subject and part and store is not None:
+    if scope and store is not None:
         try:
-            candidates = store.find_by_facets(subject, part)
+            candidates = store.find_by_facets(scope)
         except MotifStoreError:
             # A flaky DB read is treated as a miss (graceful, spec §6.4): regeneration is
             # idempotent via the content-hash id, so correctness is preserved.
@@ -191,6 +192,7 @@ def resolve_motifs(
     recraft_client=None,
     embedding_client=None,
     seed: int = 0,
+    warnings: list[str] | None = None,
 ) -> dict:
     """Return a copy of ``intent`` with each motif layer's ``params.motif_id`` resolved.
 
@@ -199,29 +201,96 @@ def resolve_motifs(
     seed-sampled from the curated variant pool. ``seed`` must be the SAME effective seed
     the engine composes with (the route unifies it) so variant selection and composition
     agree. Layers without a matching spec are left untouched.
+
+    Tier-1 gate handling (spec §6.4): when a motif exhausts its sanitize/structure gate
+    (the adapter already regenerated once), its layer is dropped instead of failing the
+    whole request, and any layer that hosts on a dropped layer is dropped too (cascade,
+    so a dangling ``host_layer`` cannot turn partial success into a 422). If at least one
+    motif still resolves, the surviving intent is returned and a drop warning per dropped
+    layer is appended to ``warnings`` (partial success → 200). If every attempted motif
+    fails — or the cascade leaves no layers — an :class:`AdapterClientError` is raised
+    (the route maps it to 502).
     """
     if not motif_specs:
         return intent
     if store is None:
         store = get_default_store()
 
+    sink = warnings if warnings is not None else []
     resolved = copy.deepcopy(intent)
     layers_by_id = {
         layer.get("id"): layer
         for layer in resolved.get("layers", [])
         if isinstance(layer, dict)
     }
+    attempted: set[str] = set()
+    failed: set[str] = set()
+    reasons: dict[str, str] = {}
     for spec in motif_specs:
         layer = layers_by_id.get(spec.get("layer_id"))
         if layer is None or layer.get("type") != "motif":
             continue
-        motif_id = _resolve_one(
-            spec,
-            store=store,
-            llm_client=llm_client,
-            recraft_client=recraft_client,
-            embedding_client=embedding_client,
-            seed=seed,
-        )
+        lid = layer.get("id")
+        attempted.add(lid)
+        try:
+            motif_id = _resolve_one(
+                spec,
+                store=store,
+                llm_client=llm_client,
+                recraft_client=recraft_client,
+                embedding_client=embedding_client,
+                seed=seed,
+            )
+        except AdapterClientError:
+            failed.add(lid)
+            reasons[lid] = f"{spec.get('subject', '?')}/{spec.get('scope', '?')}"
+            continue
         layer.setdefault("params", {})["motif_id"] = motif_id
+
+    if not failed:
+        return resolved
+
+    # Spec §6.4: every attempted motif failed → 502 (no partial result is meaningful).
+    if not (attempted - failed):
+        raise AdapterClientError(
+            f"all {len(attempted)} motif(s) failed the Tier-1 sanitize/structure gate"
+        )
+
+    # Cascade to a fixpoint: a layer hosting on a dropped layer can no longer compose.
+    dropped = set(failed)
+    while True:
+        grew = False
+        for layer in resolved.get("layers", []):
+            lid = layer.get("id")
+            if lid in dropped:
+                continue
+            host = (layer.get("placement") or {}).get("host_layer")
+            if host in dropped:
+                dropped.add(lid)
+                reasons[lid] = f"host_layer {host!r}"
+                grew = True
+        if not grew:
+            break
+
+    survivors = [
+        layer for layer in resolved.get("layers", []) if layer.get("id") not in dropped
+    ]
+    if not survivors:
+        raise AdapterClientError("motif drop cascade left no composable layers")
+
+    # Warn in layer order (deterministic), distinguishing gate failures from cascades.
+    for layer in resolved.get("layers", []):
+        lid = layer.get("id")
+        if lid not in dropped:
+            continue
+        if lid in failed:
+            sink.append(
+                f"motif layer {lid!r} dropped after Tier-1 gate exhausted "
+                f"({reasons[lid]})"
+            )
+        else:
+            sink.append(
+                f"layer {lid!r} dropped because its {reasons[lid]} was dropped"
+            )
+    resolved["layers"] = survivors
     return resolved

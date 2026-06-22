@@ -17,6 +17,7 @@ y-coordinate only on (column, row), so the ``nx*ny`` enumerated points are disti
 
 from __future__ import annotations
 
+from app.core.config import get_settings
 from app.engine.intent import Placement
 from app.engine.placement.path_following import Instance
 
@@ -30,6 +31,13 @@ def place_lattice(placement: Placement, tile_mm: float) -> list[Instance]:
     drop = spec.drop_fraction or 0.0
     nx = round(tile_mm / cw)
     ny = round(tile_mm / ch)
+    # Defensive cap for direct engine callers that bypass validate_intent (the API path
+    # already rejects this at stage-0); keeps a tiny cell from enumerating billions.
+    if nx * ny > get_settings().max_placement_instances:
+        raise ValueError(
+            f"lattice would place {nx * ny} instances "
+            f"(> max_placement_instances {get_settings().max_placement_instances})"
+        )
 
     if spec.drop_axis == "column":
         b1 = (cw, ch * drop)

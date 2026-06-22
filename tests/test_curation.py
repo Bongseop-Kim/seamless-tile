@@ -45,9 +45,9 @@ class _FakeStore:
     def all(self):
         return sorted(self.rows.values(), key=lambda r: r.id)
 
-    def find_by_facets(self, subject, part):
+    def find_by_facets(self, scope):
         return sorted(
-            (r for r in self.rows.values() if r.subject == subject and r.part == part),
+            (r for r in self.rows.values() if r.scope == scope),
             key=lambda r: r.id,
         )
 
@@ -96,7 +96,7 @@ def _clean():
 def _register(fake, inner, *, status="auto"):
     set_default_store(fake)
     motif = normalize_motif_svg(_svg(inner))
-    return register_motif(motif, subject="flower", part="whole", status=status)
+    return register_motif(motif, subject="flower", scope="whole", status=status)
 
 
 # --- status threading through register_motif --------------------------------

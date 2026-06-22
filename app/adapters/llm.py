@@ -19,6 +19,7 @@ import re
 from typing import Protocol, runtime_checkable
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
+from app.core.config import get_settings
 from app.motifs import facets
 from app.motifs.registry import MOTIFS, normalize_motif_svg, register_motif
 from app.render.sanitize import SanitizeError
@@ -122,14 +123,14 @@ def _build_prompt(
 ) -> str:
     target_canvas = canvas or {"tile_mm": DEFAULT_TILE_MM, "dpi": DEFAULT_DPI}
     builtin_ids = ", ".join(sorted(MOTIFS))
-    part_vocab = ", ".join(sorted(facets.PART_VOCAB))
+    scope_vocab = ", ".join(sorted(facets.SCOPE_VOCAB))
     example = {
         "intent": _EXAMPLE_INTENT,
         "motif_specs": [
             {
                 "layer_id": "dot_lane",
                 "subject": "circle",
-                "part": "whole",
+                "scope": "whole",
                 "view": "front",
                 "style": "flat",
                 "description": "small solid dot",
@@ -153,9 +154,11 @@ def _build_prompt(
         "whose layer_id equals the layer id. Do NOT invent registry ids.",
         f"- You MAY instead reference a built-in motif directly (motif_id one of: "
         f"{builtin_ids}); omit its motif_specs entry if you do.",
-        "- Each motif_specs entry needs: subject (free text, required), part "
-        f"(REQUIRED, one of: {part_vocab}), optional view/expression/style, and a short "
-        "English description used for retrieval.",
+        "- Each motif_specs entry needs: subject (free text, required — any object, "
+        "shape, or abstract idea), scope "
+        f"(REQUIRED, one of: {scope_vocab}) — the motif's granularity: 'whole' for the "
+        "full subject, 'partial' for a sub-region/detail — optional view/expression/"
+        "style, and a short English description used for retrieval.",
         '- Optionally add "complexity": "detailed" for painterly / multi-color motifs '
         '(routed to the Recraft generator), or "simple" for single-color geometric '
         "motifs (the default; routed to the LLM).",
@@ -212,8 +215,8 @@ def _split_intent_and_specs(raw: dict) -> tuple[dict, list[dict]]:
 
 
 def _validate_spec_facets(specs: list[dict]) -> list[str]:
-    """Validate motif-spec facets against the controlled vocab (M2). ``part`` is
-    controlled (``facets.PART_VOCAB``); ``subject`` is open in P0 but required. Returns
+    """Validate motif-spec facets against the controlled vocab (M2). ``scope`` is
+    controlled (``facets.SCOPE_VOCAB``); ``subject`` is free text but required. Returns
     a list of error strings (empty == valid) fed back into the one re-prompt."""
     errors: list[str] = []
     for i, spec in enumerate(specs):
@@ -223,11 +226,10 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
         subject = spec.get("subject")
         if not isinstance(subject, str) or not subject.strip():
             errors.append(f"motif_specs[{i}] missing non-empty 'subject'")
-            subject = None
-        part = spec.get("part")
-        if not isinstance(part, str) or not part.strip():
+        scope = spec.get("scope")
+        if not isinstance(scope, str) or not scope.strip():
             errors.append(
-                f"motif_specs[{i}] missing 'part' (one of {sorted(facets.PART_VOCAB)})"
+                f"motif_specs[{i}] missing 'scope' (one of {sorted(facets.SCOPE_VOCAB)})"
             )
             continue
         for field in ("view", "expression", "style", "description"):
@@ -235,7 +237,7 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
             if value is not None and not isinstance(value, str):
                 errors.append(f"motif_specs[{i}] field '{field}' must be a string")
         try:
-            facets.validate_facets(subject, part)
+            facets.validate_facets(scope)
         except ValueError as exc:
             errors.append(f"motif_specs[{i}]: {exc}")
     return errors
@@ -350,7 +352,7 @@ def _canonical_spec(spec: dict) -> dict:
     so equivalent specs reuse the same generated motif id."""
     return {
         k: facets.normalize_facet(spec.get(k))
-        for k in ("subject", "part", "view", "expression", "style", "description")
+        for k in ("subject", "scope", "view", "expression", "style", "description")
     }
 
 
@@ -367,7 +369,7 @@ def _build_svg_prompt(spec: dict, *, errors: list[str] | None = None) -> str:
         "- Center the geometry in the viewBox; keep it simple and recognizable.",
         "",
         f"subject: {spec.get('subject')}",
-        f"part: {spec.get('part')}",
+        f"scope: {spec.get('scope')}",
     ]
     for k in ("view", "expression", "style", "description"):
         if spec.get(k):
@@ -388,10 +390,12 @@ def generate_motif_svg(
     """Generate, sanitize, and register a single-color motif SVG for a spec (miss path).
 
     Deterministic: the same spec freezes to the same SVG, so the content-hash
-    ``motif_id`` is stable. Tier-1 gate (spec §6.4): on a sanitize/structure failure
-    the model is re-prompted once; a second failure (or no client) raises
-    :class:`AdapterClientError` (the route maps that to 502). Persistence is the
-    best-effort write-through inside :func:`register_motif` (never raises here).
+    ``motif_id`` is stable. Tier-1 gate (spec §6.4/§8): ``sanitize`` + structural
+    heuristics (drawable, non-degenerate, bbox aspect ratio, and — when a renderer is
+    installed — render-error / bbox-overflow seam). On a failure the model is
+    re-prompted once; a second failure (or no client) raises :class:`AdapterClientError`
+    (the route maps that to 502). Persistence is the best-effort write-through inside
+    :func:`register_motif` (never raises here).
 
     ``embedding`` (S11) is the descriptor vector the resolver already computed for the
     miss; it is persisted with the motif so later requests can soft-match it.
@@ -401,19 +405,25 @@ def generate_motif_svg(
         return _motif_svg_cache[key]
 
     llm = _resolve_client(client)
+    settings = get_settings()
 
     errors: list[str] | None = None
     for _ in range(2):  # initial attempt + one Tier-1 regeneration
         svg = _extract_svg(llm.complete(_build_svg_prompt(spec, errors=errors)))
         try:
-            motif = normalize_motif_svg(svg)
+            motif = normalize_motif_svg(
+                svg,
+                max_aspect_ratio=settings.motif_max_aspect_ratio,
+                edge_seam_tol=settings.motif_edge_seam_tol,
+                render_check=settings.motif_render_check,
+            )
         except (SanitizeError, ValueError) as exc:
             errors = [str(exc)]
             continue
         motif_id = register_motif(
             motif,
             subject=facets.normalize_facet(spec.get("subject")) or None,
-            part=facets.normalize_facet(spec.get("part")) or None,
+            scope=facets.normalize_facet(spec.get("scope")) or None,
             view=spec.get("view"),
             expression=spec.get("expression"),
             style=spec.get("style"),

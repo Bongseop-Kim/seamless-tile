@@ -1,3 +1,4 @@
+import math
 from functools import lru_cache
 
 from pydantic import field_validator
@@ -15,6 +16,13 @@ class Settings(BaseSettings):
     renderer_bin: str | None = None
     max_dpi: int = 1200
     max_tile_mm: float = 2000.0
+
+    # Resource ceilings bounding a single intent's work/output (DoS guard, audit A1/A3).
+    # max_placement_instances caps a layer's enumerated placement points; max_svg_bytes
+    # caps the composed document before the sanitize re-parse (same order as the export
+    # input cap ExportRequest.svg). Tunable per deployment.
+    max_placement_instances: int = 50_000
+    max_svg_bytes: int = 2_000_000
 
     # Supabase persistence (session 9). The motif store is "configured" iff
     # supabase_db_url is set; unset => in-memory registry only (tests, local dev).
@@ -50,6 +58,18 @@ class Settings(BaseSettings):
     recraft_response_format: str = "url"  # env: RECRAFT_RESPONSE_FORMAT (url | b64_json)
     recraft_base_url: str = "https://external.api.recraft.ai/v1"  # env: RECRAFT_BASE_URL
 
+    # Motif Tier1 structural heuristics (spec §8/§12). The intake gate
+    # (normalize_motif_svg) rejects structurally bad motifs in the request path.
+    # - max_aspect_ratio: reject a too-thin/elongated bbox (longest/shortest side).
+    # - edge_seam_tol: per-channel mean edge_seam tolerance for the render-based
+    #   overflow guard (aligned with 00-overview edge_seam <= 2.0).
+    # - render_check: master switch for the render-dependent checks (#4 render error
+    #   + #5 edge_seam); when off, or when no SVG renderer is installed, those checks
+    #   are skipped (best-effort; the pure-geometry checks still run).
+    motif_max_aspect_ratio: float = 20.0  # env: MOTIF_MAX_ASPECT_RATIO
+    motif_edge_seam_tol: float = 2.0  # env: MOTIF_EDGE_SEAM_TOL
+    motif_render_check: bool = True  # env: MOTIF_RENDER_CHECK
+
     @field_validator("motif_similarity_tau")
     @classmethod
     def _validate_motif_similarity_tau(cls, value: float) -> float:
@@ -64,6 +84,31 @@ class Settings(BaseSettings):
             raise ValueError("recraft_max_color_slots must be at least 1")
         return value
 
+    @field_validator("motif_max_aspect_ratio")
+    @classmethod
+    def _validate_motif_max_aspect_ratio(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("motif_max_aspect_ratio must be finite")
+        if value <= 1.0:
+            raise ValueError("motif_max_aspect_ratio must be greater than 1")
+        return value
+
+    @field_validator("motif_edge_seam_tol")
+    @classmethod
+    def _validate_motif_edge_seam_tol(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("motif_edge_seam_tol must be finite")
+        if value <= 0.0:
+            raise ValueError("motif_edge_seam_tol must be greater than 0")
+        return value
+
+    @field_validator("max_placement_instances", "max_svg_bytes")
+    @classmethod
+    def _validate_positive_ceiling(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("resource ceiling must be at least 1")
+        return value
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -71,11 +116,14 @@ def get_settings() -> Settings:
 
 
 # Code versions recorded in candidate reproduction metadata (not runtime settings).
-# Bump REGISTRY_VERSION whenever the curated sampling pool changes (spec §7.3/D17): a
-# one-off (unsaved) request's variant selection depends on `% len(pool)`, so pool growth
-# can change results; the bump seals "(prompt, seed, registry_version) -> same result".
-# In S11 the curated pool is degenerate (<=1, Tier2 promotion is S14), so no bump fires
-# yet -- this is the documented contract, exercised in earnest from S14.
+# A one-off (unsaved) request's variant selection depends on `% len(pool)`, so curated
+# pool growth can change results; the seal "(prompt, seed, registry_version) -> same
+# result" (spec §7.3/D17) only holds if the version tracks the pool. The pool is mutable
+# DB state (promotion via the curation CLI), so REGISTRY_VERSION is NOT bumped by hand for
+# pool changes -- `adapters.registry_fingerprint.registry_version_for` derives the stamped
+# value at request time as `REGISTRY_VERSION + "+pool.<hex8>"` over the curated ids. An
+# empty/absent pool stamps the bare baseline below (degenerate S11 == today's value).
+# Bump REGISTRY_VERSION by hand ONLY for repro-format / registry-schema changes.
 ENGINE_VERSION = "0.1.0"
 REGISTRY_VERSION = "0.1.0"
 

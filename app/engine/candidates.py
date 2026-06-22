@@ -16,6 +16,7 @@ import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from app.core.config import REGISTRY_VERSION
 from app.engine.composition import compose
 from app.engine.determinism import ReproMeta, layout_id_for
 from app.engine.generate import Candidate
@@ -66,6 +67,7 @@ def generate_candidates(
     seed: int | None = None,
     colorway: str | None = None,
     source_fidelity: str = SOURCE_FIDELITY_VECTOR,
+    registry_version: str = REGISTRY_VERSION,
 ) -> CandidateSet:
     """Diversify a base intent into a ranked, de-duplicated candidate set.
 
@@ -139,6 +141,7 @@ def generate_candidates(
                     seed=s,
                     colorway_id=cw,
                     layout_id=lid,
+                    registry_version=registry_version,
                 )
                 pool.append(
                     RankedCandidate(

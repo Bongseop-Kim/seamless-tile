@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
-from app.core.config import ALLOWED_DPI
+from app.core.config import ALLOWED_DPI, get_settings
 from app.engine.intent import Intent
 from app.engine.palette import ColorSlot, Colorway, Palette, out_of_gamut
 from app.engine.units import divides, snap_angle, snap_spacing, stripe_tiles
@@ -79,6 +79,15 @@ def _lattice_errors(layer, placement, tile: float) -> list[str]:
     if spec is None:
         return [f"layer {layer.id!r}: lattice placement requires a `lattice` spec"]
     errs: list[str] = []
+    # Bound the enumerated instance count: a tiny cell on a large tile (e.g. cell 0.1,
+    # tile 2000 -> 4e8 points) would exhaust memory/CPU even though it divides cleanly.
+    nx = round(tile / spec.cell_w_mm)
+    ny = round(tile / spec.cell_h_mm)
+    if nx * ny > get_settings().max_placement_instances:
+        errs.append(
+            f"layer {layer.id!r}: lattice would place {nx * ny} instances "
+            f"(> max_placement_instances {get_settings().max_placement_instances})"
+        )
     if not divides(tile, spec.cell_w_mm):
         errs.append(
             f"layer {layer.id!r}: lattice cell_w_mm {spec.cell_w_mm} does not divide "
@@ -233,6 +242,10 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
         dupes = sorted({i for i in all_layer_ids if all_layer_ids.count(i) > 1})
         errors.append(f"duplicate layer id: {dupes}")
     tile = intent.canvas.tile_mm
+    if tile > get_settings().max_tile_mm:
+        errors.append(
+            f"canvas.tile_mm {tile} exceeds max_tile_mm {get_settings().max_tile_mm}"
+        )
     for layer in intent.layers:
         for slot_id in _layer_slot_refs(layer):
             if slot_id not in palette.slot_ids():
@@ -264,6 +277,15 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"layer {layer.id!r}: motif {motif.id!r} is multi-color "
                         f"(color_slots {sorted(slots)}); use a `colors` mapping"
                     )
+            # size_mm > tile_mm breaks the clone_instances precondition (clones would
+            # straddle the original and double-blend under opacity<1). Reject here and
+            # mirror as a by-construction guard in assert_seamless_invariants. This is
+            # geometry, not registry state, so it is independent of motif lookup above.
+            if layer.params.size_mm > tile:
+                errors.append(
+                    f"layer {layer.id!r}: motif size_mm {layer.params.size_mm} exceeds "
+                    f"tile_mm {tile} (boundary clones would self-overlap)"
+                )
 
         if layer.type == "stripe":
             snapped = snap_angle(layer.params.angle, tile, layer.params.period_mm)

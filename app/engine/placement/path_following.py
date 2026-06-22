@@ -87,15 +87,21 @@ def place_path_following(
 
     centerline = _resolve_centerline(host, placement, tile_mm)
     length = centerline.length_mm(tile_mm)
+    if length <= 0.0:
+        return []
     # Snap the requested step to an exact divisor of the closure length so the rhythm is
     # uniform across the torus wrap (diagonal lanes rarely divide `length` evenly).
     _, spacing = snap_spacing(length, placement.spacing_mm)
     follow = placement.rotation == "follow_path"
 
+    # Wrap the phase into one closure period so an out-of-range phase_mm (>= L) does not
+    # silently emit an empty layer. Byte-identical for in-range phases (phase % L == phase
+    # when 0 <= phase < L), so determinism is preserved (audit A6).
+    start = placement.phase_mm % length
     instances: list[Instance] = []
     k = 0
     while True:
-        s = placement.phase_mm + k * spacing
+        s = start + k * spacing
         if s >= length - _EPS:
             break
         (x, y), tangent = centerline.point_at(s, tile_mm)

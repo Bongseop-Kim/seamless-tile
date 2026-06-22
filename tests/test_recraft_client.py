@@ -153,7 +153,7 @@ def test_end_to_end_http_client_through_gate_and_register():
 
     client = RecraftHTTPClient("tok", transport=httpx.MockTransport(handler))
     mid = generate_via_recraft(
-        {"layer_id": "m", "subject": "pig", "part": "face"},
+        {"layer_id": "m", "subject": "pig", "scope": "partial"},
         client=client,
         use_cache=False,
     )

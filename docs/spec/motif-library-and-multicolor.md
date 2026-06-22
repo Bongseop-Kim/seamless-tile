@@ -40,22 +40,22 @@
 |---|---|---|
 | D1 | 멀티컬러 모티프 지원은 **필수** | Recraft 산출물을 살리려면 선결 |
 | D2 | 서비스 입구는 **prompt(+reference svg)**, `intent` 직접은 내부용 | 기존 설계와 일치 |
-| D3 | 매핑 키는 동물이 아니라 **구조화된 모티프 명세** | subject/view/part/expression/style |
+| D3 | 매핑 키는 동물이 아니라 **구조화된 모티프 명세** | subject/view/scope/expression/style |
 | D4 | 모티프는 **Supabase(Postgres + pgvector)에 영속화**(작은 텍스트 SVG → TEXT/JSONB), facet+임베딩 메타 포함 | 원본 대용량 에셋이 생기면 Supabase Storage |
 | D5 | **조회 먼저 → 없으면 생성**(generate-on-miss) + **검수 후 승격** 루프 | 품질 바닥 + 비용/일관성 |
 | D6 | **변형 샘플링** 사용: 명세당 변형 풀에서 선택 | 창작 서비스 톤 |
 | D7 | 변형 선택은 **시드 기반(결정론)**, 랜덤 금지 | 결정성 계약 보존 |
 | D8 | 모티프 생성 소스: **단순=LLM / 정교=Recraft** 로 라우팅, 공존 | |
 | D9 | LLM 역할 = **intent + 모티프 명세(들)** 산출. SVG는 별도 단계 | 한 응답에 JSON+SVG 혼합 금지 |
-| D10 | facet 어휘는 **주관식 위주 하이브리드**: `subject`·`part`만 통제 어휘(가드레일), 나머지(`expression`·`style`·설명문·tags)는 자유 텍스트+임베딩 | 객관식/주관식은 *검색* 축일 뿐 창의성과 무관 |
+| D10 | facet 어휘는 **주관식 위주 하이브리드**: `subject`는 완전 자유 텍스트(통제 폐기), **`scope`만 통제 어휘(가드레일, `whole`\|`partial`)**, 나머지(`expression`·`style`·설명문·tags)는 자유 텍스트+임베딩 | 열린 도메인이라 subject 고정 어휘 불가, 하드필터 목적은 granularity뿐. 의미 식별은 임베딩 담당 |
 | D11 | 생성 소스 라우팅: LLM이 명세에 `complexity(simple\|detailed)` 힌트 산출 + 규칙(`simple→LLM`, `detailed 또는 멀티컬러 요구→Recraft`). 기본 LLM, 오버라이드 가능 | 비용↔품질 균형 |
 | D12 | 임베딩=채팅 LLM과 **별개 모델**. **임베딩 = OpenAI `text-embedding-3-small`, 채팅 LLM = Gemini 2.5 Flash-Lite/Flash**(최신 모델 나오면 교체 가능). 임베딩 대상은 **LLM이 정규화한 영문 descriptor** | Claude엔 native 임베딩 없음. 모델 확정 → τ 실측 가능 |
-| D13 | 조회는 **2단계 매칭**: 하드 필터(`subject`·`part`) → 소프트 유사도(τ, 뉘앙스만). 단, **정확매칭 우선**(아래 D18) 이후 임베딩. τ 시작값 재사용 우선 + 실측 보정 | 단일 임계 한계 해소 |
+| D13 | 조회는 **2단계 매칭**: 하드 필터(`scope`) → 소프트 유사도(τ, 뉘앙스만). 단, **정확매칭 우선**(아래 D18) 이후 임베딩. τ 시작값 재사용 우선 + 실측 보정. subject 의미 식별은 임베딩 담당 | 단일 임계 한계 해소 |
 | D14 | 미스 생성 모티프는 **즉시 제공**(Tier1 자동: `sanitize`+구조검사 통과 시 요청자에게 바로, `status='auto'`). 공유 샘플링 풀 편입(`curated`)은 **사람 수동 검수**. **비전 LLM 의미검사는 비용상 보류** | UX(즉시) + 품질 바닥(풀은 검수본만) |
 | D15 | 멀티컬러는 **"색 굽기(bake)" 폐기** → 엔진의 `<use color>` 단색 교체를 **슬롯 다개로 확장**. `<symbol>`은 colorway-무관(슬롯 참조만), 색은 인스턴스(`<use>`)에서 바인딩 | (리뷰 C1) 굽기는 content-hash id·symbol dedup·결정성 파손 |
-| D16 | `variant_group` 키 = **결정론적**: `hash(subject + part + 정규화 핵심 facet)`. miss 모티프 합류 = 하드필터 동일 + τ 이상이면 기존 group, 아니면 신규 | (리뷰 M4) 풀·재현 토대 |
+| D16 | `variant_group` 키 = **결정론적**: `hash(subject + scope + 정규화 핵심 facet)`. miss 모티프 합류 = 키 동일이면 기존 group, 아니면 신규(τ 미사용, N1) | (리뷰 M4) 풀·재현 토대 |
 | D17 | 재현은 **resolved-intent 스냅샷**으로 닫는다(엔진은 concrete-motif intent만 받음). 풀은 가변 전역이므로 풀 변경 시 `registry_version` bump | (리뷰 C2·M5) `repro`엔 motif_id 필드 없음 |
-| D18 | 콜드스타트/저비용 위해 **정확매칭(exact descriptor + 하드필터) 우선** → 미스일 때만 임베딩 유사도. ivfflat 인덱스는 행 수가 충분해진 뒤 도입(소량은 seq scan) | (리뷰 M3) 콜드스타트 dead-code 완화 |
+| D18 | 콜드스타트/저비용 위해 **정확매칭(exact descriptor + `scope` 하드필터) 우선** → 미스일 때만 임베딩 유사도. ivfflat 인덱스는 행 수가 충분해진 뒤 도입(소량은 seq scan) | (리뷰 M3) 콜드스타트 dead-code 완화 |
 
 비범위(이번 spec 밖): 참조 이미지(`reference_image`) 경로 고도화, 모티프 업로드 공개 API
 (외부 통제 비계획), 오브젝트 스토리지(원본 대용량 보관).
@@ -149,9 +149,9 @@ CREATE TABLE motifs (
   color_slots   jsonb NOT NULL,          -- ["s0","s1",...]  (멀티컬러)
   bbox          jsonb NOT NULL,
   anchor        jsonb NOT NULL,
-  -- 의미/큐레이션 메타 (D10: subject·part = 통제 어휘 가드레일 / 나머지 = 자유 텍스트+임베딩)
-  subject       text NOT NULL,           -- [통제] pig, pelican, ...  (CHECK or FK to vocab)
-  part          text NOT NULL,           -- [통제] whole | face | feet | head | ...
+  -- 의미/큐레이션 메타 (D10: subject = 자유 텍스트, scope만 통제 어휘 가드레일 / 나머지 = 자유 텍스트+임베딩)
+  subject       text NOT NULL,           -- [자유 텍스트] 제약 없음 (통제 폐기, D10)
+  scope         text NOT NULL,           -- [통제] whole | partial
   view          text,                    -- [자유] front, back, side, ... (필요시 통제 승격 후보)
   expression    text,                    -- [자유] smiling, 장난스러운 미소, ...
   style         text,                    -- [자유] flat, line, detailed, ...
@@ -165,7 +165,7 @@ CREATE TABLE motifs (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX ON motifs (variant_group);
-CREATE INDEX ON motifs (subject, part);
+CREATE INDEX ON motifs (scope);  -- scope는 저카디널리티(whole/partial)라 실효성 낮음; 실질 조회는 variant_group 인덱스 + ivfflat(embedding)에 의존
 CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 ```
 
@@ -173,16 +173,16 @@ CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 이 레포는 Supabase migration, `supabase db push/reset`, 임의 DDL을 실행하지 않는다. ivfflat
 인덱스도 행 수가 충분해지는 시점에 React 모노레포 migration으로 조율해 추가한다.
 
-**facet 어휘 전략 (D10)**: 객관식/주관식은 *창의성*이 아니라 *검색* 축이다. 창의적 해석은
-LLM이 앞단에서 끝내고, facet은 "저장·조회 키"일 뿐이다. 그래서 **주관식(자유 텍스트+임베딩) 위주**로
-가되, **정확성 가드레일로 `subject`·`part`만 통제 어휘**로 둔다.
+**facet 어휘 전략 (D10)**: facet은 "저장·조회 키"이며, 창의적 해석은 LLM이 앞단에서 끝낸다.
+**`subject`는 완전 자유 텍스트** — 임의 객체·도형·유기체·추상 개념 등 도메인이 열려 있어 고정 명사
+어휘가 불가능하다. subject의 의미 식별은 임베딩이 담당한다. **`scope`만 통제 어휘**로 두어 granularity
+가드레일 역할을 한다.
 
 - 이유: 임베딩은 "비슷한 뜻"은 잘 묶지만 "급(granularity)이 다른 것"을 못 가른다. 예) "웃는 돼지
-  얼굴" 요청에 "웃는 돼지 전체"가 임베딩상 매우 가까워 **오매칭(얼굴↔몸통)** 될 수 있다. `part`를
-  하드 필터로 두면 막힌다.
-- `subject`·`part`는 종류가 뻔하고(통제 부담 적음) 큐레이션/통계 쿼리에도 깔끔하다.
+  얼굴" 요청에 "웃는 돼지 전체"가 임베딩상 매우 가까워 **오매칭(전체↔부분)** 될 수 있다. `scope`를
+  하드 필터(`whole | partial`)로 두면 이 granularity 오매칭이 막힌다.
 - `view`는 경계 사례 — back↔front 오매칭이 문제되면 통제로 승격 후보. 기본은 자유.
-- LLM은 `subject`·`part`만 정해진 어휘에 매핑하고, 나머지는 자유롭게 기술한다.
+- LLM은 `scope`만 정해진 어휘(`whole | partial`)에 매핑하고, `subject`를 포함한 나머지는 자유롭게 기술한다.
 
 ### 5.2 레지스트리 복원
 - 부팅 시: `SELECT`로 로드 → `register_motif()`로 인메모리 레지스트리 복원, 또는
@@ -212,7 +212,7 @@ LLM이 앞단에서 끝내고, facet은 "저장·조회 키"일 뿐이다. 그�
 ```jsonc
 // 모티프 명세 (DB 행의 facet 컬럼 + tags + embedding 으로 저장)
 {
-  "subject": "pig", "view": "front", "part": "face",
+  "subject": "pig", "view": "front", "scope": "partial",
   "expression": "smiling", "style": "flat",
   "text": "smiling pig face, front view",   // 임베딩 소스
   "tags": ["cute", "baby"]
@@ -232,21 +232,22 @@ LLM이 앞단에서 끝내고, facet은 "저장·조회 키"일 뿐이다. 그�
 
 ### 6.1 단계
 1. **명세 추출**: LLM이 프롬프트를 파싱해 intent와 함께 **모티프 명세 리스트**를 구조화 산출
-   (subject/view/part/expression/style + 짧은 설명). 한 디자인에 다수 모티프 가능
+   (subject/view/scope/expression/style + 짧은 설명). 한 디자인에 다수 모티프 가능
    (예: 웃는 돼지 얼굴 + 돼지 발자국).
-   - **facet 매핑 검증 (리뷰 M2)**: `subject`·`part`는 통제 어휘라 LLM이 **허용 목록 안에서만**
-     골라야 한다. 프롬프트에 허용 어휘를 주입하고, 어휘 외 출력 시 1회 재프롬프트(현행
-     `llm.build_intent` 재프롬프트 패턴 재사용) 후에도 실패하면 거부/폴백. 매핑 정확도는 수용 기준.
+   - **facet 매핑 검증 (리뷰 M2)**: `subject`는 자유 텍스트(필수), **`scope`만** 통제 어휘(`whole | partial`)
+     주입 + 어휘 외 출력 시 1회 재프롬프트(현행 `llm.build_intent` 재프롬프트 패턴 재사용) 후에도
+     실패하면 거부/폴백. M2 가드레일 대상 = `scope`. 매핑 정확도는 수용 기준.
 2. **조회 (정확매칭 우선 → 2단계 매칭, D18)**:
-   - **(0) 정확매칭** — 정규화 descriptor(통제 facet 부분) **완전 일치** 그룹이 있으면 임베딩 없이
+   - **(0) 정확매칭** — 정규화 descriptor(subject 포함) **완전 일치** 그룹이 있으면 임베딩 없이
      바로 hit. 콜드스타트/비용 절감 + 모델 호출 회피.
-   - **(1) 하드 필터** — 가드레일 facet(`subject`·`part`)으로 후보를 좁힌다. 종류·급(granularity)은
-     여기서 정확히 가른다. (단 `part`가 카탈로그에 없으면 **false miss → 생성**으로 자연 폴백.)
+   - **(1) 하드 필터** — 가드레일 facet(`scope`)으로 후보를 좁힌다. granularity(전체↔부분)는
+     여기서 정확히 가른다. (`scope` 미지정 시 **false miss → 생성**으로 자연 폴백.)
    - **(2) 소프트 유사도** — 좁힌 후보 안에서 descriptor 임베딩(OpenAI `text-embedding-3-small`)으로
      최근접 검색. 최고 유사도가 **τ 이상이면 hit**(재사용), 미만이면 miss(생성). τ는 **뉘앙스** 만 판단.
+     subject 구분(어떤 대상인지)은 이 단계 임베딩이 담당한다.
    - 함의: **요청이 구체적일수록** 만족하는 게 드물어 자연히 생성으로 흐른다. 두루뭉술하면 재사용.
    - 시작값: **재사용 우선**(변형 샘플링이 다양성 보장)으로 잡고 모델 확정됐으니 **실측 보정**.
-   - 임베딩 가정 주의(M2): "임베딩이 급을 못 가른다"는 추정 → part 하드필터로 보강하되, 실측으로
+   - 임베딩 가정 주의(M2): "임베딩이 급을 못 가른다"는 추정 → scope 하드필터로 보강하되, 실측으로
      하드필터 실효성을 검증(과하면 false miss↑).
 3. **분기**:
    - **hit** → 해당 `variant_group`의 **풀에서 시드로 변형 1개 선택**(§7).
@@ -293,8 +294,9 @@ LLM이 앞단에서 끝내고, facet은 "저장·조회 키"일 뿐이다. 그�
 ## 7. 변형 샘플링 & 결정성 (D6·D7)
 
 ### 7.0 variant_group (같은 명세의 동치류 — 리뷰 M4·N1)
-- **그룹 키 = 단일 기준(결정론)**: `variant_group = sha256(canonical(subject, part, 핵심 facet))`(D16).
-  무엇이 "핵심 facet"인지(통제 facet만? expression 포함?)는 구현 세션에서 못박되, **두 구현이 같게
+- **그룹 키 = 단일 기준(결정론)**: `variant_group = sha256(canonical(subject, scope, 핵심 facet))`(D16).
+  subject는 자유 텍스트이지만 그룹 정체성 축으로 키에 남는다(pig-whole과 desk-whole이 섞이지 않도록).
+  무엇이 "핵심 facet"인지(subject+scope만? expression 포함?)는 구현 세션에서 못박되, **두 구현이 같게
   나오도록 정규화 규칙을 명시**한다.
 - **합류는 키 동일성만으로 판정(τ 사용 안 함, N1)**: miss로 생성한 모티프는 **자기 descriptor의 facet
   키**로 그룹 배정 — 같은 키면 같은 그룹(변형 추가), 다른 키면 신규 그룹. **τ(임베딩 유사도)는 §6.1
@@ -312,9 +314,25 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
 - 같은 (프롬프트, seed) → 항상 같은 변형(재현). seed만 바꾸면 다른 변형(다양성).
 - **랜덤 금지** — 결정성 계약 보존.
 
-### 7.2 후보 팬아웃과 결합
-- `candidate_count`로 후보를 만들 때 **후보마다 다른 변형**을 뽑게 해 한 요청에 다양한 시안 제시
-  (`app/engine/candidates.py`의 다양성 축에 "motif variant" 추가).
+### 7.2 후보 팬아웃과 결합 (후속 — 필요 시 구현)
+- **목표**: `candidate_count`로 후보를 만들 때 **후보마다 다른 변형**을 뽑게 해 한 요청에 다양한
+  시안 제시(`app/engine/candidates.py`의 다양성 축에 "motif variant" 추가).
+- **현황**: 미구현. `resolve_motifs()`가 요청당 1회·단일 seed로 `motif_id`를 레이어에 고정한 뒤
+  `generate_candidates`가 돌므로, 한 요청의 N개 후보는 모티프 변형을 공유한다(다양성 축은
+  symmetry/drop_fraction/seed뿐). 요청 seed를 바꾸면 변형이 바뀌는 **요청-레벨 결정성은 정상** —
+  누락은 "한 요청 내 후보 간" 다양성에 한정된다.
+- **보류 판단(correctness 아님, 제품/UX 결정)**: 결정성·재현성을 깨는 버그가 아니라 품질 향상
+  기능이다. 가치는 §8 안전망 논리에 있다 — Tier1이 의미검사를 안 하므로(명세와 안 맞는 모티프가
+  나갈 수 있음) 그 완충재가 "후보 N개"인데, 가장 틀리기 쉬운 축이 모티프 모양 자체라 같은 변형을
+  N개 내보내면 그 축에서 완충이 무력화된다.
+- **실효 전제**: 풀 ≥2(같은 `variant_group`에 curated 변형 2개 이상)일 때만 의미. 롱테일 온디맨드
+  명세는 풀=1 → 자연 degrade(§7.4). S14 시드가 head/인기 명세는 ≥2로 만들어 둠. **head 트래픽
+  비중이 의미 있을 때 구현 권장, tail 위주면 §7.4 degrade에 기대 보류.**
+- **구현 시 주의**: 단순 축 추가가 아니다. (1) `_candidate_id`가 `layout:colorway:seed`만 해싱하므로
+  모티프만 다른 후보끼리 **id가 충돌** — motif_id(또는 resolved-intent 해시)를 접어 넣어야 한다.
+  (2) rank_key·dedup·diversity 경고가 layout_id 중심이라 **layout 다양성 vs motif 변형 다양성의
+  우선순위 결정**이 필요(후보 N개에 두 축 배분). 재현은 resolved-intent 스냅샷(§7.3) 기반이라
+  후보별 intent가 달라져도 깨지지 않는다.
 
 ### 7.3 재현성 (풀 성장 대비 — 리뷰 C2·M5, D17)
 - ⚠️ 정정: `ReproMeta`/`ReproResponse`에는 **`motif_id` 필드가 없다**(`determinism.py`,
@@ -349,6 +367,10 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
 
 - **Tier1(자동, 요청 경로 내)**: `sanitize`(이미 강제) + 구조 휴리스틱(drawable 존재, degenerate
   아님, bbox 비율, 렌더 에러 없음, 배치 후 seamless 유지). **비전 LLM 의미검사는 비용상 보류**(D14).
+  구현은 `app/motifs/registry.py`의 `normalize_motif_svg`(임계값은 `Settings.motif_*`). "배치 후
+  seamless 유지"는 모티프를 **여백 타일로 1회 렌더해 선언 bbox를 벗어나는 overflow를 `edge_seam`으로
+  거르는 휴리스틱**이며(렌더러 미설치 시 #4·#5는 graceful skip, 순수 기하 #3은 항상 실행), 실제 타일
+  seamless는 엔진 by-construction 보장(대칭 overflow는 edge_seam이 못 잡는 휴리스틱 한계 수용).
 - **Tier2(사람, 비동기)**: 사람이 보고 `curated` 승격. 공유 샘플링 풀엔 `curated`만 들어가므로
   품질 바닥이 유지된다.
 - 인기 상위(head) 명세는 **미리 고퀄로 시드**(검수 부담↓), 롱테일은 온디맨드 생성 후 검수로 성장.
@@ -428,7 +450,9 @@ P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시 
   rsvg/resvg에서 동작·출력크기 검증 후 택1. CSS `var()` 지원 여부 실측.
 - **Recraft 적합성 실측 (M1)**: 샘플 SVG가 sanitize 통과율·평탄화 가능성·색 수 분포. 색 상한 N 결정.
 - **τ 절대값**: 전략 확정(D13). 모델(OpenAI 3-small) 확정됐으니 **소량 라벨셋으로 실측 보정**.
-- **통제 어휘 목록**: `subject`·`part`의 **실제 허용값** 확정 + LLM 매핑 가이드/검증(M2).
-- **Tier1 구조 휴리스틱 기준값**: degenerate 판정, bbox 비율 범위, seam 임계(`00-overview` `edge_seam≤2.0`와 정합).
-- **variant_group "핵심 facet" 범위**: 통제 facet만 vs expression 포함 — 그룹 입자 결정(D16 구체화).
+- **통제 어휘 목록**: subject는 자유 텍스트로 확정(이 열린 항목 종료). `scope` 값 = `{whole, partial}` 확정. 후속은 scope 2단계 충분성 실측 정도.
+- **Tier1 구조 휴리스틱 기준값**: 구현 완료(`normalize_motif_svg`). 초기값 — bbox 비율 `max:min ≤ 20`
+  (`motif_max_aspect_ratio`), seam `edge_seam ≤ 2.0`(`motif_edge_seam_tol`, `00-overview`와 정합), 렌더러
+  부재 시 graceful skip(`motif_render_check`로 일괄 토글). **실제 모티프로 임계 보정은 후속**(비율/seam 튜닝).
+- **variant_group "핵심 facet" 범위**: 기준 축은 `subject + scope`. expression 포함 여부로 그룹 입자 결정(D16 구체화).
 - **캐시 무효화 규칙 (§6.4)**: Tier2 반려·삭제 시 인메모리/어댑터 캐시/DB 일관성 전파.

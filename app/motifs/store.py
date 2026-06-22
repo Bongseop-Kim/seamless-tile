@@ -43,8 +43,8 @@ class MotifRecord:
     symbol: str
     bbox_mm: tuple[float, float, float, float]
     anchor: tuple[float, float]
-    subject: str | None = None
-    part: str | None = None
+    subject: str | None = None  # free text (no controlled vocab; D10)
+    scope: str | None = None  # controlled: 'whole' | 'partial' (D10)
     view: str | None = None
     expression: str | None = None
     style: str | None = None
@@ -83,11 +83,12 @@ class MotifStore(Protocol):
         """All rows, for boot hydration."""
         ...
 
-    def find_by_facets(self, subject: str | None, part: str | None) -> list[MotifRecord]:
-        """Rows whose controlled facets match (subject, part), ordered by id.
+    def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
+        """Rows whose controlled facet matches ``scope``, ordered by id.
 
         Empty list == clean miss (NOT an exception), like :meth:`get`. Used by the
-        motif resolver's exact-match / hard filter (spec §6.1, P0).
+        motif resolver's exact-match / hard filter (spec §6.1). ``scope`` is the only
+        controlled facet; ``subject`` discrimination is left to embedding similarity.
         """
         ...
 
@@ -172,7 +173,7 @@ _COLUMNS = (
     "bbox",
     "anchor",
     "subject",
-    "part",
+    "scope",
     "view",
     "expression",
     "style",
@@ -199,16 +200,10 @@ def _vector_to_text(embedding: list[float] | None) -> str | None:
     return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
 
 
-def _facet_where_clause(subject: str | None, part: str | None) -> tuple[str, tuple[str, ...]]:
-    clauses: list[str] = []
-    params: list[str] = []
-    for column, value in (("subject", subject), ("part", part)):
-        if value is None:
-            clauses.append(f"{column} IS NULL")
-        else:
-            clauses.append(f"{column} = %s")
-            params.append(value)
-    return " AND ".join(clauses), tuple(params)
+def _facet_where_clause(scope: str | None) -> tuple[str, tuple[str, ...]]:
+    if scope is None:
+        return "scope IS NULL", ()
+    return "scope = %s", (scope,)
 
 
 class PostgresMotifStore:
@@ -228,11 +223,11 @@ class PostgresMotifStore:
             with self._connect() as conn, conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO motifs "
-                    "(id, symbol, color_slots, bbox, anchor, subject, part, view, "
+                    "(id, symbol, color_slots, bbox, anchor, subject, scope, view, "
                     " expression, style, description, tags, source, status, quality, "
                     " variant_group, embedding) "
                     "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
-                    " %s, %s, %s::jsonb, %s, %s, %s, %s, %s::extensions.vector) "
+                    " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         record.id,
@@ -241,12 +236,12 @@ class PostgresMotifStore:
                         json.dumps(list(record.bbox_mm)),
                         json.dumps(list(record.anchor)),
                         record.subject,
-                        record.part,
+                        record.scope,
                         record.view,
                         record.expression,
                         record.style,
                         record.description,
-                        json.dumps(list(record.tags)),
+                        list(record.tags),
                         record.source,
                         record.status,
                         record.quality,
@@ -278,10 +273,10 @@ class PostgresMotifStore:
             raise MotifStoreError(f"motif load failed: {exc}") from exc
         return [_row_to_record(r) for r in rows]
 
-    def find_by_facets(self, subject: str | None, part: str | None) -> list[MotifRecord]:
+    def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
         try:
             with self._connect() as conn, conn.cursor() as cur:
-                where, params = _facet_where_clause(subject, part)
+                where, params = _facet_where_clause(scope)
                 cur.execute(
                     f"SELECT {_SELECT_LIST} FROM motifs "
                     f"WHERE {where} ORDER BY id",
@@ -346,7 +341,7 @@ def _row_to_record(row) -> MotifRecord:
         bbox,
         anchor,
         subject,
-        part,
+        scope,
         view,
         expression,
         style,
@@ -365,7 +360,7 @@ def _row_to_record(row) -> MotifRecord:
         bbox_mm=tuple(bbox),
         anchor=tuple(anchor),
         subject=subject,
-        part=part,
+        scope=scope,
         view=view,
         expression=expression,
         style=style,
