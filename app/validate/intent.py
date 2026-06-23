@@ -183,6 +183,69 @@ def _lane_closure(placement, layers_by_id, tile: float) -> tuple[float, int, int
     return tile * math.hypot(snapped.p, snapped.q), snapped.p, snapped.q
 
 
+def _repair_stripe_period(layer, tile: float):
+    """Snap a non-tile-commensurate stripe's ``period_mm`` to the nearest value that tiles
+    (``tile/(k*hypot(p,q))``), scaling bands proportionally so the rhythm is preserved.
+    The LLM often picks an off-grid diagonal period; snapping repairs it instead of 422.
+    Angle is untouched. Returns ``(layer, None)`` if already commensurate."""
+    params = layer.params
+    snapped = snap_angle(params.angle, tile, params.period_mm)
+    if stripe_tiles(tile, params.period_mm, snapped.p, snapped.q):
+        return layer, None
+    hypot = math.hypot(snapped.p, snapped.q)
+    if hypot == 0:
+        return layer, None
+    k = max(1, round(tile / (params.period_mm * hypot)))
+    new_period = tile / (k * hypot)
+    scale = new_period / params.period_mm
+    bands = [
+        b.model_copy(
+            update={
+                "offset_mm": round(b.offset_mm * scale, 6),
+                "width_mm": round(b.width_mm * scale, 6),
+            }
+        )
+        for b in params.bands
+    ]
+    new_layer = layer.model_copy(
+        update={"params": params.model_copy(update={"period_mm": round(new_period, 6), "bands": bands})}
+    )
+    warning = (
+        f"stripe {layer.id!r} period_mm {params.period_mm} snapped to {new_period:.4f} "
+        f"(tile-commensurate; slope {snapped.p}/{snapped.q})"
+    )
+    return new_layer, warning
+
+
+def _repair_stripe_ground_gap(layer, cap: float):
+    """If a stripe's bands cover more than ``cap`` of one period, shrink them to ``cap``
+    and spread them with equal gaps so the background (ground) stays visible. Keeps band
+    colors/order/count and the period/angle (so the stripe is still tile-commensurate).
+    Returns ``(layer, None)`` when no change is needed, else ``(new_layer, warning)``."""
+    params = layer.params
+    period = params.period_mm
+    coverage = sum(b.width_mm for b in params.bands) / period
+    if coverage <= cap:
+        return layer, None
+    scale = cap / coverage
+    n = len(params.bands)
+    gap = (1.0 - cap) * period / n
+    bands = []
+    cursor = 0.0
+    for band in params.bands:
+        width = round(band.width_mm * scale, 6)
+        bands.append(band.model_copy(update={"offset_mm": round(cursor, 6), "width_mm": width}))
+        cursor += width + gap
+    new_layer = layer.model_copy(
+        update={"params": params.model_copy(update={"bands": bands})}
+    )
+    warning = (
+        f"stripe {layer.id!r} bands covered the ground (coverage {coverage:.2f} > "
+        f"{cap}); widths reduced to keep the background visible"
+    )
+    return new_layer, warning
+
+
 def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
     # 1. structural
     if isinstance(raw, Intent):
@@ -214,6 +277,23 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
             )
         else:
             errors.append(f"canvas.dpi {intent.canvas.dpi} not in {ALLOWED_DPI}")
+
+    # 3b. Snap off-grid stripe periods to the nearest tile-commensurate value (repair),
+    #     scaling bands proportionally — runs BEFORE the stripe-tiles check below so an
+    #     LLM's off-grid diagonal period becomes a warning instead of a 422.
+    if repair:
+        tile_mm = intent.canvas.tile_mm
+        snapped_layers = list(intent.layers)
+        snapped_any = False
+        for i, la in enumerate(snapped_layers):
+            if la.type == "stripe":
+                repaired, warning = _repair_stripe_period(la, tile_mm)
+                if warning is not None:
+                    snapped_layers[i] = repaired
+                    warnings.append(warning)
+                    snapped_any = True
+        if snapped_any:
+            intent = intent.model_copy(update={"layers": snapped_layers})
 
     # 4. per-colorway resolved color count vs production.max_colors (screen printing
     #    is color-limited; digital is not — ARCHITECTURE.md 색·colorway 모델).
@@ -386,4 +466,30 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
 
     if errors:
         raise IntentInvalid(errors)
+
+    # Ground-visibility repair: an opaque stripe must never fully occlude an opaque
+    # background beneath it (the named ground color must stay visible). Shrink/spread any
+    # over-covering stripe so a ground gap remains. period/angle untouched -> still
+    # seamless; colors/band-count untouched.
+    if repair:
+        cap = get_settings().stripe_max_band_coverage
+        opaque_bg_z = [
+            la.z_order
+            for la in intent.layers
+            if la.type == "background" and la.opacity == 1.0
+        ]
+        if opaque_bg_z:
+            min_bg_z = min(opaque_bg_z)
+            new_layers = list(intent.layers)
+            changed = False
+            for i, la in enumerate(new_layers):
+                if la.type == "stripe" and la.opacity == 1.0 and la.z_order > min_bg_z:
+                    repaired, warning = _repair_stripe_ground_gap(la, cap)
+                    if warning is not None:
+                        new_layers[i] = repaired
+                        warnings.append(warning)
+                        changed = True
+            if changed:
+                intent = intent.model_copy(update={"layers": new_layers})
+
     return ValidationResult(intent=intent, palette=palette, warnings=warnings)

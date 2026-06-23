@@ -305,7 +305,7 @@ def test_route_prompt_miss_generates_and_composes(monkeypatch):
     # the resolved (concrete) motif id was injected into the logged (resolved) intent
     motif_ids = {
         layer["params"]["motif_id"]
-        for layer in captured[0].intent["layers"]
+        for layer in captured[0].intent["designs"][0]["layers"]
         if layer["type"] == "motif"
     }
     assert any(m.startswith("recraft-") for m in motif_ids)  # generated motif present

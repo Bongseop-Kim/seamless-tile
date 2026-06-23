@@ -61,8 +61,9 @@ def test_validate_rejects_non_tiling_diagonal():
     raw = mvp_intent()
     raw["layers"][1]["params"]["angle"] = -32
     raw["layers"][1]["params"]["period_mm"] = 24
+    # repair=True snaps off-grid periods; the rejection still holds when repair is off.
     with pytest.raises(IntentInvalid):
-        validate_intent(raw)
+        validate_intent(raw, repair=False)
 
 
 def test_tiling_seam_rejects_invalid_bounds():

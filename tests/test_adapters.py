@@ -20,7 +20,11 @@ from app.adapters.image import (
     extract_palette,
 )
 from app.adapters.image import judge_vectorization
-from app.adapters.llm import LLMNotConfigured, build_intent as llm_build_intent
+from app.adapters.llm import (
+    LLMNotConfigured,
+    build_intent as llm_build_intent,
+    build_intents as llm_build_intents,
+)
 from app.main import app
 from app.validate.intent import IntentInvalid, validate_intent
 from tests.test_intent import mvp_intent
@@ -113,6 +117,99 @@ def test_llm_adapter_builds_valid_intent():
     # the frozen intent is itself valid (engine will re-validate, idempotently)
     validate_intent(res.intent)
     assert len(llm.calls) == 1
+
+
+def test_build_intents_returns_multiple_designs():
+    d1 = mvp_intent()
+    d2 = mvp_intent()
+    d2["seed"] = 999  # a distinct (still valid) design
+    payload = json.dumps({"designs": [{"intent": d1}, {"intent": d2}]})
+    llm = _ScriptedLLM(payload)
+    results = llm_build_intents("striped tie", client=llm, use_cache=False)
+    assert len(results) == 2
+    assert all(isinstance(r, AdapterResult) for r in results)
+    assert len(llm.calls) == 1  # both valid on the first attempt
+
+
+def test_build_intents_drops_invalid_design_without_reprompt():
+    good = {"intent": mvp_intent()}
+    bad = {"intent": {"intent_version": 1}}  # missing canvas/palette/...
+    llm = _ScriptedLLM(json.dumps({"designs": [bad, good]}))
+    results = llm_build_intents("x", client=llm, use_cache=False)
+    assert len(results) == 1  # the invalid design is dropped
+    assert len(llm.calls) == 1  # >=1 valid -> no re-prompt
+    validate_intent(results[0].intent)
+
+
+def test_build_intents_all_invalid_reprompts_then_raises():
+    bad = json.dumps({"designs": [{"intent": {"intent_version": 1}}]})
+    llm = _ScriptedLLM(bad, bad)
+    with pytest.raises(IntentInvalid):
+        llm_build_intents("x", client=llm, use_cache=False)
+    assert len(llm.calls) == 2  # one re-prompt when zero designs valid
+
+
+def test_build_intents_accepts_legacy_single_wrapper():
+    llm = _ScriptedLLM(json.dumps({"intent": mvp_intent()}))
+    results = llm_build_intents("x", client=llm, use_cache=False)
+    assert len(results) == 1
+
+
+def test_build_intent_wrapper_returns_first_design():
+    d1 = mvp_intent()
+    d2 = mvp_intent()
+    d2["seed"] = 5
+    llm = _ScriptedLLM(json.dumps({"designs": [{"intent": d1}, {"intent": d2}]}))
+    res = llm_build_intent("x", client=llm, use_cache=False)
+    assert isinstance(res, AdapterResult)
+    assert res.intent["seed"] == d1["seed"]
+
+
+def test_normalize_stripes_forces_diagonal_to_45():
+    import math
+
+    from app.adapters.llm import _normalize_stripes
+    from app.core.config import get_settings
+
+    raw = mvp_intent()  # stripe angle -36.87, period 9.6
+    _normalize_stripes(raw, get_settings())
+    st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
+    assert st["angle"] == -45.0
+    assert abs(st["period_mm"] - 48 / math.sqrt(2)) < 1e-3  # k=1 -> 2 stripes/tile
+    validate_intent(raw)  # still valid + seamless
+
+
+def test_normalize_stripes_preserves_axis():
+    from app.adapters.llm import _normalize_stripes
+    from app.core.config import get_settings
+
+    raw = mvp_intent()
+    next(l for l in raw["layers"] if l["type"] == "stripe")["params"]["angle"] = 90.0
+    _normalize_stripes(raw, get_settings())
+    st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
+    assert st["angle"] == 90.0  # vertical/horizontal stripes untouched
+
+
+def test_normalize_stripes_repeats_controls_k():
+    import math
+
+    from app.adapters.llm import _normalize_stripes
+
+    raw = mvp_intent()
+
+    class _Settings:
+        stripe_diagonal_repeats = 4
+
+    _normalize_stripes(raw, _Settings())
+    st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
+    assert abs(st["period_mm"] - 48 / (2 * math.sqrt(2))) < 1e-3  # k=2 -> 4 stripes/tile
+
+
+def test_build_intents_normalizes_diagonal_stripe():
+    llm = _ScriptedLLM(json.dumps(mvp_intent()))
+    res = llm_build_intents("diagonal repp stripe tie", client=llm, use_cache=False)
+    st = next(l for l in res[0].intent["layers"] if l["type"] == "stripe")["params"]
+    assert st["angle"] == -45.0
 
 
 def test_llm_prompt_does_not_make_stripes_the_default():
@@ -402,9 +499,9 @@ def test_image_adapter_rejects_data_uri_without_payload():
 
 def test_route_prompt_path_returns_candidates(monkeypatch):
     def fake(prompt, **kwargs):
-        return AdapterResult(intent=mvp_intent(), source_fidelity="vector", warnings=[])
+        return [AdapterResult(intent=mvp_intent(), source_fidelity="vector", warnings=[])]
 
-    monkeypatch.setattr(gen_route, "llm_build_intent", fake)
+    monkeypatch.setattr(gen_route, "llm_build_intents", fake)
     resp = client.post("/api/v1/generate", json={"prompt": "navy club tie"})
     assert resp.status_code == 200
     body = resp.json()
@@ -438,7 +535,7 @@ def test_route_adapter_invalid_returns_422(monkeypatch):
     def fake(prompt, **kwargs):
         raise IntentInvalid(["bad intent after re-prompt"])
 
-    monkeypatch.setattr(gen_route, "llm_build_intent", fake)
+    monkeypatch.setattr(gen_route, "llm_build_intents", fake)
     resp = client.post("/api/v1/generate", json={"prompt": "x"})
     assert resp.status_code == 422
 
@@ -447,7 +544,7 @@ def test_route_adapter_client_failure_returns_502(monkeypatch):
     def fake(prompt, **kwargs):
         raise LLMNotConfigured("no client")
 
-    monkeypatch.setattr(gen_route, "llm_build_intent", fake)
+    monkeypatch.setattr(gen_route, "llm_build_intents", fake)
     resp = client.post("/api/v1/generate", json={"prompt": "x"})
     assert resp.status_code == 502
 

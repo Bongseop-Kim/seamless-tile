@@ -34,18 +34,36 @@ class Settings(BaseSettings):
     # preview upload is a graceful no-op (png_url is null + a warning), like the motif store.
     supabase_url: str | None = None  # https://<ref>.supabase.co  (env: SUPABASE_URL)
     preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
-    preview_dpi: int = Field(96, ge=1)  # env: PREVIEW_DPI; tile preview raster resolution
+    preview_dpi: int = Field(192, ge=1)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
 
     # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
     # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 0이면 비활성(lookup+store 생략) —
     # 결정론 디버깅용. ponytail: 프로세스-로컬(워커별 독립); 멀티워커 hit-rate가 문제되면 공유 캐시로 승급.
     generate_cache_size: int = Field(256, ge=0)  # env: GENERATE_CACHE_SIZE
+    # Max fraction of a stripe period its bands may cover when an opaque background sits
+    # beneath; the remainder is guaranteed to stay visible so the named ground color (and
+    # any under-stripe texture) shows through. env: STRIPE_MAX_BAND_COVERAGE
+    stripe_max_band_coverage: float = Field(0.75, ge=0.1, le=1.0)
+    # Tonal background texture: HSL lightness shift used to derive the tone-on-tone
+    # texture color from the ground color. env: TEXTURE_TONE_SHIFT
+    texture_tone_shift: float = Field(0.12, ge=0.0, le=0.5)
+    # Target lattice cell (mm) for the injected dense background texture; snapped to an
+    # exact tile divisor so it stays seamless. env: TEXTURE_CELL_MM
+    texture_cell_mm: float = Field(3.5, gt=0)
+    # Generated diagonal stripes are normalized to 45 deg with this many repeats per tile
+    # (count = 2*k at 45 deg, so k = repeats//2; 2 => one big pair of diagonal stripes).
+    # env: STRIPE_DIAGONAL_REPEATS
+    stripe_diagonal_repeats: int = Field(2, ge=2)
 
     # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
     # GeminiClient as the default LLM client at boot; unset => no default (tests inject
     # fakes).
     gemini_api_key: str | None = None  # env: GEMINI_API_KEY
     gemini_model: str = "gemini-2.5-flash-lite"  # chat model id passed to GeminiClient (P0)
+    # Sampling temperature for intent generation. >0 lets the model emit genuinely
+    # distinct designs; determinism is unaffected (the adapter freezes the finalized
+    # intent in its cache, so the contract does not depend on temperature).
+    gemini_temperature: float = Field(0.7, ge=0.0, le=2.0)  # env: GEMINI_TEMPERATURE
 
     # Embedding model (session 11, D12). When openai_api_key is set, app.main installs an
     # OpenAIEmbeddingClient as the default; unset => motif resolver skips the soft-

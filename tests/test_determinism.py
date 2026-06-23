@@ -81,3 +81,31 @@ def test_byte_identical_across_processes():
         return proc.stdout
 
     assert run("0") == run("1")
+
+
+def test_candidate_set_byte_identical_across_processes():
+    # The multi-design merge/select (round-robin + global SVG de-dup) must not leak
+    # set/dict iteration order: same selection + order under different PYTHONHASHSEED.
+    code = (
+        "import sys; sys.path.insert(0, 'tests'); "
+        "from test_intent import mvp_intent; "
+        "from app.engine.candidates import generate_candidate_set; "
+        "d1 = mvp_intent(); d2 = mvp_intent(); d2['layers'] = d2['layers'][:2]; "
+        "cs = generate_candidate_set([d1, d2], candidate_count=4); "
+        "sys.stdout.write('|'.join(c.id + ':' + c.candidate.svg for c in cs.candidates))"
+    )
+
+    def run(hashseed: str) -> str:
+        env = {**os.environ, "PYTHONHASHSEED": hashseed}
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            env=env,
+            timeout=10,
+        )
+        assert proc.returncode == 0, proc.stderr
+        return proc.stdout
+
+    assert run("0") == run("1") == run("12345")

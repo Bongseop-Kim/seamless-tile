@@ -23,13 +23,13 @@ from app.api.schemas.generate import (
 from app.adapters.base import AdapterClientError, cache_key
 from app.adapters.embedding import get_default_embedding_client
 from app.adapters.image import build_intent as image_build_intent
-from app.adapters.llm import build_intent as llm_build_intent
+from app.adapters.llm import build_intents as llm_build_intents
 from app.adapters.motif_resolver import resolve_motifs
 from app.adapters.recraft import get_default_recraft_client
 from app.adapters.registry_fingerprint import registry_version_for
 from app.core.config import get_settings
 from app.core.observability import get_request_id, log_metrics
-from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidates
+from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidate_set
 from app.logs.generation_log import GenerationLogRow, insert_generation_log
 from app.motifs.store import get_default_store
 from app.storage.preview import make_preview, preview_configured
@@ -174,7 +174,6 @@ async def generate_candidate(
     # re-prompt); a missing/failed external client -> 5xx.
     warnings: list[str] = []
     source_fidelity = SOURCE_FIDELITY_VECTOR
-    motif_specs: list[dict] = []
     input_type = "intent"
 
     # Cache short-circuit BEFORE any adapter/engine/render work. The repro seal moves with
@@ -209,8 +208,10 @@ async def generate_candidate(
                 warnings=cached_warnings,
             )
 
+    # Resolve the input into a list of (intent, motif_specs) "designs". Only the prompt
+    # path produces more than one; intent-direct/image are single-design.
     if request.intent is not None:
-        intent_raw = request.intent
+        designs: list[tuple[dict, list[dict]]] = [(request.intent, [])]
         warnings += [
             f"{name} ignored because `intent` was supplied directly"
             for name in _INTENT_DIRECT_IGNORED
@@ -221,59 +222,68 @@ async def generate_candidate(
         adapted = _run_adapter(
             lambda: image_build_intent(request.reference_image, canvas=request.canvas)
         )
-        intent_raw, source_fidelity = adapted.intent, adapted.source_fidelity
+        source_fidelity = adapted.source_fidelity
         warnings += adapted.warnings
+        designs = [(adapted.intent, adapted.motif_specs)]
     elif request.prompt is not None:
         input_type = "prompt"
-        adapted = _run_adapter(
-            lambda: llm_build_intent(
+        adapted_list = _run_adapter(
+            lambda: llm_build_intents(
                 request.prompt, canvas=request.canvas, palette=request.palette
             )
         )
-        intent_raw, source_fidelity = adapted.intent, adapted.source_fidelity
-        warnings += adapted.warnings
-        motif_specs = adapted.motif_specs
+        source_fidelity = adapted_list[0].source_fidelity
+        for adapted in adapted_list:
+            warnings += adapted.warnings
+        designs = [(a.intent, a.motif_specs) for a in adapted_list]
     else:
         raise HTTPException(
             status_code=422,
             detail=["one of `intent`, `reference_image`, or `prompt` is required"],
         )
 
-    # S10 glue: resolve each motif spec to a concrete motif_id and inject it into the
-    # intent BEFORE the engine sees it (the engine only composes concrete motif ids).
-    # Selection is deterministic; miss-path generation is frozen by the adapter cache.
-    # IntentInvalid -> 422, generation/client failure -> 502 (same mapping as adapters).
-    if motif_specs:
-        # Unify the seed: the engine falls back to `intent.seed` when request.seed is
-        # None (candidates.py), so variant selection must see the SAME effective seed or
-        # the two stages would diverge. `or 0` is intentionally avoided (it would conflate
-        # an explicit seed=0 with None).
-        effective_seed = (
-            request.seed if request.seed is not None else int(intent_raw.get("seed") or 0)
-        )
-        intent_raw = _run_adapter(
-            lambda: resolve_motifs(
-                intent_raw,
-                motif_specs,
-                store=get_default_store(),
-                embedding_client=get_default_embedding_client(),
-                recraft_client=get_default_recraft_client(),
-                seed=effective_seed,
-                warnings=warnings,
+    # S10 glue: resolve each design's motif specs to concrete motif_ids and inject them
+    # BEFORE the engine sees the intent (the engine only composes concrete motif ids).
+    # Each design carries its own specs keyed by its own layer ids. Deterministic;
+    # miss-path generation is frozen by the adapter cache. IntentInvalid -> 422,
+    # generation/client failure -> 502 (same mapping as adapters).
+    base_raws: list[dict] = []
+    for design_intent, design_specs in designs:
+        if design_specs:
+            # Unify the seed: the engine falls back to `intent.seed` when request.seed is
+            # None (candidates.py), so variant selection must see the SAME effective seed
+            # or the two stages would diverge. `or 0` is intentionally avoided (it would
+            # conflate an explicit seed=0 with None).
+            effective_seed = (
+                request.seed
+                if request.seed is not None
+                else int(design_intent.get("seed") or 0)
             )
-        )
+            design_intent = _run_adapter(
+                lambda di=design_intent, ds=design_specs, es=effective_seed: resolve_motifs(
+                    di,
+                    ds,
+                    store=get_default_store(),
+                    embedding_client=get_default_embedding_client(),
+                    recraft_client=get_default_recraft_client(),
+                    seed=es,
+                    warnings=warnings,
+                )
+            )
+        base_raws.append(design_intent)
 
     # reg_version (the repro seal, spec §7.3/D17) was derived once at the top of the handler
     # for the cache key and is reused here.
     started = time.perf_counter()
     try:
-        result = generate_candidates(
-            intent_raw,
+        result = generate_candidate_set(
+            base_raws,
             candidate_count=request.candidate_count,
             seed=request.seed,
             colorway=request.colorway,
             source_fidelity=source_fidelity,
             registry_version=reg_version,
+            inject_texture=(input_type == "prompt"),
         )
     except IntentInvalid as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from None
@@ -369,10 +379,11 @@ async def generate_candidate(
             available_strategies=result.available_strategy_count,
             engine_version=result.candidates[0].candidate.repro.engine_version,
             registry_version=reg_version,
-            intent=intent_raw,
+            intent={"designs": base_raws},
             candidates=[
                 {
                     "id": rc.id,
+                    "design_index": rc.design_index,
                     "layout_id": rc.candidate.layout_id,
                     "source_fidelity": rc.source_fidelity,
                     "colorway_id": rc.candidate.repro.colorway_id,

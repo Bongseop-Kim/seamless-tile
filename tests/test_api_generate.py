@@ -214,13 +214,13 @@ def test_identical_request_served_from_cache(fake_preview, monkeypatch):
     import app.api.routes.generate as route
 
     n = {"c": 0}
-    real = route.generate_candidates
+    real = route.generate_candidate_set
 
     def counting_generate(*a, **k):
         n["c"] += 1
         return real(*a, **k)
 
-    monkeypatch.setattr(route, "generate_candidates", counting_generate)
+    monkeypatch.setattr(route, "generate_candidate_set", counting_generate)
     payload = {"intent": mvp_intent(), "candidate_count": 4, "seed": 999}
     a = client.post("/api/v1/generate", json=payload).json()
     b = client.post(
@@ -242,10 +242,10 @@ def test_cache_disabled_when_size_zero(fake_preview, monkeypatch):
 
     monkeypatch.setattr(get_settings(), "generate_cache_size", 0)
     n = {"c": 0}
-    real = route.generate_candidates
+    real = route.generate_candidate_set
     monkeypatch.setattr(
         route,
-        "generate_candidates",
+        "generate_candidate_set",
         lambda *a, **k: (n.__setitem__("c", n["c"] + 1) or real(*a, **k)),
     )
     payload = {"intent": mvp_intent(), "candidate_count": 2, "seed": 7}

@@ -152,9 +152,54 @@ _BEE = MotifDef(
     anchor=_ORIGIN,
 )
 
+# Geometric ground-texture motifs (foulard/neat) and woven-texture approximations
+# (twill/herringbone). All single-color (currentColor); unit bbox centered at origin.
+# twill: a corner-to-corner diagonal stroke -> on a cell==size lattice the strokes meet
+# at cell edges and read as continuous diagonal twill lines. herringbone: a chevron that
+# packs into V rows. dot/diamond/square are spaced; twill/herringbone tile edge-to-edge.
+_DIAMOND = MotifDef(
+    id="diamond",
+    symbol=_symbol("diamond", '<polygon points="0,-0.5 0.5,0 0,0.5 -0.5,0" fill="currentColor"/>'),
+    bbox_mm=_UNIT_BBOX,
+    anchor=_ORIGIN,
+)
+
+_SQUARE = MotifDef(
+    id="square",
+    symbol=_symbol("square", '<rect x="-0.5" y="-0.5" width="1" height="1" fill="currentColor"/>'),
+    bbox_mm=_UNIT_BBOX,
+    anchor=_ORIGIN,
+)
+
+_TWILL = MotifDef(
+    id="twill",
+    symbol=_symbol(
+        "twill",
+        '<path d="M-0.5 0.5 L0.5 -0.5" stroke="currentColor" stroke-width="0.35" '
+        'fill="none"/>',
+    ),
+    bbox_mm=_UNIT_BBOX,
+    anchor=_ORIGIN,
+)
+
+_HERRINGBONE = MotifDef(
+    id="herringbone",
+    symbol=_symbol(
+        "herringbone",
+        '<polyline points="-0.5,0.5 0,-0.5 0.5,0.5" stroke="currentColor" '
+        'stroke-width="0.3" fill="none"/>',
+    ),
+    bbox_mm=_UNIT_BBOX,
+    anchor=_ORIGIN,
+)
+
 MOTIFS: dict[str, MotifDef] = {
     _CIRCLE.id: _CIRCLE,
     _BEE.id: _BEE,
+    _DIAMOND.id: _DIAMOND,
+    _SQUARE.id: _SQUARE,
+    _TWILL.id: _TWILL,
+    _HERRINGBONE.id: _HERRINGBONE,
 }
 
 
