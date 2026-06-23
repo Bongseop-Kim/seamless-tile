@@ -65,7 +65,7 @@ curl -s http://localhost:8000/api/v1/generate \
 ### A1. 대각 스트라이프 (넥타이 기본)
 - **목적**: stripe 레이어 + 대각 슬로프 스냅(넥타이 도메인 기본), 모티프 미생성 happy path
 - **prompt**: `Classic diagonal repp stripe necktie pattern, navy ground with silver and gold stripes, evenly spaced.`
-- **확인**: `intent.layers`에 `type:"stripe"` 존재 · `params.angle` 음수(대각) · `period_mm`가 `tile_mm`의 약수 · 모티프 레이어/`motif_specs` 없음 · **모티프 생성 로그 0** · candidate 4개 layout 다양
+- **확인**: `intent.layers`에 `type:"stripe"` 존재 · `params.angle` 음수(화면상 우상향 대각) · `period_mm`가 `tile_mm`의 약수 · 모티프 레이어/`motif_specs` 없음 · **모티프 생성 로그 0** · candidate 4개 layout 다양
 
 ### A2. 폴카도트 (내장 `circle` 기대)
 - **목적**: 내장 `circle` 직접 참조(생성 0), 격자/스캐터 배치

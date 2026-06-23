@@ -242,7 +242,7 @@ def _build_prompt(
         "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
         "cell_w_mm and cell_h_mm; type 'scatter' needs a scatter object; type "
         "'path_following' needs host_layer+lane or path plus spacing_mm.",
-        "- For stripe prompts, use stripe layers. Diagonal stripes default to 45 deg "
+        "- For stripe prompts, use stripe layers. Diagonal stripes default to -45 deg "
         "with period_mm = tile_mm/sqrt(2) (a couple of bold diagonal stripes per tile); "
         "the engine normalizes the diagonal angle/period for you. For non-diagonal "
         "stripes, use angle 0 or 90 with period_mm dividing tile_mm.",
@@ -372,7 +372,7 @@ _STRIPE_AXIS_TOL_DEG = 8.0
 
 def _normalize_stripes(intent_raw: dict, settings) -> None:
     """Prompt-path stripe normalization (in place): force a clearly-diagonal stripe to
-    ±45° with a fixed small repeat count (period = tile/(k·√2), k = repeats//2), scaling
+    -45° with a fixed small repeat count (period = tile/(k·√2), k = repeats//2), scaling
     bands proportionally — so generated ties show a few bold 45° stripes instead of many
     thin ones. Axis-aligned stripes (within tolerance of 0/90) are left untouched. Only
     the LLM/prompt path calls this; intent-direct/image intents are unaffected."""
@@ -399,7 +399,7 @@ def _normalize_stripes(intent_raw: dict, settings) -> None:
         a = abs(angle) % 90.0
         if min(a, 90.0 - a) <= _STRIPE_AXIS_TOL_DEG:
             continue  # axis-aligned (vertical/horizontal): respect the intent
-        params["angle"] = -45.0 if angle < 0 else 45.0
+        params["angle"] = -45.0
         scale = target_period / period
         for b in bands:
             if not isinstance(b, dict):

@@ -155,13 +155,14 @@ def test_build_intent_wrapper_returns_first_design():
     assert res.intent["seed"] == d1["seed"]
 
 
-def test_normalize_stripes_forces_diagonal_to_45():
+def test_normalize_stripes_forces_diagonal_to_visual_up_right():
     import math
 
     from app.adapters.llm import _normalize_stripes
     from app.core.config import get_settings
 
-    raw = mvp_intent()  # stripe angle -36.87, period 9.6
+    raw = mvp_intent()
+    next(l for l in raw["layers"] if l["type"] == "stripe")["params"]["angle"] = -36.87
     _normalize_stripes(raw, get_settings())
     st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
     assert st["angle"] == -45.0
