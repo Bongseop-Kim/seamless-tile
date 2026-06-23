@@ -4,13 +4,13 @@ import pytest
 
 from app.engine.candidates import (
     _RESERVED_TONE_SLOT,
-    _TEXTURE_MOTIFS,
-    _texture_sibling,
+    _ground_kind_sibling,
     _with_stripe_rhythm,
     generate_candidate_set,
     generate_candidates,
 )
 from app.engine.determinism import layout_id_for
+from app.motifs.registry import TEXTURE_MOTIFS
 from app.engine.seamless import assert_seamless_invariants
 from app.validate.intent import IntentInvalid, validate_intent
 from tests.test_intent import mvp_intent
@@ -197,79 +197,58 @@ def test_stripe_rhythm_introduces_no_new_colors():
 # --- bg_texture toggle --------------------------------------------------------
 
 
-def _bg_texture_intent() -> dict:
+def _object_repeat_ground_intent() -> dict:
     intent = _single_band_stripe_intent()
-    intent["layers"].insert(
-        1,
+    intent["layers"][0]["params"].update(
         {
-            "id": "bg_texture",
-            "type": "motif",
-            "z_order": 1,
-            "params": {"motif_id": "circle", "size_mm": 2.0, "color": "accent"},
-            "placement": {
-                "type": "lattice",
-                "lattice": {"cell_w_mm": 8, "cell_h_mm": 8},
-            },
-        },
+            "kind": "object_repeat",
+            "motif_id": "twill",
+            "cell_mm": 8,
+            "texture_color": "tone",
+        }
     )
+    intent["palette"]["slots"].append({"id": "tone", "hex": "#33405e"})
+    for cw in intent["colorways"]:
+        cw["mapping"]["tone"] = "#33405e"
     return intent
 
 
-def test_bg_texture_toggle_yields_with_and_without():
-    # inject_texture adds a sibling design; round-robin surfaces both with/without texture.
+def test_ground_kind_toggle_yields_with_and_without():
+    # vary_ground adds a sibling design; round-robin surfaces both solid and object_repeat.
     cs = generate_candidate_set(
-        [_single_band_stripe_intent()], candidate_count=4, inject_texture=True
+        [_single_band_stripe_intent()], candidate_count=4, vary_ground=True
     )
-    has = any(any(l.id == "bg_texture" for l in c.intent.layers) for c in cs.candidates)
-    without = any(
-        all(l.id != "bg_texture" for l in c.intent.layers) for c in cs.candidates
-    )
-    assert has and without
+    kinds = {c.intent.layers[0].params.kind for c in cs.candidates}
+    assert "solid" in kinds and "object_repeat" in kinds
 
 
-def test_bg_texture_toggle_noop_when_absent():
-    # Background unspecified -> the sibling injects a tonal, dense ground texture.
+def test_solid_ground_gains_object_repeat_sibling():
+    # A solid ground sibling becomes an object_repeat tonal texture: a built-in motif and
+    # a NEW derived tone slot, mapped in every colorway, distinct from the ground hex.
     raw = _single_band_stripe_intent()
-    sibling = _texture_sibling(raw)
+    sibling = _ground_kind_sibling(raw)
     assert sibling is not None
-    injected = validate_intent(sibling).intent
-    bg = next(l for l in injected.layers if l.id == "bg_texture")
-    assert bg.params.motif_id in _TEXTURE_MOTIFS
-    # tonal color: a NEW derived slot, mapped in every colorway, distinct from ground hex.
-    assert bg.params.color == _RESERVED_TONE_SLOT
-    slot_ids = {s.id for s in injected.palette.slots}
+    intent = validate_intent(sibling).intent
+    bg = intent.layers[0].params
+    assert bg.kind == "object_repeat"
+    assert bg.motif_id in TEXTURE_MOTIFS
+    assert bg.texture_color == _RESERVED_TONE_SLOT
+    slot_ids = {s.id for s in intent.palette.slots}
     assert _RESERVED_TONE_SLOT in slot_ids
-    for cw in injected.colorways:
+    for cw in intent.colorways:
         assert _RESERVED_TONE_SLOT in cw.mapping
-    ground_slot = injected.layers[0].params.color
-    for cw in injected.colorways:
-        assert cw.mapping[_RESERVED_TONE_SLOT] != cw.mapping[ground_slot]  # tonal != ground
-    assert_seamless_invariants(injected)
+        assert cw.mapping[_RESERVED_TONE_SLOT] != cw.mapping[bg.color]  # tonal != ground
+    assert_seamless_invariants(intent)
 
 
-
-
-
-def test_bg_texture_toggle_keeps_referenced_host():
-    # A stripe named bg_texture that a motif path-follows must NOT be removed (no orphan).
-    raw = _single_band_stripe_intent()
-    raw["layers"][1]["id"] = "bg_texture"
-    raw["layers"].append(
-        {
-            "id": "dot_lane",
-            "type": "motif",
-            "z_order": 2,
-            "params": {"motif_id": "circle", "size_mm": 1.4, "color": "accent"},
-            "placement": {
-                "type": "path_following",
-                "host_layer": "bg_texture",
-                "lane": "center",
-                "spacing_mm": 6,
-                "phase_mm": 0,
-            },
-        }
-    )
-    assert _texture_sibling(raw) is None
+def test_object_repeat_ground_flattens_to_solid_sibling():
+    # The reverse toggle: an object_repeat ground yields a plain solid sibling.
+    raw = _object_repeat_ground_intent()
+    sibling = _ground_kind_sibling(raw)
+    assert sibling is not None
+    bg = validate_intent(sibling).intent.layers[0].params
+    assert bg.kind == "solid"
+    assert bg.motif_id is None and bg.texture_color is None
 
 
 # --- Multi-design orchestration (generate_candidate_set) ----------------------
@@ -352,20 +331,10 @@ def test_derive_tonal_hex_behavior():
     assert derive_tonal_hex("19-4024 TCX", 0.12) == "19-4024 TCX"  # non-hex passthrough
 
 
-def test_injected_texture_fits_ground_gap():
-    # Tonal ground texture is DENSE: shapes nearly fill their cell (not tiny/sparse).
-    raw = _single_band_stripe_intent()
-    sibling = _texture_sibling(raw)
-    tex = next(l for l in sibling["layers"] if l["id"] == "bg_texture")
-    size = tex["params"]["size_mm"]
-    cell = tex["placement"]["lattice"]["cell_w_mm"]
-    assert cell * 0.5 <= size <= cell + 1e-9
-
-
-def test_texture_injection_skips_non_hex_ground():
+def test_ground_kind_sibling_skips_non_hex_ground():
     raw = _single_band_stripe_intent()
     raw["colorways"][0]["mapping"]["ground"] = "19-4024 TCX"  # spot color, not hex
-    assert _texture_sibling(raw) is None
+    assert _ground_kind_sibling(raw) is None
 
 
 def test_stripe_presets_are_uneven():

@@ -15,6 +15,7 @@ from app.engine import determinism
 from app.motifs import store as store_mod
 from app.motifs.facets import variant_group_key
 from app.motifs.registry import (
+    BUILTIN_MOTIF_IDS,
     MOTIFS,
     normalize_motif_svg,
     promote_motif,
@@ -85,7 +86,7 @@ def _clean():
         llm_adapter.clear_motif_svg_cache()
         recraft_adapter.clear_motif_cache()
         recraft_adapter.clear_recraft_motif_cache()
-        for key in [k for k in MOTIFS if k not in ("circle", "bee")]:
+        for key in [k for k in MOTIFS if k not in BUILTIN_MOTIF_IDS]:
             del MOTIFS[key]
 
     _purge()

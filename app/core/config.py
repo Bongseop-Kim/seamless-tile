@@ -47,9 +47,10 @@ class Settings(BaseSettings):
     # Tonal background texture: HSL lightness shift used to derive the tone-on-tone
     # texture color from the ground color. env: TEXTURE_TONE_SHIFT
     texture_tone_shift: float = Field(0.12, ge=0.0, le=0.5)
-    # Target lattice cell (mm) for the injected dense background texture; snapped to an
-    # exact tile divisor so it stays seamless. env: TEXTURE_CELL_MM
-    texture_cell_mm: float = Field(3.5, gt=0)
+    # Target lattice cell (mm) for background ground texture; snapped to an exact tile
+    # divisor so it stays seamless. Single knob for how large/dense the ground shapes
+    # read (discrete shapes fill 0.7 of the cell). env: TEXTURE_CELL_MM
+    texture_cell_mm: float = Field(8.0, gt=0)
     # Generated diagonal stripes are normalized to 45 deg with this many repeats per tile
     # (count = 2*k at 45 deg, so k = repeats//2; 2 => one big pair of diagonal stripes).
     # env: STRIPE_DIAGONAL_REPEATS

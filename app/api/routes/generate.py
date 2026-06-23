@@ -283,7 +283,7 @@ async def generate_candidate(
             colorway=request.colorway,
             source_fidelity=source_fidelity,
             registry_version=reg_version,
-            inject_texture=(input_type == "prompt"),
+            vary_ground=(input_type == "prompt"),
         )
     except IntentInvalid as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from None

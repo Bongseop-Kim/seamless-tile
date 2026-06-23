@@ -44,7 +44,10 @@ def _fmt_err(err: dict) -> str:
 
 def _layer_slot_refs(layer) -> list[str]:
     if layer.type == "background":
-        return [layer.params.color]
+        refs = [layer.params.color]
+        if layer.params.texture_color is not None:
+            refs.append(layer.params.texture_color)
+        return refs
     if layer.type == "stripe":
         return [b.color for b in layer.params.bands]
     if layer.type == "motif":
@@ -118,6 +121,39 @@ def _lattice_errors(layer, placement, tile: float) -> list[str]:
                     f"(needs (tile/cell)*drop_fraction integer for drop_axis "
                     f"{spec.drop_axis!r})"
                 )
+    return errs
+
+
+def _ground_repeat_errors(layer, tile: float) -> list[str]:
+    """Validate an ``object_repeat`` background: its texture lattice must tile (cell
+    divides tile) and stay within the instance cap, and a *registered* motif must be
+    single-color (tone-on-tone grounds are one color). An unregistered motif_id is left
+    to compose (mirrors the motif-layer check, so a stale catalog can't 422 spuriously).
+    """
+    p = layer.params
+    errs: list[str] = []
+    cell = p.cell_mm
+    n = round(tile / cell)
+    if n * n > get_settings().max_placement_instances:
+        errs.append(
+            f"layer {layer.id!r}: object_repeat ground would place {n * n} instances "
+            f"(> max_placement_instances {get_settings().max_placement_instances})"
+        )
+    if not divides(tile, cell):
+        errs.append(
+            f"layer {layer.id!r}: object_repeat cell_mm {cell} does not divide "
+            f"tile_mm {tile}"
+        )
+    try:
+        motif = get_motif(p.motif_id)
+    except ValueError:
+        motif = None
+    if motif is not None and set(motif.color_slots) != {"s0"}:
+        errs.append(
+            f"layer {layer.id!r}: object_repeat ground motif {motif.id!r} is multi-color "
+            f"(color_slots {sorted(motif.color_slots)}); ground texture must be "
+            f"single-color"
+        )
     return errs
 
 
@@ -366,6 +402,9 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                     f"layer {layer.id!r}: motif size_mm {layer.params.size_mm} exceeds "
                     f"tile_mm {tile} (boundary clones would self-overlap)"
                 )
+
+        if layer.type == "background" and layer.params.kind == "object_repeat":
+            errors.extend(_ground_repeat_errors(layer, tile))
 
         if layer.type == "stripe":
             snapped = snap_angle(layer.params.angle, tile, layer.params.period_mm)

@@ -152,3 +152,61 @@ def test_mvp_tiles_without_seam():
     excess_x, excess_y = tiling_seam(arr, tile_px)
     assert excess_x <= TILING_SEAM_TOL
     assert excess_y <= TILING_SEAM_TOL
+
+
+def _object_repeat_ground(motif_id: str) -> dict:
+    return {
+        "intent_version": 1,
+        "canvas": {"tile_mm": TILE, "dpi": 300},
+        "seed": 0,
+        "production": {"method": "digital", "max_colors": 12},
+        "palette": {
+            "slots": [{"id": "ground", "hex": "#10243a"}, {"id": "tone", "hex": "#1b3450"}]
+        },
+        "colorways": [
+            {
+                "id": "default",
+                "name": "default",
+                "mapping": {"ground": "#10243a", "tone": "#1b3450"},
+            }
+        ],
+        "layers": [
+            {
+                "id": "ground",
+                "type": "background",
+                "z_order": 0,
+                "params": {
+                    "color": "ground",
+                    "kind": "object_repeat",
+                    "motif_id": motif_id,
+                    "cell_mm": 8,  # divides TILE 48
+                    "texture_color": "tone",
+                },
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize("motif_id", ["twill", "herringbone", "diamond"])
+def test_object_repeat_ground_tiles_without_seam(motif_id):
+    # The typed object_repeat ground bakes its texture lattice in; it must tile seamlessly
+    # on its own (line weaves included -- they read as clean full-field fabric as a ground).
+    binary = find_renderer("rsvg-convert")
+    if binary is None:
+        pytest.skip("rsvg-convert not available; raster seam guard skipped")
+    intent = _object_repeat_ground(motif_id)
+    assert_seamless_invariants(validate_intent(intent).intent)  # by-construction
+    tiled = _tiled_svg(generate(intent).svg, 2)
+    png, _ = rasterize(tiled, "png", 300, 2 * TILE, binary=binary)
+    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+    tile_px = round(TILE / 25.4 * 300)
+    excess_x, excess_y = tiling_seam(arr, tile_px)
+    assert excess_x <= TILING_SEAM_TOL
+    assert excess_y <= TILING_SEAM_TOL
+
+
+def test_validate_rejects_object_repeat_non_dividing_cell():
+    intent = _object_repeat_ground("twill")
+    intent["layers"][0]["params"]["cell_mm"] = 7  # does not divide TILE 48
+    with pytest.raises(IntentInvalid):
+        validate_intent(intent)

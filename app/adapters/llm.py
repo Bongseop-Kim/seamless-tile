@@ -115,9 +115,10 @@ _EXAMPLE_INTENT = {
 }
 
 
-# A second example design that lays a dense single-color dot ground (bg_texture, a
-# built-in circle on a fine lattice) under the stripe — shows the model the shape of a
-# textured design so it actually returns one when the background is unspecified.
+# A second example design whose GROUND is a typed object_repeat texture (a single-color
+# motif on a fine lattice, baked into the ground via background.params), with a stripe
+# overlaid -- shows the model the shape of a textured-ground design. The ground texture is
+# a property of the background, NOT a separate motif layer.
 _EXAMPLE_INTENT_TEXTURED = {
     "intent_version": 1,
     "canvas": {"tile_mm": 48, "dpi": 300},
@@ -126,28 +127,34 @@ _EXAMPLE_INTENT_TEXTURED = {
     "palette": {
         "slots": [
             {"id": "ground", "hex": "#10243a"},
+            {"id": "ground_tone", "hex": "#16314f"},
             {"id": "accent", "hex": "#ef8a7a"},
         ]
     },
     "colorways": [
-        {"id": "default", "name": "default", "mapping": {"ground": "#10243a", "accent": "#ef8a7a"}}
+        {
+            "id": "default",
+            "name": "default",
+            "mapping": {"ground": "#10243a", "ground_tone": "#16314f", "accent": "#ef8a7a"},
+        }
     ],
     "layers": [
-        {"id": "ground", "type": "background", "z_order": 0, "params": {"color": "ground"}},
         {
-            "id": "bg_texture",
-            "type": "motif",
-            "z_order": 1,
-            "params": {"motif_id": "circle", "size_mm": 1.2, "color": "accent"},
-            "placement": {
-                "type": "lattice",
-                "lattice": {"cell_w_mm": 8, "cell_h_mm": 8},
+            "id": "ground",
+            "type": "background",
+            "z_order": 0,
+            "params": {
+                "color": "ground",
+                "kind": "object_repeat",
+                "motif_id": "circle",
+                "cell_mm": 8,
+                "texture_color": "ground_tone",
             },
         },
         {
             "id": "stripe_base",
             "type": "stripe",
-            "z_order": 2,
+            "z_order": 1,
             "params": {
                 "angle": -45.0,
                 "period_mm": 33.9411,
@@ -195,9 +202,10 @@ def _build_prompt(
         "SVG engine. The engine handles all geometry, repetition and seamlessness.",
         'Output ONLY one JSON object with a "designs" array. You MUST return 2 to 4 '
         "GENUINELY DIFFERENT designs (not near-duplicates): vary the motif, layout and "
-        "structure — band rhythm, placement, and the presence of a background texture — "
-        "NOT just the color. For example, for a stripe request: one plain stripe; one "
-        "stripe over a dense dotted/geometric ground; one with a different band rhythm. "
+        "structure — band rhythm, placement, and the ground kind (solid vs object_repeat "
+        "texture) — NOT just the color. For example, for a stripe request: one stripe on a "
+        "solid ground; one stripe over an object_repeat textured ground; one with a "
+        "different band rhythm. "
         'Each entry has two keys "intent" and "motif_specs". No SVG, no coordinates, no '
         "markdown, no prose.",
         "",
@@ -226,11 +234,12 @@ def _build_prompt(
         "- Respect the user's pattern class. For simple polka dots on a solid "
         "background, use a background layer plus a built-in circle motif on lattice "
         "placement; do NOT add stripe host layers.",
-        "- Background texture: the engine automatically adds a dotted ground to some "
-        "candidates when you do not include one, so you usually need not add it yourself. "
-        "To DESIGN your own ground (e.g. diamonds), add a dense single-color geometric "
-        "motif layer on a fine lattice just above the background with the reserved layer "
-        "id 'bg_texture'. Use ordinary ids (e.g. 'ground') for a normal background layer.",
+        "- Ground kind: a background layer's params.kind is 'solid' (default; just "
+        "params.color) or 'object_repeat' for an all-over tonal texture. For object_repeat "
+        "set params: color (base ground slot), motif_id (one of circle/diamond/square/"
+        "twill/herringbone), cell_mm (must divide tile_mm), and texture_color (a separate "
+        "tone-on-tone slot, close to the ground color). Do NOT build a ground from a "
+        "separate motif layer — the texture is a property of the background.",
         "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
         "cell_w_mm and cell_h_mm; type 'scatter' needs a scatter object; type "
         "'path_following' needs host_layer+lane or path plus spacing_mm.",

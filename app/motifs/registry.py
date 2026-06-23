@@ -203,6 +203,28 @@ MOTIFS: dict[str, MotifDef] = {
 }
 
 
+# Ground-texture motif vocabulary (built-ins), shared by the renderer (object_repeat
+# ground) and the candidate variant generator. Discrete shapes are spaced; the line
+# weaves (twill/herringbone) tile edge-to-edge so they fill their cell.
+TEXTURE_MOTIFS: tuple[str, ...] = ("circle", "diamond", "square", "twill", "herringbone")
+TEXTURE_LINE_MOTIFS: frozenset[str] = frozenset({"twill", "herringbone"})
+
+
+def ground_motif_size(cell_mm: float, motif_id: str) -> float:
+    """Rendered motif extent for a dense seamless ground-texture cell.
+
+    Line weaves span the cell edge-to-edge (size == cell) so adjacent cells connect into
+    continuous lines; discrete shapes fill 0.7 of the cell so they read as spaced dots/
+    diamonds. ``cell_mm`` divides the tile (validated), so size <= cell <= tile.
+    """
+    return cell_mm if motif_id in TEXTURE_LINE_MOTIFS else cell_mm * 0.7
+
+
+# The ids shipped in-process (captured before any store/test registers more), so callers
+# (e.g. test cleanup) can distinguish built-ins from dynamically registered motifs.
+BUILTIN_MOTIF_IDS: frozenset[str] = frozenset(MOTIFS)
+
+
 def get_motif(motif_id: str) -> MotifDef:
     """Look up a registered motif by id.
 

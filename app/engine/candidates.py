@@ -25,6 +25,7 @@ from app.engine.generate import Candidate
 from app.engine.intent import Band, Intent
 from app.engine.palette import Palette, derive_tonal_hex, is_hex_color
 from app.engine.seamless import assert_seamless_invariants
+from app.motifs.registry import TEXTURE_LINE_MOTIFS, TEXTURE_MOTIFS
 from app.validate.intent import IntentInvalid, validate_intent
 
 DEFAULT_CANDIDATE_COUNT = 4
@@ -53,15 +54,8 @@ _STRIPE_RHYTHMS_MULTI: tuple[tuple[str, tuple[float, ...], float], ...] = (
     ("asym_6_1_3", (6.0, 1.0, 3.0), 0.4),  # uneven three-band, cycle existing colors
 )
 
-# Reserved layer id for the injected background texture (toggled on/off across candidates
-# for ~50:50 with/without; an LLM-emitted texture reuses the same id).
-_RESERVED_TEXTURE_ID = "bg_texture"
-# Reserved palette slot for the derived tone-on-tone background-texture color.
+# Reserved palette slot for the derived tone-on-tone object_repeat ground color.
 _RESERVED_TONE_SLOT = "bg_texture_tone"
-# Ground-texture motif vocabulary (built-ins). Discrete shapes are spaced; the line
-# weaves (twill/herringbone) tile edge-to-edge.
-_TEXTURE_MOTIFS: tuple[str, ...] = ("circle", "diamond", "square", "twill", "herringbone")
-_TEXTURE_LINE_MOTIFS: frozenset[str] = frozenset({"twill", "herringbone"})
 
 
 @dataclass(frozen=True)
@@ -242,7 +236,7 @@ def generate_candidate_set(
     colorway: str | None = None,
     source_fidelity: str = SOURCE_FIDELITY_VECTOR,
     registry_version: str = REGISTRY_VERSION,
-    inject_texture: bool = False,
+    vary_ground: bool = False,
 ) -> CandidateSet:
     """Diversify and merge MULTIPLE base intents ("designs") into one ranked set.
 
@@ -253,19 +247,20 @@ def generate_candidate_set(
     dropped with a warning; if every design is invalid the last error is raised (the
     route maps it to 422, same as the single-base path).
 
-    ``inject_texture`` (prompt path) adds a texture-toggled sibling design per base — a
-    dotted ground when the design is silent, a plain copy when it carries a ``bg_texture``
-    layer — so the round-robin guarantees both with/without textures surface (~50:50). Off
-    for the intent-direct/image paths (the supplied intent is authoritative).
+    ``vary_ground`` (prompt path) adds a ground-kind-toggled sibling design per base — a
+    solid ground gains an ``object_repeat`` tonal-texture sibling, an object_repeat ground
+    gains a plain-solid sibling — so the round-robin surfaces both with/without ground
+    texture (~50:50). Off for the intent-direct/image paths (the supplied intent is
+    authoritative).
     """
     count = max(1, min(int(candidate_count), MAX_CANDIDATE_COUNT))
 
     designs = list(base_raws)
-    if inject_texture:
+    if vary_ground:
         expanded: list = []
         for raw in designs:
             expanded.append(raw)
-            sibling = _texture_sibling(raw)
+            sibling = _ground_kind_sibling(raw)
             if sibling is not None:
                 expanded.append(sibling)
         designs = expanded
@@ -368,58 +363,53 @@ def generate_candidate_set(
     )
 
 
-def _texture_sibling(raw: dict) -> dict | None:
-    """The texture-toggled sibling DESIGN (added on the prompt path so round-robin
-    selection then guarantees both with/without appear, ~50:50):
+def _ground_kind_sibling(raw: dict) -> dict | None:
+    """The ground-kind-toggled sibling DESIGN (added on the prompt path so round-robin
+    selection then surfaces both ~50:50):
 
-    - has a ``bg_texture`` layer -> a plain sibling (texture removed),
-    - otherwise                  -> a dotted sibling (dense ground injected).
+    - a solid ground  -> an ``object_repeat`` (tone-on-tone texture) ground,
+    - an object_repeat -> a plain solid ground (its base ``color`` slot kept; the now-unused
+      tone slot is left in the palette, harmless -- an unreferenced slot is valid).
 
     Returns a FRESH dict (never mutates ``raw``) or ``None``. The caller re-validates it
     and drops it if invalid.
     """
     if not isinstance(raw, dict) or not isinstance(raw.get("layers"), list):
         return None
-    layers = raw["layers"]
-    ids = {l.get("id") for l in layers if isinstance(l, dict)}
-    if _RESERVED_TEXTURE_ID in ids:
-        remaining = [
-            l for l in layers if not (isinstance(l, dict) and l.get("id") == _RESERVED_TEXTURE_ID)
-        ]
-        if not remaining:
-            return None
-        if any(
-            isinstance(l, dict)
-            and isinstance(l.get("placement"), dict)
-            and l["placement"].get("host_layer") == _RESERVED_TEXTURE_ID
-            for l in remaining
-        ):
-            return None
-        sibling = dict(raw)
-        sibling["layers"] = remaining
-        return sibling
-    return _inject_ground_texture(raw)
+    backgrounds = [
+        l for l in raw["layers"] if isinstance(l, dict) and l.get("type") == "background"
+    ]
+    if not backgrounds:
+        return None
+    ground = min(backgrounds, key=lambda l: l.get("z_order", 0))
+    params = ground.get("params") or {}
+    if params.get("kind") != "object_repeat":
+        return _ground_to_object_repeat(raw, ground)
+    if params.get("color") is None:
+        return None
+    sibling = copy.deepcopy(raw)
+    for layer in sibling["layers"]:
+        if isinstance(layer, dict) and layer.get("id") == ground.get("id"):
+            layer["params"] = {"color": params["color"]}
+    return sibling
 
 
-def _inject_ground_texture(raw: dict) -> dict | None:
-    """A copy of ``raw`` with a dense, tone-on-tone background texture added under the
-    lowest background layer: a deterministically chosen motif (dot/diamond/square/twill/
-    herringbone) on a fine lattice, colored a shade DERIVED from the ground (added as a
-    new ``bg_texture_tone`` slot mapped in every colorway). Discrete shapes are sized to
-    fit inside the stripe ground gap so they aren't sliced. Returns ``None`` if it can't
-    apply (no background, non-hex ground color, or screen-print color budget exceeded)."""
+def _ground_to_object_repeat(raw: dict, ground: dict) -> dict | None:
+    """Sibling whose solid ground becomes an ``object_repeat`` tone-on-tone texture: a
+    deterministically chosen built-in motif on a fine lattice (cell derived from
+    ``texture_cell_mm``), colored a shade DERIVED from the ground (a new
+    ``bg_texture_tone`` slot mapped in every colorway). Returns ``None`` if it can't apply
+    (non-hex ground color, or screen-print color budget exceeded). Never mutates ``raw``.
+    """
     try:
-        layers = raw["layers"]
         slots = raw["palette"]["slots"]
         colorways = raw["colorways"]
         tile = float(raw["canvas"]["tile_mm"])
     except (KeyError, TypeError, ValueError):
         return None
-    backgrounds = [l for l in layers if isinstance(l, dict) and l.get("type") == "background"]
-    if not backgrounds or not slots or not colorways:
+    if not slots or not colorways:
         return None
-    ground = min(backgrounds, key=lambda l: l.get("z_order", 0))
-    ground_slot = ground.get("params", {}).get("color")
+    ground_slot = (ground.get("params") or {}).get("color")
     settings = get_settings()
 
     # Per-colorway tonal shade derived from that colorway's ground hex. Bail if any ground
@@ -437,21 +427,26 @@ def _inject_ground_texture(raw: dict) -> dict | None:
             if len(distinct) > max_colors:
                 return None
 
+    # Motif pool: line weaves (twill/herringbone) read as continuous fabric only as a
+    # FULL-FIELD ground -- an overlaid stripe would slice them into noise. So when the
+    # design carries a stripe, restrict the ground to discrete motifs (dots/diamonds that
+    # peek cleanly between bars); a stripe-free design may use the whole vocabulary.
+    has_stripe = any(
+        isinstance(l, dict) and l.get("type") == "stripe" for l in raw["layers"]
+    )
+    pool = (
+        [m for m in TEXTURE_MOTIFS if m not in TEXTURE_LINE_MOTIFS]
+        if has_stripe
+        else list(TEXTURE_MOTIFS)
+    )
     # Deterministic motif pick (stable across processes -- no builtin hash()).
     canonical = json.dumps(raw, sort_keys=True, separators=(",", ":"))
-    idx = int(hashlib.sha256(canonical.encode("utf-8")).hexdigest(), 16) % len(_TEXTURE_MOTIFS)
-    motif_id = _TEXTURE_MOTIFS[idx]
-
+    idx = int(hashlib.sha256(canonical.encode("utf-8")).hexdigest(), 16) % len(pool)
+    motif_id = pool[idx]
     cells = max(1, round(tile / settings.texture_cell_mm))
     cell = tile / cells
-    # Dense tonal ground: shapes nearly fill their cell. Because the texture color is
-    # tone-on-tone, parts that fall under a stripe are simply hidden and parts in the
-    # ground read as subtle texture -- so it need not "fit" the stripe gap; denser looks
-    # better and never reads as a hard cut. Edge-crossing instances are clone-wrapped
-    # (seamless), so the tile still tiles.
-    size = min(cell if motif_id in _TEXTURE_LINE_MOTIFS else cell * 0.7, tile)
 
-    z = ground.get("z_order", 0) + 1
+    gid = ground.get("id")
     sibling = copy.deepcopy(raw)
     sibling["palette"]["slots"].append(
         {"id": _RESERVED_TONE_SLOT, "hex": tone_by_cw[colorways[0]["id"]]}
@@ -459,20 +454,14 @@ def _inject_ground_texture(raw: dict) -> dict | None:
     for cw in sibling["colorways"]:
         cw["mapping"][_RESERVED_TONE_SLOT] = tone_by_cw[cw["id"]]
     for layer in sibling["layers"]:
-        if layer.get("type") != "background" and layer.get("z_order", 0) >= z:
-            layer["z_order"] = layer.get("z_order", 0) + 1
-    sibling["layers"].append(
-        {
-            "id": _RESERVED_TEXTURE_ID,
-            "type": "motif",
-            "z_order": z,
-            "params": {"motif_id": motif_id, "size_mm": _q(size), "color": _RESERVED_TONE_SLOT},
-            "placement": {
-                "type": "lattice",
-                "lattice": {"cell_w_mm": _q(cell), "cell_h_mm": _q(cell)},
-            },
-        }
-    )
+        if isinstance(layer, dict) and layer.get("id") == gid:
+            layer["params"] = {
+                "color": ground_slot,
+                "kind": "object_repeat",
+                "motif_id": motif_id,
+                "cell_mm": _q(cell),
+                "texture_color": _RESERVED_TONE_SLOT,
+            }
     return sibling
 
 
