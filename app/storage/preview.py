@@ -42,10 +42,16 @@ def make_preview(svg: str, *, tile_mm: float, dpi: int, path: str) -> str:
         content=png,
         headers={
             "Authorization": f"Bearer {s.supabase_service_key}",
+            "apikey": s.supabase_service_key,
             "Content-Type": "image/png",
             "x-upsert": "true",  # idempotent: re-running a deterministic request overwrites
         },
         timeout=_TIMEOUT,
     )
-    resp.raise_for_status()
+    if resp.is_error:
+        raise httpx.HTTPStatusError(
+            f"{resp.status_code} {resp.reason_phrase}: {resp.text[:500]}",
+            request=resp.request,
+            response=resp,
+        )
     return f"{base}/storage/v1/object/public/{bucket}/{path}"
