@@ -101,7 +101,7 @@ _EXAMPLE_INTENT = {
             "id": "dot_lane",
             "type": "motif",
             "z_order": 2,
-            "params": {"motif_id": "circle", "size_mm": 1.4, "color": "accent"},
+            "params": {"motif_id": "dot_lane", "size_mm": 1.4, "color": "accent"},
             "placement": {
                 "type": "path_following",
                 "host_layer": "stripe_base",
@@ -144,7 +144,8 @@ def _build_prompt(
         'Output ONLY one JSON object with two keys: "intent" and "motif_specs" — '
         "no SVG, no coordinates, no markdown, no prose.",
         "",
-        "Target shape (match exactly):",
+        "Valid example (follow the JSON shape; do not copy its pattern unless the "
+        "user asked for stripes/dot lanes):",
         json.dumps(example, ensure_ascii=False, indent=2),
         "",
         "Constraints:",
@@ -165,9 +166,15 @@ def _build_prompt(
         "- layer params colors reference palette slot ids, never raw hex.",
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
-        "- diagonal stripes are the default (necktie domain); the engine snaps the "
-        "angle to a rational tile slope, so -36.87 (a 3/4 slope) with period_mm = "
-        "tile_mm/5 is always seamless.",
+        "- Respect the user's pattern class. For simple polka dots on a solid "
+        "background, use a background layer plus a built-in circle motif on lattice "
+        "placement; do NOT add stripe host layers.",
+        "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
+        "cell_w_mm and cell_h_mm; type 'scatter' needs a scatter object; type "
+        "'path_following' needs host_layer+lane or path plus spacing_mm.",
+        "- For stripe prompts, use stripe layers. If the user asks for diagonal "
+        "stripes, -36.87 with period_mm = tile_mm/5 is seamless; for non-diagonal "
+        "stripes, angle 0 or 90 with period_mm dividing tile_mm is seamless.",
         f"- target canvas: {json.dumps(target_canvas)}.",
     ]
     if palette:
@@ -243,6 +250,32 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
     return errors
 
 
+def _drop_redundant_builtin_specs(intent_raw: dict, specs: list[dict]) -> list[dict]:
+    layers = {
+        layer.get("id"): layer
+        for layer in intent_raw.get("layers", [])
+        if isinstance(layer, dict)
+    }
+    out: list[dict] = []
+    for spec in specs:
+        layer = layers.get(spec.get("layer_id"))
+        motif_id = (
+            layer.get("params", {}).get("motif_id")
+            if isinstance(layer, dict)
+            else None
+        )
+        subject = spec.get("subject")
+        if (
+            isinstance(motif_id, str)
+            and motif_id in MOTIFS
+            and isinstance(subject, str)
+            and subject.strip().casefold() == motif_id.casefold()
+        ):
+            continue
+        out.append(spec)
+    return out
+
+
 def build_intent(
     prompt: str,
     *,
@@ -292,6 +325,7 @@ def build_intent(
             continue
         intent_raw, specs = _split_intent_and_specs(raw)
         intent_raw.setdefault("intent_version", 1)
+        specs = _drop_redundant_builtin_specs(intent_raw, specs)
         facet_errors = _validate_spec_facets(specs)
         if facet_errors:
             last_exc = IntentInvalid(facet_errors)

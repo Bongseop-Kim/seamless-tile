@@ -72,7 +72,7 @@ def test_intent_level_warnings_are_deduped(fake_preview):
 
 
 def test_preview_storage_unconfigured_yields_null_url():
-    # No SUPABASE_URL/key in the test env => preview upload is a graceful no-op.
+    # Unconfigured preview upload is a graceful no-op.
     resp = client.post("/api/v1/generate", json={"intent": mvp_intent()})
     body = resp.json()
     assert resp.status_code == 200
@@ -176,10 +176,11 @@ def test_prompt_only_without_client_returns_502():
 
 
 def test_partial_success_when_count_exceeds_available(fake_preview):
-    # The MVP intent only diversifies along symmetry (one colorway, no scatter), so
-    # asking for more candidates than distinct layouts yields a partial result.
+    # Asking for more candidates than distinct deterministic variants yields partial.
+    intent = mvp_intent()
+    intent["layers"] = [intent["layers"][0]]
     resp = client.post(
-        "/api/v1/generate", json={"intent": mvp_intent(), "candidate_count": 8}
+        "/api/v1/generate", json={"intent": intent, "candidate_count": 8}
     )
     body = resp.json()
     assert resp.status_code == 200

@@ -115,6 +115,22 @@ def test_llm_adapter_builds_valid_intent():
     assert len(llm.calls) == 1
 
 
+def test_llm_prompt_does_not_make_stripes_the_default():
+    llm = _ScriptedLLM(json.dumps(mvp_intent()))
+    llm_build_intent(
+        "simple circular polka dots on a solid background",
+        client=llm,
+        use_cache=False,
+    )
+
+    prompt = llm.calls[0]
+    assert "diagonal stripes are the default" not in prompt
+    assert "polka dots" in prompt
+    assert "lattice placement" in prompt
+    assert "Placement specs are mandatory" in prompt
+    assert "do NOT add stripe host layers" in prompt
+
+
 def test_llm_adapter_reprompts_once_then_succeeds():
     bad = json.dumps({"intent_version": 1})  # missing canvas/palette/... -> invalid
     good = json.dumps(mvp_intent())
@@ -175,6 +191,19 @@ def test_llm_adapter_rejects_non_string_optional_spec_facets():
     res = llm_build_intent("x", client=llm, use_cache=False)
     assert len(llm.calls) == 2
     assert res.motif_specs[0]["view"] == "front"
+
+
+def test_llm_adapter_drops_redundant_builtin_specs():
+    intent = mvp_intent()
+    specs = [
+        {"layer_id": "circle_on_stripe", "subject": "circle", "scope": "whole"},
+        {"layer_id": "bee_on_stripe", "subject": "pig", "scope": "whole"},
+    ]
+    llm = _ScriptedLLM(json.dumps({"intent": intent, "motif_specs": specs}))
+
+    res = llm_build_intent("x", client=llm, use_cache=False)
+
+    assert res.motif_specs == [specs[1]]
 
 
 def test_llm_adapter_caches_frozen_intent():

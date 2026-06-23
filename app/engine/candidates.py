@@ -13,6 +13,7 @@ inside the engine boundary; the route is a thin adapter over ``generate_candidat
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -20,9 +21,10 @@ from app.core.config import REGISTRY_VERSION
 from app.engine.composition import compose
 from app.engine.determinism import ReproMeta, layout_id_for
 from app.engine.generate import Candidate
-from app.engine.intent import Intent, SymmetrySpec
+from app.engine.intent import Intent
 from app.engine.palette import Palette
 from app.engine.seamless import assert_seamless_invariants
+from app.engine.units import snap_angle
 from app.validate.intent import IntentInvalid, validate_intent
 
 DEFAULT_CANDIDATE_COUNT = 4
@@ -32,7 +34,6 @@ MAX_CANDIDATE_COUNT = 8
 SOURCE_FIDELITY_VECTOR = "vector"
 
 # Deterministic, fixed-order diversity axes.
-_SYMMETRY_KINDS: tuple[str, ...] = ("mirror_2x2", "mirror_h", "mirror_v", "glide_h")
 _DROP_FRACTIONS: tuple[float | None, ...] = (None, 0.5, 1.0 / 3.0, 0.25)
 # Coarse placement-type rank used only as a deterministic tiebreak (NOT a true spread
 # metric): path_following lanes tend to align more than all-over scatter, so they sort
@@ -212,19 +213,147 @@ def generate_candidates(
 def _layout_variants(base: Intent) -> Iterator[Intent]:
     """Deterministic layout variants of a base intent (identity first)."""
     yield base
-    base_kind = base.symmetry.kind if base.symmetry is not None else None
-    for kind in _SYMMETRY_KINDS:
-        if kind == base_kind:
-            continue
-        yield base.model_copy(update={"symmetry": SymmetrySpec(kind=kind)})
     for idx, layer in enumerate(base.layers):
+        if layer.type == "stripe":
+            yield from _stripe_variants(base, idx)
+            continue
         if not _is_lattice_layer(layer):
+            placement = getattr(layer, "placement", None)
+            if (
+                layer.type == "motif"
+                and placement is not None
+                and placement.type == "path_following"
+            ):
+                for spacing in (placement.spacing_mm * 0.75, placement.spacing_mm * 1.5):
+                    updated_layers = list(base.layers)
+                    updated_layers[idx] = layer.model_copy(
+                        update={
+                            "placement": placement.model_copy(
+                                update={"spacing_mm": _q(spacing)}
+                            )
+                        }
+                    )
+                    yield base.model_copy(update={"layers": updated_layers})
+                yield from _motif_size_variants(base, idx)
             continue
         current = layer.placement.lattice.drop_fraction
         for frac in _DROP_FRACTIONS:
             if frac == current:
                 continue
             yield _with_lattice_drop(base, idx, frac)
+        yield from _lattice_cell_variants(base, idx)
+        yield from _motif_size_variants(base, idx)
+
+
+def _q(value: float) -> float:
+    return round(float(value), 6)
+
+
+def _stripe_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
+    layer = base.layers[layer_idx]
+    params = layer.params
+    tile = base.canvas.tile_mm
+    snapped = snap_angle(params.angle, tile, params.period_mm)
+    hypot = math.hypot(snapped.p, snapped.q)
+    current_k = max(1, round(tile / (params.period_mm * hypot)))
+    for k in dict.fromkeys((current_k + 1, current_k + 2, max(1, current_k - 1))):
+        if k == current_k:
+            continue
+        yield _with_stripe_period(base, layer_idx, tile / (k * hypot))
+    if len(params.bands) == 1:
+        current = params.bands[0].width_mm / params.period_mm
+        for ratio in (0.35, 0.65):
+            if abs(ratio - current) > 1e-6:
+                yield _with_stripe_band_ratio(base, layer_idx, ratio)
+
+
+def _with_stripe_period(base: Intent, layer_idx: int, period: float) -> Intent:
+    layer = base.layers[layer_idx]
+    params = layer.params
+    scale = period / params.period_mm
+    bands = [
+        band.model_copy(
+            update={
+                "offset_mm": _q(band.offset_mm * scale),
+                "width_mm": _q(min(band.width_mm * scale, period * 0.9)),
+            }
+        )
+        for band in params.bands
+    ]
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={
+            "params": params.model_copy(
+                update={"period_mm": _q(period), "bands": bands}
+            )
+        }
+    )
+    return base.model_copy(update={"layers": updated_layers})
+
+
+def _with_stripe_band_ratio(base: Intent, layer_idx: int, ratio: float) -> Intent:
+    layer = base.layers[layer_idx]
+    params = layer.params
+    band = params.bands[0]
+    updated_band = band.model_copy(update={"width_mm": _q(params.period_mm * ratio)})
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={
+            "params": params.model_copy(update={"bands": [updated_band]})
+        }
+    )
+    return base.model_copy(update={"layers": updated_layers})
+
+
+def _lattice_cell_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
+    layer = base.layers[layer_idx]
+    spec = layer.placement.lattice
+    tile = base.canvas.tile_mm
+    nx = max(1, round(tile / spec.cell_w_mm))
+    ny = max(1, round(tile / spec.cell_h_mm))
+    for nxx, nyy in ((nx + 1, ny + 1), (max(1, nx - 1), max(1, ny - 1))):
+        if nxx == nx and nyy == ny:
+            continue
+        yield _with_lattice_cells(base, layer_idx, tile / nxx, tile / nyy)
+
+
+def _with_lattice_cells(
+    base: Intent, layer_idx: int, cell_w: float, cell_h: float
+) -> Intent:
+    layer = base.layers[layer_idx]
+    placement = layer.placement
+    spec = placement.lattice
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={
+            "placement": placement.model_copy(
+                update={
+                    "lattice": spec.model_copy(
+                        update={"cell_w_mm": _q(cell_w), "cell_h_mm": _q(cell_h)}
+                    )
+                }
+            )
+        }
+    )
+    return base.model_copy(update={"layers": updated_layers})
+
+
+def _motif_size_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
+    layer = base.layers[layer_idx]
+    size = layer.params.size_mm
+    for factor in (0.75, 1.35):
+        new_size = min(base.canvas.tile_mm, size * factor)
+        if abs(new_size - size) > 1e-6:
+            yield _with_motif_size(base, layer_idx, new_size)
+
+
+def _with_motif_size(base: Intent, layer_idx: int, size: float) -> Intent:
+    layer = base.layers[layer_idx]
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={"params": layer.params.model_copy(update={"size_mm": _q(size)})}
+    )
+    return base.model_copy(update={"layers": updated_layers})
 
 
 def _with_lattice_drop(base: Intent, layer_idx: int, frac: float | None) -> Intent:
