@@ -20,7 +20,7 @@ are normalized to :class:`~app.adapters.base.AdapterClientError`.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from app.adapters.base import AdapterClientError, cache_key
 
@@ -28,7 +28,6 @@ DEFAULT_MODEL = "text-embedding-3-small"
 EMBEDDING_CACHE_MAX_SIZE = 512
 
 
-@runtime_checkable
 class EmbeddingClient(Protocol):
     """Minimal embedding seam. ``model`` lets :func:`embed_query` key its cache by
     model id, so swapping models cannot collide with previously cached vectors."""

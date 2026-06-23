@@ -132,7 +132,7 @@ def assert_seamless_invariants(intent: Intent) -> None:
                 )
         elif layer.type == "stripe":
             period = layer.params.period_mm
-            snapped = snap_angle(layer.params.angle, tile, period)
+            snapped = snap_angle(layer.params.angle)
             if not stripe_tiles(tile, period, snapped.p, snapped.q):
                 raise AssertionError(
                     f"layer {layer.id!r}: stripe (angle {layer.params.angle}, period {period}) "
@@ -154,7 +154,7 @@ def assert_seamless_invariants(intent: Intent) -> None:
                 and placement.path.wavelength is not None
             ):
                 angle = placement.path.angle if placement.path.angle is not None else 0.0
-                snapped = snap_angle(angle, tile, tile)
+                snapped = snap_angle(angle)
                 closure = tile * math.hypot(snapped.p, snapped.q)
                 if not divides(closure, placement.path.wavelength):
                     raise AssertionError(

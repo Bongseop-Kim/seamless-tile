@@ -21,7 +21,7 @@ from __future__ import annotations
 import base64
 import re
 import xml.etree.ElementTree as ET
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 import httpx
 
@@ -56,7 +56,6 @@ _PAINT_ATTRS = ("fill", "stroke", "color")  # sanitizer COLOR_ATTRS
 _BG_AREA_RATIO = 0.9
 
 
-@runtime_checkable
 class RecraftClient(Protocol):
     """Minimal motif-generation seam: a prompt in, a raw SVG string out."""
 

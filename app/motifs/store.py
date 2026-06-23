@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from app.adapters.base import AdapterClientError
 from app.motifs.registry import MotifDef
@@ -68,7 +68,6 @@ class MotifRecord:
         )
 
 
-@runtime_checkable
 class MotifStore(Protocol):
     """CRUD seam. Tests inject an in-memory fake; psycopg is never imported by tests."""
 
@@ -148,9 +147,7 @@ def get_default_store() -> MotifStore | None:
     return _DEFAULT_STORE
 
 
-def _resolve_store(store: MotifStore | None) -> MotifStore:
-    if store is not None:
-        return store
+def _resolve_store() -> MotifStore:
     if _DEFAULT_STORE is not None:
         return _DEFAULT_STORE
     raise MotifStoreNotConfigured(

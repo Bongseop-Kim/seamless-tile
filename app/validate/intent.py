@@ -210,10 +210,10 @@ def _lane_closure(placement, layers_by_id, tile: float) -> tuple[float, int, int
         host = layers_by_id.get(placement.host_layer)
         if host is None or host.type != "stripe":
             return None
-        snapped = snap_angle(host.params.angle, tile, host.params.period_mm)
+        snapped = snap_angle(host.params.angle)
     elif placement.path is not None:
         angle = placement.path.angle if placement.path.angle is not None else 0.0
-        snapped = snap_angle(angle, tile, tile)
+        snapped = snap_angle(angle)
     else:
         return None
     return tile * math.hypot(snapped.p, snapped.q), snapped.p, snapped.q
@@ -225,7 +225,7 @@ def _repair_stripe_period(layer, tile: float):
     The LLM often picks an off-grid diagonal period; snapping repairs it instead of 422.
     Angle is untouched. Returns ``(layer, None)`` if already commensurate."""
     params = layer.params
-    snapped = snap_angle(params.angle, tile, params.period_mm)
+    snapped = snap_angle(params.angle)
     if stripe_tiles(tile, params.period_mm, snapped.p, snapped.q):
         return layer, None
     hypot = math.hypot(snapped.p, snapped.q)
@@ -407,7 +407,7 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
             errors.extend(_ground_repeat_errors(layer, tile))
 
         if layer.type == "stripe":
-            snapped = snap_angle(layer.params.angle, tile, layer.params.period_mm)
+            snapped = snap_angle(layer.params.angle)
             if not stripe_tiles(tile, layer.params.period_mm, snapped.p, snapped.q):
                 errors.append(
                     f"layer {layer.id!r}: stripe (angle {layer.params.angle}, "
@@ -488,7 +488,7 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                 # axis-aligned lane L == tile; for a diagonal it is larger (and, for a
                 # non-Pythagorean slope, irrational -> only sub-multiples close).
                 angle = placement.path.angle if placement.path.angle is not None else 0.0
-                snapped = snap_angle(angle, tile, tile)
+                snapped = snap_angle(angle)
                 closure = tile * math.hypot(snapped.p, snapped.q)
                 if not divides(closure, placement.path.wavelength):
                     errors.append(

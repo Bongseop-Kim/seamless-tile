@@ -54,16 +54,7 @@ def _clean():
     _purge()
 
 
-class _ScriptedLLM:
-    """Returns canned completion strings in order (last one repeats)."""
-
-    def __init__(self, *responses: str) -> None:
-        self._responses = list(responses)
-        self.calls: list[str] = []
-
-    def complete(self, prompt: str) -> str:
-        self.calls.append(prompt)
-        return self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
+from tests._fakes import _ScriptedLLM
 
 
 class _FakeStore:

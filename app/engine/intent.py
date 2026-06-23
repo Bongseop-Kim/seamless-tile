@@ -49,7 +49,7 @@ class ColorwaySpec(BaseModel):
 class PathSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["straight", "wave", "custom"] = "straight"
+    kind: Literal["straight", "wave"] = "straight"
     angle: float | None = None
     wavelength: float | None = Field(default=None, gt=0)
     amplitude: float | None = Field(default=None, ge=0)

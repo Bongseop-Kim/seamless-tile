@@ -26,8 +26,7 @@ from app.motifs.store import MotifRecord, MotifStoreNotConfigured, set_default_s
 from scripts.seed_head_catalog import HEAD_CATALOG, seed
 
 
-def _svg(inner: str, viewbox: str = "0 0 100 100") -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}">{inner}</svg>'
+from tests._helpers import _svg
 
 
 class _FakeStore:

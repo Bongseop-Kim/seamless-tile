@@ -120,5 +120,4 @@ ENGINE_VERSION = "0.1.0"
 REGISTRY_VERSION = "0.1.0"
 
 # Allowed raster DPIs at the production/raster boundary.
-DEFAULT_DPI = 300
 ALLOWED_DPI = (150, 300, 600)

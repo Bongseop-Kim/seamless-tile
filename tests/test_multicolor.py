@@ -28,8 +28,7 @@ from app.validate.intent import IntentInvalid, validate_intent
 NS = "{http://www.w3.org/2000/svg}"
 
 
-def _svg(inner: str, viewbox: str = "0 0 100 100") -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}">{inner}</svg>'
+from tests._helpers import _svg
 
 
 # Left half red, right half blue -> 2 distinct colors -> slots ("s0", "s1").

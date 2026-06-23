@@ -20,7 +20,7 @@ def build_stripe(params: StripeParams, tile_mm: float) -> "Stripe":
     return Stripe(
         params=params,
         tile_mm=tile_mm,
-        snapped=snap_angle(params.angle, tile_mm, params.period_mm),
+        snapped=snap_angle(params.angle),
     )
 
 

@@ -11,7 +11,7 @@
 - **`engine/primitives/stripe.py`** — `angle`·`period_mm`·`bands[]`로 직선 band를 그리고,
   **host 계약을 노출**: `lanes() -> [LaneField{id, centerline_path, spacing_mm, phase_mm, angle}]`.
   band 중심선(`center`)·끝선(`end`)을 lane id로 식별.
-- **각도 스냅** — `snap_angle(requested, tile_mm, period_mm) -> SnappedAngle`. 요청 사선 각도를
+- **각도 스냅** — `snap_angle(requested) -> SnappedAngle`. 요청 사선 각도를
   타일과 commensurate한 최근접 유리 기울기로 스냅. `engine/units.py` 또는 `engine/seamless.py`.
 - **`render/svg.py` 출력 인코딩(보안 베이스라인)** — 속성값 quote-escape, 텍스트 `& < >`
   이스케이프. f-string 직접 보간 제거. (전체 allowlist 하드닝은 세션 8.)
@@ -37,7 +37,7 @@
 
 ## 수용 기준
 - `stripe`가 주어진 intent로 band geometry + `lanes()` 목록을 반환한다.
-- `snap_angle(-32°, tile, period)`가 타일 정합 유리 기울기로 스냅되고, 스냅 각도로 lane이 정수
+- `snap_angle(-32°)`가 타일 정합 유리 기울기로 스냅되고, 스냅 각도로 lane이 정수
   횟수 후 자기 자신으로 wrap한다(테스트로 commensurability 확인).
 - `background`가 슬롯/colorway 색으로 채워진다.
 - SVG 직렬화가 `<`, `&`, `"` 등을 이스케이프한다(인코딩 단위 테스트).

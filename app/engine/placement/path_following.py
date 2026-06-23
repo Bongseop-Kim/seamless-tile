@@ -27,10 +27,8 @@ def _centerline_from_path(path: PathSpec, tile_mm: float) -> Centerline:
     The angle is snapped to a tile-commensurate slope (square tile: slope depends only
     on the angle and the denominator cap), so the lane closes on the torus.
     """
-    if path.kind == "custom":
-        raise ValueError("path_following: custom path_id is out of session-5 scope")
     angle = path.angle if path.angle is not None else 0.0
-    snapped = snap_angle(angle, tile_mm, tile_mm)
+    snapped = snap_angle(angle)
     if path.kind == "wave":
         if path.wavelength is None or path.amplitude is None:
             raise ValueError("wave path requires wavelength and amplitude")

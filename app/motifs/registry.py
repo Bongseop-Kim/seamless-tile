@@ -372,7 +372,7 @@ def promote_motif(motif_id: str) -> None:
     """
     from app.motifs.store import _resolve_store
 
-    _resolve_store(None).set_status(motif_id, "curated")
+    _resolve_store().set_status(motif_id, "curated")
     _bump_curated_pool_epoch()
 
 
@@ -395,7 +395,7 @@ def reject_motif(motif_id: str) -> None:
         raise ValueError(f"cannot reject built-in motif {motif_id!r}")
     from app.motifs.store import _resolve_store
 
-    _resolve_store(None).delete(motif_id)
+    _resolve_store().delete(motif_id)
     MOTIFS.pop(motif_id, None)
     _flush_motif_id_caches()
     _bump_curated_pool_epoch()  # the deleted row may have been curated

@@ -45,8 +45,6 @@ class GenerationLogRow:
     warnings: list[str] = field(default_factory=list)
     generate_ms: float | None = None
     render_ms: float | None = None
-    error_type: str | None = None
-    error_message: str | None = None
 
 
 _INSERT = (
@@ -55,9 +53,9 @@ _INSERT = (
     " reference_image_bytes, colorway, seed, candidate_count_requested, "
     " candidate_count_returned, distinct_layouts, available_strategies, "
     " engine_version, registry_version, intent, candidates, warnings, "
-    " generate_ms, render_ms, error_type, error_message) "
+    " generate_ms, render_ms) "
     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-    " %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)"
+    " %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)"
 )
 
 
@@ -92,8 +90,6 @@ def insert_generation_log(row: GenerationLogRow) -> None:
                     json.dumps(row.warnings),
                     row.generate_ms,
                     row.render_ms,
-                    row.error_type,
-                    row.error_message,
                 ),
             )
     except Exception as exc:  # logging must never break the request

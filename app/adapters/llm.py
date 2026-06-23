@@ -17,7 +17,7 @@ import copy
 import json
 import math
 import re
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
 from app.core.config import get_settings
@@ -30,7 +30,6 @@ DEFAULT_TILE_MM = 48.0
 DEFAULT_DPI = 300
 
 
-@runtime_checkable
 class LLMClient(Protocol):
     """Minimal text-completion seam. Kept tiny so a real SDK can back it later
     without churning the signature (no streaming/tool-use leakage into the core)."""
