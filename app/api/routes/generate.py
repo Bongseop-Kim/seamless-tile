@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from functools import partial
 from typing import Annotated
 
@@ -19,7 +20,7 @@ from app.api.schemas.generate import (
     GenerateRequest,
     GenerateResponse,
 )
-from app.adapters.base import AdapterClientError
+from app.adapters.base import AdapterClientError, cache_key
 from app.adapters.embedding import get_default_embedding_client
 from app.adapters.image import build_intent as image_build_intent
 from app.adapters.llm import build_intent as llm_build_intent
@@ -39,6 +40,16 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 # Product-surface fields that are ignored when a raw `intent` is supplied directly
 # (the intent is then authoritative); they ARE honored on the prompt/image paths.
 _INTENT_DIRECT_IGNORED = ("prompt", "reference_image", "canvas", "palette")
+
+# Process-local LRU: cache_key(request + reg_version) -> (candidates_payload, warnings).
+# candidates_payload is [(id, png_url), ...]; request_id is intentionally NOT stored so a
+# cache hit always re-stamps the caller's own (fresh) request_id. Mirrors the embedding LRU.
+_RESPONSE_CACHE: "OrderedDict[str, tuple[list[tuple[str, str]], list[str]]]" = OrderedDict()
+
+
+def reset_response_cache() -> None:
+    """Clear the in-process generate response cache (test isolation / ops)."""
+    _RESPONSE_CACHE.clear()
 
 _GENERATE_DESCRIPTION = """
 `intent`, `reference_image`, `prompt` 중 하나로 seamless SVG candidate를 생성합니다.
@@ -166,6 +177,38 @@ async def generate_candidate(
     motif_specs: list[dict] = []
     input_type = "intent"
 
+    # Cache short-circuit BEFORE any adapter/engine/render work. The repro seal moves with
+    # the curated pool, so it is part of the key (pool change -> auto-invalidation); it is a
+    # pure function of the pool, memoized per (store, epoch), so calling it on a hit is cheap.
+    settings = get_settings()
+    loop = asyncio.get_event_loop()
+    reg_version = await loop.run_in_executor(
+        None, registry_version_for, get_default_store()
+    )
+    key = None
+    if settings.generate_cache_size:
+        key = cache_key(
+            {"k": "generate", "request": request.model_dump(), "reg": reg_version}
+        )
+        hit = _RESPONSE_CACHE.get(key)
+        if hit is not None:
+            _RESPONSE_CACHE.move_to_end(key)
+            cached_candidates, cached_warnings = hit
+            log_metrics(
+                "generate",
+                cache="hit",
+                returned=len(cached_candidates),
+                warnings=len(cached_warnings),
+            )
+            return GenerateResponse(
+                request_id=get_request_id(),
+                candidates=[
+                    CandidateResponse(id=cid, png_url=url)
+                    for cid, url in cached_candidates
+                ],
+                warnings=cached_warnings,
+            )
+
     if request.intent is not None:
         intent_raw = request.intent
         warnings += [
@@ -220,13 +263,8 @@ async def generate_candidate(
             )
         )
 
-    # Derive the repro seal once per request from the live curated pool (spec §7.3/D17):
-    # the version moves with the pool, so unsaved (prompt, seed) requests stay reproducible
-    # within a pool snapshot. Store absent/empty/erroring -> baseline (see helper).
-    loop = asyncio.get_event_loop()
-    reg_version = await loop.run_in_executor(
-        None, registry_version_for, get_default_store()
-    )
+    # reg_version (the repro seal, spec §7.3/D17) was derived once at the top of the handler
+    # for the cache key and is reused here.
     started = time.perf_counter()
     try:
         result = generate_candidates(
@@ -256,7 +294,6 @@ async def generate_candidate(
     # the response carries only the URL. The SVG source is preserved in the log below
     # (the slimmed response no longer returns svg/intent/repro). Renders run in parallel
     # and are best-effort per candidate — a render/upload miss degrades to png_url=null.
-    settings = get_settings()
     render_started = time.perf_counter()
     if preview_configured():
         rendered = await asyncio.gather(
@@ -296,6 +333,20 @@ async def generate_candidate(
         CandidateResponse(id=rc.id, png_url=url)
         for rc, url in zip(result.candidates, png_urls)
     ]
+
+    # Cache only fully-successful renders: a None url means preview was unconfigured or a
+    # render/upload failed (and that failure warning is nondeterministic), so such responses
+    # must not be served back. ponytail: no single-flight on concurrent first-misses — each
+    # uploads to its own request_id path (x-upsert idempotent), last write wins here, and the
+    # served URL is always valid; worst case one orphaned PNG. Per-key asyncio.Lock if it ever matters.
+    if key is not None and all(url is not None for url in png_urls):
+        _RESPONSE_CACHE[key] = (
+            [(rc.id, url) for rc, url in zip(result.candidates, png_urls)],
+            warnings,
+        )
+        _RESPONSE_CACHE.move_to_end(key)
+        if len(_RESPONSE_CACHE) > settings.generate_cache_size:
+            _RESPONSE_CACHE.popitem(last=False)
 
     # Best-effort logging off the hot path (no-op without SUPABASE_DB_URL); preserves
     # the SVG + intent/repro that the response dropped.

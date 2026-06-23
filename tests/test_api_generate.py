@@ -10,6 +10,17 @@ from tests.test_intent import mvp_intent
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _reset_generate_cache():
+    """The response cache is a module-level dict that lives for the whole pytest process;
+    clear it around every test so identical payloads across tests don't cross-pollinate."""
+    from app.api.routes.generate import reset_response_cache
+
+    reset_response_cache()
+    yield
+    reset_response_cache()
+
+
 @pytest.fixture
 def fake_preview(monkeypatch):
     """Pretend preview storage is configured and return a deterministic fake URL per
@@ -195,3 +206,49 @@ def test_deferred_fields_are_accepted_with_warning(fake_preview):
     )
     assert resp.status_code == 200
     assert any("prompt" in w for w in resp.json()["warnings"])
+
+
+def test_identical_request_served_from_cache(fake_preview, monkeypatch):
+    """A second identical request skips the engine/render entirely and replays the cached
+    candidates + preview URLs, but still carries its own fresh request_id."""
+    import app.api.routes.generate as route
+
+    n = {"c": 0}
+    real = route.generate_candidates
+
+    def counting_generate(*a, **k):
+        n["c"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(route, "generate_candidates", counting_generate)
+    payload = {"intent": mvp_intent(), "candidate_count": 4, "seed": 999}
+    a = client.post("/api/v1/generate", json=payload).json()
+    b = client.post(
+        "/api/v1/generate", headers={"X-Request-ID": "second"}, json=payload
+    ).json()
+
+    assert n["c"] == 1  # second request never reached the engine
+    assert [c["id"] for c in a["candidates"]] == [c["id"] for c in b["candidates"]]
+    assert [c["png_url"] for c in a["candidates"]] == [
+        c["png_url"] for c in b["candidates"]
+    ]
+    assert b["request_id"] == "second"  # fresh request_id, not the cached original
+
+
+def test_cache_disabled_when_size_zero(fake_preview, monkeypatch):
+    """generate_cache_size=0 disables lookup+store: every request re-runs the engine."""
+    import app.api.routes.generate as route
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "generate_cache_size", 0)
+    n = {"c": 0}
+    real = route.generate_candidates
+    monkeypatch.setattr(
+        route,
+        "generate_candidates",
+        lambda *a, **k: (n.__setitem__("c", n["c"] + 1) or real(*a, **k)),
+    )
+    payload = {"intent": mvp_intent(), "candidate_count": 2, "seed": 7}
+    client.post("/api/v1/generate", json=payload)
+    client.post("/api/v1/generate", json=payload)
+    assert n["c"] == 2

@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
     preview_dpi: int = Field(96, ge=1)  # env: PREVIEW_DPI; tile preview raster resolution
 
+    # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
+    # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 0이면 비활성(lookup+store 생략) —
+    # 결정론 디버깅용. ponytail: 프로세스-로컬(워커별 독립); 멀티워커 hit-rate가 문제되면 공유 캐시로 승급.
+    generate_cache_size: int = Field(256, ge=0)  # env: GENERATE_CACHE_SIZE
+
     # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
     # GeminiClient as the default LLM client at boot; unset => no default (tests inject
     # fakes).
