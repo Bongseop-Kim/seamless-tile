@@ -6,7 +6,42 @@ from pydantic import ValidationError
 from app.engine.determinism import ReproMeta, seeded_rng, sorted_layers
 from app.engine.intent import ScatterSpec
 from app.engine.seamless import assert_seamless_invariants
+from app.motifs.registry import MOTIFS, MotifDef, _ORIGIN, _UNIT_BBOX, _symbol
 from app.validate.intent import IntentInvalid, validate_intent
+
+
+def _register_test_motifs() -> None:
+    """circle/bee are no longer shipped built-ins; the engine tests still exercise the
+    seamless/composition/determinism machinery against fixed geometry, so re-register the
+    same ids + verbatim geometry as TEST fixtures. Done at import time (not a conftest
+    fixture) because the determinism subprocess tests import this module directly without
+    pytest. ``setdefault`` keeps it idempotent and re-import-safe."""
+    MOTIFS.setdefault(
+        "circle",
+        MotifDef(
+            id="circle",
+            symbol=_symbol("circle", '<circle cx="0" cy="0" r="0.5" fill="currentColor"/>'),
+            bbox_mm=_UNIT_BBOX,
+            anchor=_ORIGIN,
+        ),
+    )
+    MOTIFS.setdefault(
+        "bee",
+        MotifDef(
+            id="bee",
+            symbol=_symbol(
+                "bee",
+                '<ellipse cx="0" cy="0" rx="0.22" ry="0.42" fill="currentColor"/>'
+                '<ellipse cx="-0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>'
+                '<ellipse cx="0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>',
+            ),
+            bbox_mm=_UNIT_BBOX,
+            anchor=_ORIGIN,
+        ),
+    )
+
+
+_register_test_motifs()
 
 
 def mvp_intent() -> dict:

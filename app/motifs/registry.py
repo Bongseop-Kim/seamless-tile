@@ -12,10 +12,10 @@ that Placement/Composition consume without knowing the inner geometry:
   bounding-box extent in mm) and the anchor lands exactly on the lane point.
 - Color is normalized to a slot reference via ``fill="currentColor"``; the bound
   output color is set as ``color=`` on the ``<use>`` at composition time, so
-  colorway swaps work. The MVP ``circle``/``bee`` are single-color.
+  colorway swaps work. Single-color motifs keep the legacy ``currentColor`` convention.
 
-Built-in motifs are registered here. Recraft-generated motifs (session 8) will be
-registered through the same contract at authoring time.
+No motifs ship built-in; every motif is generated (LLM/Recraft) and registered through
+this contract at authoring time.
 """
 
 from __future__ import annotations
@@ -131,35 +131,11 @@ def _symbol(motif_id: str, geometry: str) -> str:
     return f'<symbol id="motif-{motif_id}" overflow="visible">{geometry}</symbol>'
 
 
-_CIRCLE = MotifDef(
-    id="circle",
-    symbol=_symbol("circle", '<circle cx="0" cy="0" r="0.5" fill="currentColor"/>'),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-# A simple, single-color bee silhouette within the unit box: a vertical body
-# ellipse flanked by two wing ellipses. All fills are currentColor.
-_BEE = MotifDef(
-    id="bee",
-    symbol=_symbol(
-        "bee",
-        '<ellipse cx="0" cy="0" rx="0.22" ry="0.42" fill="currentColor"/>'
-        '<ellipse cx="-0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>'
-        '<ellipse cx="0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>',
-    ),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-MOTIFS: dict[str, MotifDef] = {
-    _CIRCLE.id: _CIRCLE,
-    _BEE.id: _BEE,
-}
+MOTIFS: dict[str, MotifDef] = {}
 
 
-# The ids shipped in-process (captured before any store/test registers more), so callers
-# (e.g. test cleanup) can distinguish built-ins from dynamically registered motifs.
+# No motifs ship built-in (kept as an empty set so consumers — e.g. test cleanup and the
+# reject_motif guard — can still distinguish built-ins from dynamically registered motifs).
 BUILTIN_MOTIF_IDS: frozenset[str] = frozenset(MOTIFS)
 
 

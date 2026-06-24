@@ -285,19 +285,6 @@ def test_llm_adapter_rejects_non_string_optional_spec_facets():
     assert res.motif_specs[0]["view"] == "front"
 
 
-def test_llm_adapter_drops_redundant_builtin_specs():
-    intent = mvp_intent()
-    specs = [
-        {"layer_id": "circle_on_stripe", "subject": "circle", "scope": "whole"},
-        {"layer_id": "bee_on_stripe", "subject": "pig", "scope": "whole"},
-    ]
-    llm = _ScriptedLLM(json.dumps({"intent": intent, "motif_specs": specs}))
-
-    res = llm_build_intent("x", client=llm, use_cache=False)
-
-    assert res.motif_specs == [specs[1]]
-
-
 def test_llm_adapter_caches_frozen_intent():
     first, second = mvp_intent(), mvp_intent()
     second["seed"] = 424242  # a distinct response, so equality below is non-vacuous
@@ -396,7 +383,7 @@ def test_image_adapter_ignores_unknown_motif_hint():
         for layer in res.intent["layers"]
         if layer["type"] == "motif"
     ]
-    assert motif_ids == ["circle"]  # falls back to the always-present library motif
+    assert motif_ids == []  # no fallback motif: the motif layer is dropped
 
 
 def test_image_adapter_maps_vlm_failure_to_adapter_error():
@@ -481,7 +468,7 @@ def test_image_adapter_ignores_unhashable_motif_hint():
         for layer in res.intent["layers"]
         if layer["type"] == "motif"
     ]
-    assert motif_ids == ["circle"]  # malformed hint ignored, no crash
+    assert motif_ids == []  # malformed hint ignored, motif layer dropped, no crash
 
 
 def test_image_adapter_rejects_data_uri_without_payload():

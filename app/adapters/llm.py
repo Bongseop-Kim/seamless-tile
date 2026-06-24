@@ -22,7 +22,7 @@ from typing import Protocol
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
 from app.core.config import get_settings
 from app.motifs import facets
-from app.motifs.registry import MOTIFS, normalize_motif_svg, register_motif
+from app.motifs.registry import normalize_motif_svg, register_motif
 from app.render.sanitize import SanitizeError
 from app.validate.intent import IntentInvalid, validate_intent
 
@@ -122,7 +122,6 @@ def _build_prompt(
     errors: list[str] | None,
 ) -> str:
     target_canvas = canvas or {"tile_mm": DEFAULT_TILE_MM, "dpi": DEFAULT_DPI}
-    builtin_ids = ", ".join(sorted(MOTIFS))
     scope_vocab = ", ".join(sorted(facets.SCOPE_VOCAB))
     example = {
         "designs": [
@@ -162,8 +161,6 @@ def _build_prompt(
         "- For EACH motif layer in intent.layers, set params.motif_id to that layer's "
         "id (a placeholder the resolver replaces) and add a matching motif_specs entry "
         "whose layer_id equals the layer id. Do NOT invent registry ids.",
-        f"- You MAY instead reference a built-in motif directly (motif_id one of: "
-        f"{builtin_ids}); omit its motif_specs entry if you do.",
         "- Each motif_specs entry needs: subject (free text, required — any object, "
         "shape, or abstract idea), scope "
         f"(REQUIRED, one of: {scope_vocab}) — the motif's granularity: 'whole' for the "
@@ -176,8 +173,9 @@ def _build_prompt(
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
         "- Respect the user's pattern class. For simple polka dots on a solid "
-        "background, use a background layer plus a built-in circle motif on lattice "
-        "placement; do NOT add stripe host layers.",
+        "background, use a background layer plus a motif layer on lattice placement with "
+        'a matching motif_specs entry (subject e.g. "dot"/"circle"); do NOT add stripe '
+        "host layers.",
         "- A background layer is a flat solid fill: params has only `color` (a palette "
         "slot id). It carries no texture or motif of its own.",
         "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
@@ -282,32 +280,6 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
     return errors
 
 
-def _drop_redundant_builtin_specs(intent_raw: dict, specs: list[dict]) -> list[dict]:
-    layers = {
-        layer.get("id"): layer
-        for layer in intent_raw.get("layers", [])
-        if isinstance(layer, dict)
-    }
-    out: list[dict] = []
-    for spec in specs:
-        layer = layers.get(spec.get("layer_id"))
-        motif_id = (
-            layer.get("params", {}).get("motif_id")
-            if isinstance(layer, dict)
-            else None
-        )
-        subject = spec.get("subject")
-        if (
-            isinstance(motif_id, str)
-            and motif_id in MOTIFS
-            and isinstance(subject, str)
-            and subject.strip().casefold() == motif_id.casefold()
-        ):
-            continue
-        out.append(spec)
-    return out
-
-
 _STRIPE_AXIS_TOL_DEG = 8.0
 
 
@@ -405,7 +377,6 @@ def build_intents(
         for idx, (intent_raw, specs) in enumerate(_split_designs(raw)):
             intent_raw.setdefault("intent_version", 1)
             _normalize_stripes(intent_raw, get_settings())
-            specs = _drop_redundant_builtin_specs(intent_raw, specs)
             facet_errors = _validate_spec_facets(specs)
             if facet_errors:
                 design_errors += [f"design[{idx}]: {e}" for e in facet_errors]

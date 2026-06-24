@@ -300,7 +300,7 @@ def test_route_prompt_miss_generates_and_composes(monkeypatch):
         if layer["type"] == "motif"
     }
     assert any(m.startswith("recraft-") for m in motif_ids)  # generated motif present
-    assert "bee" in motif_ids  # unspecced built-in layer preserved
+    assert "bee" in motif_ids  # unspecced motif layer (fixture id) left untouched
 
 
 def test_route_prompt_same_seed_is_deterministic(monkeypatch):

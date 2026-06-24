@@ -27,6 +27,7 @@ from scripts.seed_head_catalog import HEAD_CATALOG, seed
 
 
 from tests._helpers import _svg
+from tests.test_intent import _register_test_motifs
 
 
 class _FakeStore:
@@ -87,6 +88,9 @@ def _clean():
         recraft_adapter.clear_recraft_motif_cache()
         for key in [k for k in MOTIFS if k not in BUILTIN_MOTIF_IDS]:
             del MOTIFS[key]
+        # circle/bee are test fixtures (no longer built-ins), so the purge above evicts
+        # them; re-seed so cross-file tests relying on them still find them.
+        _register_test_motifs()
 
     _purge()
     yield
@@ -157,15 +161,6 @@ def test_reject_removes_from_store_memory_and_caches():
     assert llm_adapter._motif_svg_cache == {}  # motif-id caches flushed (spec §6.4)
     assert recraft_adapter._motif_cache == {}
     assert recraft_adapter._motif_svg_cache == {}
-
-
-@pytest.mark.parametrize("motif_id", sorted(BUILTIN_MOTIF_IDS))
-def test_reject_builtin_is_refused(motif_id):
-    # The built-in guard fires before the store is resolved (no store configured here),
-    # so a ValueError — not MotifStoreNotConfigured — proves the guard's precedence.
-    with pytest.raises(ValueError):
-        reject_motif(motif_id)
-    assert motif_id in MOTIFS
 
 
 # --- AC#2: head-catalog seed yields a curated pool >= 2 with seed diversity ---

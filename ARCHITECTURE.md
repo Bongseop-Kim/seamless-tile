@@ -478,6 +478,9 @@ key=value 한 줄을 stdlib 로그로 남긴다(외부 백엔드 없음). `app/c
 
 첫 MVP는 다음 intent를 LLM 없이 직접 넣어 생성할 수 있어야 한다(넥타이 사선 시나리오).
 
+> circle/bee는 더 이상 내장(shipped) 모티프가 아니라 이 시나리오를 검증하는 **테스트 fixture**다
+> (`tests/test_intent.py`). 런타임 모티프는 전부 LLM/Recraft가 생성해 `register_motif`로 등록한다.
+
 ```text
 background + diagonal stripe + stripe lane 위 circle motif(path_following) + bee motif(path_following)
   -> seamless SVG
