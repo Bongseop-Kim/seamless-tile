@@ -116,6 +116,22 @@ def test_mvp_intent_is_valid():
     assert result.warnings == []
 
 
+def test_bare_lane_on_multi_band_stripe_normalized_to_band0():
+    # An LLM emits a bare lane ("center") against a multi-band stripe, whose lanes are
+    # namespaced (b0.center...). Without repair this fails deep in compose (unknown lane)
+    # and drops every candidate -> opaque 500. Repair normalizes it to band 0.
+    intent = mvp_intent()
+    intent["layers"][1]["params"]["bands"] = [
+        {"offset_mm": 0, "width_mm": 2.4, "color": "accent"},
+        {"offset_mm": 4.8, "width_mm": 2.4, "color": "accent"},
+    ]
+    result = validate_intent(intent)
+    lanes = [la.placement.lane for la in result.intent.layers if la.type == "motif"]
+    assert lanes == ["b0.center", "b0.end"]
+    assert any("normalized to 'b0.center'" in w for w in result.warnings)
+    assert_seamless_invariants(result.intent)  # composes (was: unknown lane)
+
+
 def test_unknown_host_layer_rejected():
     intent = mvp_intent()
     intent["layers"][2]["placement"]["host_layer"] = "does_not_exist"

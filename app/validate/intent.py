@@ -331,6 +331,34 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
         if snapped_any:
             intent = intent.model_copy(update={"layers": snapped_layers})
 
+    # 3c. Normalize bare path_following lanes (`start`/`center`/`end`) to band 0 when the
+    #     host stripe has >1 band. The stripe primitive only registers bare lane aliases
+    #     for single-band stripes (multi-band lanes are namespaced `b0.center`...), so an
+    #     LLM that emits the bare keyword against a multi-band stripe would otherwise fail
+    #     deep in compose (unknown lane) and drop every candidate -> opaque 500. Band 0 is
+    #     the deterministic default anchor.
+    if repair:
+        by_id = {la.id: la for la in intent.layers}
+        repaired_layers = list(intent.layers)
+        fixed_any = False
+        for i, la in enumerate(repaired_layers):
+            pl = getattr(la, "placement", None)
+            if pl is None or pl.type != "path_following" or pl.lane not in ("start", "center", "end"):
+                continue
+            host = by_id.get(pl.host_layer)
+            if host is not None and host.type == "stripe" and len(host.params.bands) > 1:
+                new_lane = f"b0.{pl.lane}"
+                warnings.append(
+                    f"layer {la.id!r}: bare lane {pl.lane!r} on multi-band stripe "
+                    f"{host.id!r} normalized to {new_lane!r} (band 0)"
+                )
+                repaired_layers[i] = la.model_copy(
+                    update={"placement": pl.model_copy(update={"lane": new_lane})}
+                )
+                fixed_any = True
+        if fixed_any:
+            intent = intent.model_copy(update={"layers": repaired_layers})
+
     # 4. per-colorway resolved color count vs production.max_colors (screen printing
     #    is color-limited; digital is not — ARCHITECTURE.md 색·colorway 모델).
     if intent.production.method == "screen":
