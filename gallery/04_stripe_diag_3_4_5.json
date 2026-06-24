@@ -75,12 +75,12 @@
       "type": "stripe",
       "z_order": 1,
       "params": {
-        "angle": -36.87,
-        "period_mm": 9.6,
+        "angle": -45,
+        "period_mm": 33.941125,
         "bands": [
           {
             "offset_mm": 0,
-            "width_mm": 4.8,
+            "width_mm": 24,
             "color": "accent"
           }
         ]

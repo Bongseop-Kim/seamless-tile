@@ -76,7 +76,7 @@
       "z_order": 2,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 1.6,
+        "size_mm": 6.0,
         "colors": {
           "s0": "accent",
           "s1": "gold",

@@ -75,12 +75,12 @@
       "type": "stripe",
       "z_order": 1,
       "params": {
-        "angle": -36.87,
-        "period_mm": 9.6,
+        "angle": -45,
+        "period_mm": 33.941125,
         "bands": [
           {
             "offset_mm": 0,
-            "width_mm": 4.8,
+            "width_mm": 24,
             "color": "accent"
           }
         ]
@@ -92,7 +92,7 @@
       "z_order": 2,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 2.0,
+        "size_mm": 8.0,
         "colors": {
           "s0": "accent",
           "s1": "gold",
@@ -106,7 +106,7 @@
         "type": "path_following",
         "host_layer": "stripe",
         "lane": "start",
-        "spacing_mm": 12,
+        "spacing_mm": 22.627417,
         "phase_mm": 0,
         "rotation": "follow_path"
       }
@@ -117,7 +117,7 @@
       "z_order": 3,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 3.0,
+        "size_mm": 14.0,
         "colors": {
           "s0": "accent",
           "s1": "gold",
@@ -131,7 +131,7 @@
         "type": "path_following",
         "host_layer": "stripe",
         "lane": "center",
-        "spacing_mm": 12,
+        "spacing_mm": 22.627417,
         "phase_mm": 0,
         "rotation": "follow_path"
       }
@@ -142,7 +142,7 @@
       "z_order": 4,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 2.0,
+        "size_mm": 8.0,
         "colors": {
           "s0": "accent",
           "s1": "gold",
@@ -156,7 +156,7 @@
         "type": "path_following",
         "host_layer": "stripe",
         "lane": "end",
-        "spacing_mm": 12,
+        "spacing_mm": 22.627417,
         "phase_mm": 0,
         "rotation": "follow_path"
       }
