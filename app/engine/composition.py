@@ -9,18 +9,16 @@ Instances are never enumerated as raw geometry (regression guard).
 from __future__ import annotations
 
 from app.engine.determinism import sorted_layers
-from app.engine.intent import Intent, LatticeSpec, Layer, MotifLayer, Placement
+from app.engine.intent import Intent, Layer, MotifLayer
 from app.engine.palette import Palette
 from app.core.config import get_settings
 from app.engine.placement import Instance, place
-from app.engine.placement.lattice import place_lattice
 from app.engine.primitives import build_primitive
 from app.engine.seamless import clone_instances, super_tile
 from app.engine.units import fmt
 from app.motifs.registry import (
     MotifDef,
     get_motif,
-    ground_motif_size,
     slot_render_symbols,
 )
 from app.render.sanitize import sanitize_svg
@@ -92,12 +90,7 @@ def _render_layer(
     seed: int,
 ) -> str:
     if layer.type == "background":
-        fragment = hosts[layer.id].render(tile, palette, colorway_id)
-        if layer.params.kind == "object_repeat":
-            fragment += _render_ground_texture(
-                layer, palette, colorway_id, tile, symbol_defs
-            )
-        return fragment
+        return hosts[layer.id].render(tile, palette, colorway_id)
     if layer.type == "stripe":
         return hosts[layer.id].render(palette, colorway_id)
     if layer.type == "motif":
@@ -105,38 +98,6 @@ def _render_layer(
             layer, hosts, palette, colorway_id, tile, symbol_defs, seed
         )
     raise ValueError(f"unsupported layer type: {layer.type!r}")
-
-
-def _render_ground_texture(
-    layer: Layer,
-    palette: Palette,
-    colorway_id: str | None,
-    tile: float,
-    symbol_defs: dict[str, str],
-) -> str:
-    """Render an ``object_repeat`` ground's tonal texture as a self-contained, seamless
-    lattice of a single-color motif -- baked into the ground fragment (not a separate
-    stacked layer). Reuses the axis-aligned motif pipeline (``place_lattice`` +
-    ``clone_instances`` + ``_instance_transform``) so seamlessness holds by construction
-    (cell divides tile; edge crossers are torus-wrapped).
-    """
-    p = layer.params
-    motif = get_motif(p.motif_id)
-    size_mm = ground_motif_size(p.cell_mm, motif.id)
-    placement = Placement(
-        type="lattice",
-        lattice=LatticeSpec(cell_w_mm=p.cell_mm, cell_h_mm=p.cell_mm),
-    )
-    instances = clone_instances(
-        place_lattice(placement, tile), motif=motif, size_mm=size_mm, tile_mm=tile
-    )
-    symbol_defs.setdefault(f"motif-{motif.id}", motif.symbol)
-    color = escape_attr(palette.resolve_color(p.texture_color, colorway_id))
-    return "".join(
-        f'<use href="#motif-{motif.id}" color="{color}" '
-        f'transform="{_instance_transform(motif, inst, size_mm)}"/>'
-        for inst in instances
-    )
 
 
 def _render_motif_layer(

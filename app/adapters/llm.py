@@ -114,59 +114,6 @@ _EXAMPLE_INTENT = {
 }
 
 
-# A second example design whose GROUND is a typed object_repeat texture (a single-color
-# motif on a fine lattice, baked into the ground via background.params), with a stripe
-# overlaid -- shows the model the shape of a textured-ground design. The ground texture is
-# a property of the background, NOT a separate motif layer.
-_EXAMPLE_INTENT_TEXTURED = {
-    "intent_version": 1,
-    "canvas": {"tile_mm": 48, "dpi": 300},
-    "seed": 0,
-    "production": {"method": "digital", "max_colors": 12},
-    "palette": {
-        "slots": [
-            {"id": "ground", "hex": "#10243a"},
-            {"id": "ground_tone", "hex": "#16314f"},
-            {"id": "accent", "hex": "#ef8a7a"},
-        ]
-    },
-    "colorways": [
-        {
-            "id": "default",
-            "name": "default",
-            "mapping": {"ground": "#10243a", "ground_tone": "#16314f", "accent": "#ef8a7a"},
-        }
-    ],
-    "layers": [
-        {
-            "id": "ground",
-            "type": "background",
-            "z_order": 0,
-            "params": {
-                "color": "ground",
-                "kind": "object_repeat",
-                "motif_id": "circle",
-                "cell_mm": 8,
-                "texture_color": "ground_tone",
-            },
-        },
-        {
-            "id": "stripe_base",
-            "type": "stripe",
-            "z_order": 1,
-            "params": {
-                "angle": -45.0,
-                "period_mm": 33.9411,
-                "bands": [
-                    {"offset_mm": 0, "width_mm": 14.0, "color": "accent"},
-                    {"offset_mm": 18.0, "width_mm": 5.0, "color": "accent"},
-                ],
-            },
-        },
-    ],
-}
-
-
 def _build_prompt(
     user_prompt: str,
     *,
@@ -193,7 +140,6 @@ def _build_prompt(
                     }
                 ],
             },
-            {"intent": _EXAMPLE_INTENT_TEXTURED, "motif_specs": []},
         ]
     }
     lines = [
@@ -201,10 +147,9 @@ def _build_prompt(
         "SVG engine. The engine handles all geometry, repetition and seamlessness.",
         'Output ONLY one JSON object with a "designs" array. You MUST return 2 to 4 '
         "GENUINELY DIFFERENT designs (not near-duplicates): vary the motif, layout and "
-        "structure — band rhythm, placement, and the ground kind (solid vs object_repeat "
-        "texture) — NOT just the color. For example, for a stripe request: one stripe on a "
-        "solid ground; one stripe over an object_repeat textured ground; one with a "
-        "different band rhythm. "
+        "structure — band rhythm and placement — NOT just the color. For example, for a "
+        "stripe request: one stripe on a solid ground; one with a different band rhythm; "
+        "one with a different motif. "
         'Each entry has two keys "intent" and "motif_specs". No SVG, no coordinates, no '
         "markdown, no prose.",
         "",
@@ -233,12 +178,8 @@ def _build_prompt(
         "- Respect the user's pattern class. For simple polka dots on a solid "
         "background, use a background layer plus a built-in circle motif on lattice "
         "placement; do NOT add stripe host layers.",
-        "- Ground kind: a background layer's params.kind is 'solid' (default; just "
-        "params.color) or 'object_repeat' for an all-over tonal texture. For object_repeat "
-        "set params: color (base ground slot), motif_id (one of circle/diamond/square/"
-        "twill/herringbone), cell_mm (must divide tile_mm), and texture_color (a separate "
-        "tone-on-tone slot, close to the ground color). Do NOT build a ground from a "
-        "separate motif layer — the texture is a property of the background.",
+        "- A background layer is a flat solid fill: params has only `color` (a palette "
+        "slot id). It carries no texture or motif of its own.",
         "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
         "cell_w_mm and cell_h_mm; type 'scatter' needs a scatter object; type "
         "'path_following' needs host_layer+lane or path plus spacing_mm.",

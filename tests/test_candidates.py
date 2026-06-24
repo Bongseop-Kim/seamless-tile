@@ -3,14 +3,11 @@
 import pytest
 
 from app.engine.candidates import (
-    _RESERVED_TONE_SLOT,
-    _ground_kind_sibling,
     _with_stripe_rhythm,
     generate_candidate_set,
     generate_candidates,
 )
 from app.engine.determinism import layout_id_for
-from app.motifs.registry import TEXTURE_MOTIFS
 from app.engine.seamless import assert_seamless_invariants
 from app.validate.intent import IntentInvalid, validate_intent
 from tests.test_intent import mvp_intent
@@ -194,63 +191,6 @@ def test_stripe_rhythm_introduces_no_new_colors():
         assert c.intent.colorways == base.colorways
 
 
-# --- bg_texture toggle --------------------------------------------------------
-
-
-def _object_repeat_ground_intent() -> dict:
-    intent = _single_band_stripe_intent()
-    intent["layers"][0]["params"].update(
-        {
-            "kind": "object_repeat",
-            "motif_id": "twill",
-            "cell_mm": 8,
-            "texture_color": "tone",
-        }
-    )
-    intent["palette"]["slots"].append({"id": "tone", "hex": "#33405e"})
-    for cw in intent["colorways"]:
-        cw["mapping"]["tone"] = "#33405e"
-    return intent
-
-
-def test_ground_kind_toggle_yields_with_and_without():
-    # vary_ground adds a sibling design; round-robin surfaces both solid and object_repeat.
-    cs = generate_candidate_set(
-        [_single_band_stripe_intent()], candidate_count=4, vary_ground=True
-    )
-    kinds = {c.intent.layers[0].params.kind for c in cs.candidates}
-    assert "solid" in kinds and "object_repeat" in kinds
-
-
-def test_solid_ground_gains_object_repeat_sibling():
-    # A solid ground sibling becomes an object_repeat tonal texture: a built-in motif and
-    # a NEW derived tone slot, mapped in every colorway, distinct from the ground hex.
-    raw = _single_band_stripe_intent()
-    sibling = _ground_kind_sibling(raw)
-    assert sibling is not None
-    intent = validate_intent(sibling).intent
-    bg = intent.layers[0].params
-    assert bg.kind == "object_repeat"
-    assert bg.motif_id in TEXTURE_MOTIFS
-    assert bg.texture_color == _RESERVED_TONE_SLOT
-    slot_ids = {s.id for s in intent.palette.slots}
-    assert _RESERVED_TONE_SLOT in slot_ids
-    for cw in intent.colorways:
-        assert _RESERVED_TONE_SLOT in cw.mapping
-        assert cw.mapping[_RESERVED_TONE_SLOT] != cw.mapping[bg.color]  # tonal != ground
-    assert_seamless_invariants(intent)
-
-
-def test_object_repeat_ground_flattens_to_solid_sibling():
-    # The reverse toggle: an object_repeat ground yields a plain solid sibling.
-    raw = _object_repeat_ground_intent()
-    sibling = _ground_kind_sibling(raw)
-    assert sibling is not None
-    bg = validate_intent(sibling).intent.layers[0].params
-    assert bg.kind == "solid"
-    assert bg.motif_id is None and bg.texture_color is None
-
-
 # --- Multi-design orchestration (generate_candidate_set) ----------------------
 
 
@@ -297,50 +237,7 @@ def test_candidate_set_deterministic():
     assert [c.id for c in a.candidates] == [c.id for c in b.candidates]
 
 
-# --- Ground texture: motifs, tonal color, anti-clip sizing, stripe ratios -----
-
-
-def test_ground_texture_motifs_render_seamless():
-    from app.engine.composition import compose
-
-    for motif_id in ("diamond", "square", "twill", "herringbone"):
-        intent = _single_band_stripe_intent()
-        intent["layers"].append(
-            {
-                "id": "tex",
-                "type": "motif",
-                "z_order": 5,
-                "params": {"motif_id": motif_id, "size_mm": 2.0, "color": "accent"},
-                "placement": {
-                    "type": "lattice",
-                    "lattice": {"cell_w_mm": 4.0, "cell_h_mm": 4.0},
-                },
-            }
-        )
-        res = validate_intent(intent)
-        assert_seamless_invariants(res.intent)
-        assert "<svg" in compose(res.intent, res.palette, "default")
-
-
-def test_derive_tonal_hex_behavior():
-    from app.engine.palette import derive_tonal_hex
-
-    dark = derive_tonal_hex("#000080", 0.12)
-    assert dark.startswith("#") and len(dark) == 7 and dark != "#000080"
-    assert derive_tonal_hex("#000080", 0.12) == dark  # deterministic
-    assert derive_tonal_hex("19-4024 TCX", 0.12) == "19-4024 TCX"  # non-hex passthrough
-
-
-def test_ground_kind_sibling_skips_non_hex_ground():
-    raw = _single_band_stripe_intent()
-    raw["colorways"][0]["mapping"]["ground"] = "19-4024 TCX"  # spot color, not hex
-    assert _ground_kind_sibling(raw) is None
-
-
-def test_ground_kind_sibling_skips_malformed_colorway():
-    raw = _single_band_stripe_intent()
-    del raw["colorways"][0]["id"]
-    assert _ground_kind_sibling(raw) is None
+# --- Stripe rhythm presets ----------------------------------------------------
 
 
 def test_stripe_presets_are_uneven():

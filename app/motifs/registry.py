@@ -152,72 +152,10 @@ _BEE = MotifDef(
     anchor=_ORIGIN,
 )
 
-# Geometric ground-texture motifs (foulard/neat) and woven-texture approximations
-# (twill/herringbone). All single-color (currentColor); unit bbox centered at origin.
-# twill: a corner-to-corner diagonal stroke -> on a cell==size lattice the strokes meet
-# at cell edges and read as continuous diagonal twill lines. herringbone: a chevron that
-# packs into V rows. dot/diamond/square are spaced; twill/herringbone tile edge-to-edge.
-_DIAMOND = MotifDef(
-    id="diamond",
-    symbol=_symbol("diamond", '<polygon points="0,-0.5 0.5,0 0,0.5 -0.5,0" fill="currentColor"/>'),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-_SQUARE = MotifDef(
-    id="square",
-    symbol=_symbol("square", '<rect x="-0.5" y="-0.5" width="1" height="1" fill="currentColor"/>'),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-_TWILL = MotifDef(
-    id="twill",
-    symbol=_symbol(
-        "twill",
-        '<path d="M-0.5 0.5 L0.5 -0.5" stroke="currentColor" stroke-width="0.35" '
-        'fill="none"/>',
-    ),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-_HERRINGBONE = MotifDef(
-    id="herringbone",
-    symbol=_symbol(
-        "herringbone",
-        '<polyline points="-0.5,0.5 0,-0.5 0.5,0.5" stroke="currentColor" '
-        'stroke-width="0.3" fill="none"/>',
-    ),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
 MOTIFS: dict[str, MotifDef] = {
     _CIRCLE.id: _CIRCLE,
     _BEE.id: _BEE,
-    _DIAMOND.id: _DIAMOND,
-    _SQUARE.id: _SQUARE,
-    _TWILL.id: _TWILL,
-    _HERRINGBONE.id: _HERRINGBONE,
 }
-
-
-# Ground-texture motif vocabulary (built-ins), shared by the renderer (object_repeat
-# ground) and the candidate variant generator. Discrete shapes are spaced; the line
-# weaves (twill/herringbone) tile edge-to-edge so they fill their cell.
-TEXTURE_MOTIFS: tuple[str, ...] = ("circle", "diamond", "square", "twill", "herringbone")
-TEXTURE_LINE_MOTIFS: frozenset[str] = frozenset({"twill", "herringbone"})
-
-
-def ground_motif_size(cell_mm: float, motif_id: str) -> float:
-    """Rendered motif extent for a dense seamless ground-texture cell.
-
-    Line weaves span the cell edge-to-edge (size == cell) so adjacent cells connect into
-    continuous lines; discrete shapes fill 0.7 of the cell so they read as spaced dots/
-    diamonds. ``cell_mm`` divides the tile (validated), so size <= cell <= tile.
-    """
-    return cell_mm if motif_id in TEXTURE_LINE_MOTIFS else cell_mm * 0.7
 
 
 # The ids shipped in-process (captured before any store/test registers more), so callers

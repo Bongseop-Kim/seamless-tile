@@ -42,8 +42,8 @@ def layout_id_for(intent: "Intent") -> str:
     a change to placement, geometry or symmetry yields a different id. Used for
     de-dup and diversity ranking by the candidate orchestrator.
 
-    ``exclude_none=True`` keeps optional, defaulted-``None`` fields (e.g. a solid
-    ground's ``object_repeat`` params) out of the canonical payload, so adding such
+    ``exclude_none=True`` keeps optional, defaulted-``None`` fields (e.g. a motif
+    layer's unset ``colors`` map) out of the canonical payload, so adding such
     fields does not perturb the layout_id of intents that don't use them.
     """
     payload = intent.model_dump(
