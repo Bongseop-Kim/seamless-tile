@@ -1,7 +1,6 @@
-import math
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,19 +20,51 @@ class Settings(BaseSettings):
     # max_placement_instances caps a layer's enumerated placement points; max_svg_bytes
     # caps the composed document before the sanitize re-parse (same order as the export
     # input cap ExportRequest.svg). Tunable per deployment.
-    max_placement_instances: int = 50_000
-    max_svg_bytes: int = 2_000_000
+    max_placement_instances: int = Field(50_000, ge=1)
+    max_svg_bytes: int = Field(2_000_000, ge=1)
 
     # Supabase persistence (session 9). The motif store is "configured" iff
     # supabase_db_url is set; unset => in-memory registry only (tests, local dev).
     supabase_db_url: str | None = None  # postgresql://...  (env: SUPABASE_DB_URL)
     supabase_service_key: str | None = None
 
+    # Candidate preview PNGs (generate route). SVG is rendered once at generate time and
+    # uploaded to Supabase Storage; the response carries only the public URL (no re-render
+    # on access). Configured iff supabase_url + supabase_service_key are set; unset =>
+    # preview upload is a graceful no-op (png_url is null + a warning), like the motif store.
+    supabase_url: str | None = None  # https://<ref>.supabase.co  (env: SUPABASE_URL)
+    preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
+    preview_dpi: int = Field(192, ge=1, le=1200)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
+
+    # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
+    # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 0이면 비활성(lookup+store 생략) —
+    # 결정론 디버깅용. ponytail: 프로세스-로컬(워커별 독립); 멀티워커 hit-rate가 문제되면 공유 캐시로 승급.
+    generate_cache_size: int = Field(256, ge=0)  # env: GENERATE_CACHE_SIZE
+    # Max fraction of a stripe period its bands may cover when an opaque background sits
+    # beneath; the remainder is guaranteed to stay visible so the named ground color (and
+    # any under-stripe texture) shows through. env: STRIPE_MAX_BAND_COVERAGE
+    stripe_max_band_coverage: float = Field(0.75, ge=0.1, le=1.0)
+    # Tonal background texture: HSL lightness shift used to derive the tone-on-tone
+    # texture color from the ground color. env: TEXTURE_TONE_SHIFT
+    texture_tone_shift: float = Field(0.12, ge=0.0, le=0.5)
+    # Target lattice cell (mm) for background ground texture; snapped to an exact tile
+    # divisor so it stays seamless. Single knob for how large/dense the ground shapes
+    # read (discrete shapes fill 0.7 of the cell). env: TEXTURE_CELL_MM
+    texture_cell_mm: float = Field(8.0, gt=0)
+    # Generated diagonal stripes are normalized to 45 deg with this many repeats per tile
+    # (count = 2*k at 45 deg, so k = repeats//2; 2 => one big pair of diagonal stripes).
+    # env: STRIPE_DIAGONAL_REPEATS
+    stripe_diagonal_repeats: int = Field(2, ge=2)
+
     # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
     # GeminiClient as the default LLM client at boot; unset => no default (tests inject
     # fakes).
     gemini_api_key: str | None = None  # env: GEMINI_API_KEY
     gemini_model: str = "gemini-2.5-flash-lite"  # chat model id passed to GeminiClient (P0)
+    # Sampling temperature for intent generation. >0 lets the model emit genuinely
+    # distinct designs; determinism is unaffected (the adapter freezes the finalized
+    # intent in its cache, so the contract does not depend on temperature).
+    gemini_temperature: float = Field(0.7, ge=0.0, le=2.0)  # env: GEMINI_TEMPERATURE
 
     # Embedding model (session 11, D12). When openai_api_key is set, app.main installs an
     # OpenAIEmbeddingClient as the default; unset => motif resolver skips the soft-
@@ -42,12 +73,12 @@ class Settings(BaseSettings):
     # reuse-first start value (spec §6.1/D13) pending empirical calibration (spec §12).
     openai_api_key: str | None = None  # env: OPENAI_API_KEY
     embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
-    motif_similarity_tau: float = 0.60  # env: MOTIF_SIMILARITY_TAU
+    motif_similarity_tau: float = Field(0.60, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
 
     # Recraft motif generation (session 13, D11/M1). The detailed/painterly miss path
     # routes to Recraft; its output is path-flattened and its color count capped to this
     # many slots (excess colors are deterministically merged; spec §6.2/§12).
-    recraft_max_color_slots: int = 6  # env: RECRAFT_MAX_COLOR_SLOTS
+    recraft_max_color_slots: int = Field(6, ge=1)  # env: RECRAFT_MAX_COLOR_SLOTS
     # Recraft vector API. When recraft_api_key is set, app.main installs a
     # RecraftHTTPClient as the default Recraft client at boot; unset => detailed misses
     # surface 502 (no generator). The vector endpoint returns an SVG file per slot.
@@ -66,48 +97,9 @@ class Settings(BaseSettings):
     # - render_check: master switch for the render-dependent checks (#4 render error
     #   + #5 edge_seam); when off, or when no SVG renderer is installed, those checks
     #   are skipped (best-effort; the pure-geometry checks still run).
-    motif_max_aspect_ratio: float = 20.0  # env: MOTIF_MAX_ASPECT_RATIO
-    motif_edge_seam_tol: float = 2.0  # env: MOTIF_EDGE_SEAM_TOL
+    motif_max_aspect_ratio: float = Field(20.0, gt=1.0, allow_inf_nan=False)  # env: MOTIF_MAX_ASPECT_RATIO
+    motif_edge_seam_tol: float = Field(2.0, gt=0.0, allow_inf_nan=False)  # env: MOTIF_EDGE_SEAM_TOL
     motif_render_check: bool = True  # env: MOTIF_RENDER_CHECK
-
-    @field_validator("motif_similarity_tau")
-    @classmethod
-    def _validate_motif_similarity_tau(cls, value: float) -> float:
-        if not 0.0 <= value <= 1.0:
-            raise ValueError("motif_similarity_tau must be between 0 and 1")
-        return value
-
-    @field_validator("recraft_max_color_slots")
-    @classmethod
-    def _validate_recraft_max_color_slots(cls, value: int) -> int:
-        if value < 1:
-            raise ValueError("recraft_max_color_slots must be at least 1")
-        return value
-
-    @field_validator("motif_max_aspect_ratio")
-    @classmethod
-    def _validate_motif_max_aspect_ratio(cls, value: float) -> float:
-        if not math.isfinite(value):
-            raise ValueError("motif_max_aspect_ratio must be finite")
-        if value <= 1.0:
-            raise ValueError("motif_max_aspect_ratio must be greater than 1")
-        return value
-
-    @field_validator("motif_edge_seam_tol")
-    @classmethod
-    def _validate_motif_edge_seam_tol(cls, value: float) -> float:
-        if not math.isfinite(value):
-            raise ValueError("motif_edge_seam_tol must be finite")
-        if value <= 0.0:
-            raise ValueError("motif_edge_seam_tol must be greater than 0")
-        return value
-
-    @field_validator("max_placement_instances", "max_svg_bytes")
-    @classmethod
-    def _validate_positive_ceiling(cls, value: int) -> int:
-        if value < 1:
-            raise ValueError("resource ceiling must be at least 1")
-        return value
 
 
 @lru_cache
@@ -128,5 +120,4 @@ ENGINE_VERSION = "0.1.0"
 REGISTRY_VERSION = "0.1.0"
 
 # Allowed raster DPIs at the production/raster boundary.
-DEFAULT_DPI = 300
 ALLOWED_DPI = (150, 300, 600)

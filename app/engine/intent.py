@@ -49,7 +49,7 @@ class ColorwaySpec(BaseModel):
 class PathSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["straight", "wave", "custom"] = "straight"
+    kind: Literal["straight", "wave"] = "straight"
     angle: float | None = None
     wavelength: float | None = Field(default=None, gt=0)
     amplitude: float | None = Field(default=None, ge=0)
@@ -138,7 +138,29 @@ class Placement(BaseModel):
 class BackgroundParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    color: str  # color slot id
+    color: str  # base ground color slot id
+    # Ground kind. "solid" is a flat fill (legacy shape: just `color`). "object_repeat"
+    # is a self-contained, seamless tonal ground -- a single-color texture motif on a
+    # fine lattice, baked into the ground fragment (NOT a separate stacked layer). The
+    # three object_repeat fields are required iff kind == "object_repeat".
+    kind: Literal["solid", "object_repeat"] = "solid"
+    motif_id: str | None = None
+    cell_mm: float | None = Field(default=None, gt=0)
+    texture_color: str | None = None  # tone-on-tone texture slot id
+
+    @model_validator(mode="after")
+    def _kind_fields(self) -> "BackgroundParams":
+        repeat_fields = (self.motif_id, self.cell_mm, self.texture_color)
+        if self.kind == "object_repeat":
+            if any(f is None for f in repeat_fields):
+                raise ValueError(
+                    "object_repeat ground requires motif_id, cell_mm, texture_color"
+                )
+        elif any(f is not None for f in repeat_fields):
+            raise ValueError(
+                "solid ground must not set motif_id/cell_mm/texture_color"
+            )
+        return self  # color slot id
 
 
 class Band(BaseModel):

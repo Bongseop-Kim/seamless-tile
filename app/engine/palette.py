@@ -25,6 +25,25 @@ def _hex_to_rgb(value: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def derive_tonal_hex(hex_color: str, shift: float) -> str:
+    """Derive a tone-on-tone shade of ``hex_color`` by an HSL lightness shift. A dark
+    color is lightened, a light color is darkened, so the result is a subtle, visible
+    variant of the same hue (used for background textures). Deterministic; returns a
+    6-digit lowercase hex. Falls back to the input if it is not a hex color."""
+    if not is_hex_color(hex_color):
+        return hex_color
+    r, g, b = _hex_to_rgb(hex_color)
+    h, lightness, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    direction = 1.0 if lightness < 0.5 else -1.0
+    new_lightness = max(0.0, min(1.0, lightness + direction * shift))
+    nr, ng, nb = colorsys.hls_to_rgb(h, new_lightness, s)
+    return rgb_to_hex(round(nr * 255), round(ng * 255), round(nb * 255))
+
+
 def out_of_gamut(hex_color: str) -> bool:
     """Conservative heuristic flagging near-pure, highly saturated sRGB colors that
     typically fall outside the CMYK/spot gamut. Not a substitute for ICC profiling;

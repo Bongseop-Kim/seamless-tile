@@ -113,15 +113,26 @@ def assert_seamless_invariants(intent: Intent) -> None:
 
     Re-asserts the commensurability already enforced by ``validate_intent``
     (``period|tile`` for stripes, ``spacing|tile`` for path placements, lattice cell
-    divisibility, sateen coprimality) and that each stripe's snapped angle has an
-    integer rational closure ``(p, q)``. Raises ``AssertionError`` on violation. Does
-    NOT enforce ``spacing|L`` (see module docstring).
+    divisibility, sateen coprimality, object_repeat ground cell divisibility) and that
+    each stripe's snapped angle has an integer rational closure ``(p, q)``. Raises
+    ``AssertionError`` on violation. Does NOT enforce ``spacing|L`` (see module docstring).
     """
     tile = intent.canvas.tile_mm
     for layer in intent.layers:
-        if layer.type == "stripe":
+        if layer.type == "background":
+            # object_repeat ground bakes a texture lattice into the ground fragment;
+            # its cell must divide the tile so the lattice tiles seamlessly (cell <= tile
+            # then bounds the motif size, mirroring the motif-layer guard).
+            if layer.params.kind == "object_repeat" and not divides(
+                tile, layer.params.cell_mm
+            ):
+                raise AssertionError(
+                    f"layer {layer.id!r}: object_repeat cell_mm {layer.params.cell_mm} "
+                    f"does not divide tile_mm {tile}"
+                )
+        elif layer.type == "stripe":
             period = layer.params.period_mm
-            snapped = snap_angle(layer.params.angle, tile, period)
+            snapped = snap_angle(layer.params.angle)
             if not stripe_tiles(tile, period, snapped.p, snapped.q):
                 raise AssertionError(
                     f"layer {layer.id!r}: stripe (angle {layer.params.angle}, period {period}) "
@@ -143,7 +154,7 @@ def assert_seamless_invariants(intent: Intent) -> None:
                 and placement.path.wavelength is not None
             ):
                 angle = placement.path.angle if placement.path.angle is not None else 0.0
-                snapped = snap_angle(angle, tile, tile)
+                snapped = snap_angle(angle)
                 closure = tile * math.hypot(snapped.p, snapped.q)
                 if not divides(closure, placement.path.wavelength):
                     raise AssertionError(

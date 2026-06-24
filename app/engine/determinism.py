@@ -41,9 +41,13 @@ def layout_id_for(intent: "Intent") -> str:
     colorway or seed axis share a ``layout_id`` (they are the same layout), while
     a change to placement, geometry or symmetry yields a different id. Used for
     de-dup and diversity ranking by the candidate orchestrator.
+
+    ``exclude_none=True`` keeps optional, defaulted-``None`` fields (e.g. a solid
+    ground's ``object_repeat`` params) out of the canonical payload, so adding such
+    fields does not perturb the layout_id of intents that don't use them.
     """
     payload = intent.model_dump(
-        mode="json", exclude={"seed", "colorways", "palette"}
+        mode="json", exclude={"seed", "colorways", "palette"}, exclude_none=True
     )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]

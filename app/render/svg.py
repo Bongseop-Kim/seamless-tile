@@ -1,16 +1,13 @@
 """Assemble standalone physical-mm SVG documents from composed tile content."""
 
+import html
+
 from app.engine.units import fmt
 
 
 def escape_text(value: object) -> str:
-    """Escape text content for SVG/XML: ``&``, ``<``, ``>`` (``&`` first)."""
-    return (
-        str(value)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    """Escape text content for SVG/XML: ``&``, ``<``, ``>``."""
+    return html.escape(str(value), quote=False)
 
 
 def escape_attr(value: object) -> str:
@@ -19,14 +16,7 @@ def escape_attr(value: object) -> str:
     Output-encoding baseline: never interpolate raw strings into attributes via
     f-strings. The full tag/attribute allowlist is session 8.
     """
-    return (
-        str(value)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
+    return html.escape(str(value))
 
 
 def render_svg_document(

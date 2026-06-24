@@ -14,8 +14,7 @@ from PIL import Image
 from app.motifs.registry import normalize_motif_svg
 
 
-def _svg(inner: str, viewbox: str = "0 0 100 100") -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}">{inner}</svg>'
+from tests._helpers import _svg
 
 
 _CIRCLE = _svg('<circle cx="50" cy="50" r="40" fill="#000"/>')

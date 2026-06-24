@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.engine.determinism import ReproMeta, seeded_rng, sorted_layers
 from app.engine.intent import ScatterSpec
+from app.engine.seamless import assert_seamless_invariants
 from app.validate.intent import IntentInvalid, validate_intent
 
 
@@ -134,8 +135,10 @@ def test_path_following_requires_fields(field):
 def test_period_not_dividing_tile_rejected():
     intent = mvp_intent()
     intent["layers"][1]["params"]["period_mm"] = 25  # 48 % 25 != 0
+    # repair=True now snaps off-grid periods (see test_off_grid_stripe_period_is_snapped);
+    # the invariant rejection is still enforced when repair is off.
     with pytest.raises(IntentInvalid):
-        validate_intent(intent)
+        validate_intent(intent, repair=False)
 
 
 def test_color_count_over_max_rejected_for_screen():
@@ -268,3 +271,98 @@ def test_repro_meta_carries_versions():
     meta = ReproMeta.build(intent_version=1, seed=42, colorway_id="default")
     assert meta.engine_version and meta.registry_version
     assert meta.seed == 42 and meta.colorway_id == "default"
+
+
+def _full_coverage_stripe_intent() -> dict:
+    """navy ground + a 3-band silver/gold/silver stripe whose bands fill the whole
+    period (3.2*3 == 9.6) -> the stripe fully occludes the navy ground."""
+    return {
+        "intent_version": 1,
+        "canvas": {"tile_mm": 48, "dpi": 300},
+        "seed": 0,
+        "production": {"method": "digital", "max_colors": 12},
+        "palette": {
+            "slots": [
+                {"id": "navy", "hex": "#000080"},
+                {"id": "silver", "hex": "#C0C0C0"},
+                {"id": "gold", "hex": "#FFD700"},
+            ]
+        },
+        "colorways": [
+            {"id": "default", "mapping": {"navy": "#000080", "silver": "#C0C0C0", "gold": "#FFD700"}}
+        ],
+        "layers": [
+            {"id": "ground", "type": "background", "z_order": 0, "params": {"color": "navy"}},
+            {
+                "id": "stripe",
+                "type": "stripe",
+                "z_order": 1,
+                "params": {
+                    "angle": -36.87,
+                    "period_mm": 9.6,
+                    "bands": [
+                        {"offset_mm": 0.0, "width_mm": 3.2, "color": "silver"},
+                        {"offset_mm": 3.2, "width_mm": 3.2, "color": "gold"},
+                        {"offset_mm": 6.4, "width_mm": 3.2, "color": "silver"},
+                    ],
+                },
+            },
+        ],
+    }
+
+
+def test_full_coverage_stripe_over_background_is_repaired():
+    res = validate_intent(_full_coverage_stripe_intent())
+    bands = res.intent.layers[1].params.bands
+    period = res.intent.layers[1].params.period_mm
+    coverage = sum(b.width_mm for b in bands) / period
+    assert coverage <= 0.75 + 1e-9  # bands no longer fill the period
+    assert sum(b.width_mm for b in bands) < period  # a ground gap remains
+    assert [b.color for b in bands] == ["silver", "gold", "silver"]  # colors unchanged
+    assert len(bands) == 3  # band count unchanged
+    assert any("covered the ground" in w for w in res.warnings)
+    assert_seamless_invariants(res.intent)  # still tile-commensurate
+
+
+def test_stripe_without_background_not_repaired():
+    intent = _full_coverage_stripe_intent()
+    intent["layers"] = [intent["layers"][1]]  # stripe only, no ground to protect
+    intent["layers"][0]["z_order"] = 0
+    res = validate_intent(intent)
+    bands = res.intent.layers[0].params.bands
+    assert sum(b.width_mm for b in bands) == pytest.approx(9.6)  # untouched
+
+
+def test_stripe_under_cap_not_repaired():
+    res = validate_intent(mvp_intent())  # single band 4.8/9.6 = 0.5 coverage
+    bands = res.intent.layers[1].params.bands
+    assert len(bands) == 1 and bands[0].width_mm == 4.8
+
+
+def test_stripe_ground_gap_repair_skipped_without_repair_flag():
+    res = validate_intent(_full_coverage_stripe_intent(), repair=False)
+    bands = res.intent.layers[1].params.bands
+    assert sum(b.width_mm for b in bands) == pytest.approx(9.6)  # not repaired
+
+
+def test_stripe_ground_gap_repair_is_deterministic():
+    a = validate_intent(_full_coverage_stripe_intent()).intent.layers[1].params.bands
+    b = validate_intent(_full_coverage_stripe_intent()).intent.layers[1].params.bands
+    assert [(x.offset_mm, x.width_mm) for x in a] == [(x.offset_mm, x.width_mm) for x in b]
+
+
+def test_off_grid_stripe_period_is_snapped():
+    intent = _full_coverage_stripe_intent()
+    intent["layers"][1]["params"]["period_mm"] = 12.0  # not tile/(5k) for the 3-4-5 slope
+    intent["layers"][1]["params"]["bands"] = [{"offset_mm": 0, "width_mm": 6.0, "color": "silver"}]
+    res = validate_intent(intent)
+    period = res.intent.layers[1].params.period_mm
+    assert abs(period - 9.6) < 1e-6  # snapped to nearest commensurate (48/(5*1))
+    assert any("snapped" in w for w in res.warnings)
+    assert_seamless_invariants(res.intent)  # now tiles
+
+
+def test_commensurate_stripe_period_not_snapped():
+    res = validate_intent(mvp_intent())  # period 9.6 already valid
+    assert res.intent.layers[1].params.period_mm == 9.6
+    assert not any("snapped" in w for w in res.warnings)

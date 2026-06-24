@@ -12,17 +12,20 @@ inside the engine boundary; the route is a thin adapter over ``generate_candidat
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from app.core.config import REGISTRY_VERSION
+from app.core.config import REGISTRY_VERSION, get_settings
 from app.engine.composition import compose
 from app.engine.determinism import ReproMeta, layout_id_for
 from app.engine.generate import Candidate
-from app.engine.intent import Intent, SymmetrySpec
-from app.engine.palette import Palette
+from app.engine.intent import Band, Intent
+from app.engine.palette import Palette, derive_tonal_hex, is_hex_color
 from app.engine.seamless import assert_seamless_invariants
+from app.motifs.registry import TEXTURE_LINE_MOTIFS, TEXTURE_MOTIFS
 from app.validate.intent import IntentInvalid, validate_intent
 
 DEFAULT_CANDIDATE_COUNT = 4
@@ -32,12 +35,27 @@ MAX_CANDIDATE_COUNT = 8
 SOURCE_FIDELITY_VECTOR = "vector"
 
 # Deterministic, fixed-order diversity axes.
-_SYMMETRY_KINDS: tuple[str, ...] = ("mirror_2x2", "mirror_h", "mirror_v", "glide_h")
 _DROP_FRACTIONS: tuple[float | None, ...] = (None, 0.5, 1.0 / 3.0, 0.25)
 # Coarse placement-type rank used only as a deterministic tiebreak (NOT a true spread
 # metric): path_following lanes tend to align more than all-over scatter, so they sort
 # later. Lower == preferred.
 _PLACEMENT_RANK = {"path_following": 2, "lattice": 1, "point_set": 1, "scatter": 0}
+
+# Uneven/guard-stripe rhythm presets (authentic repp is unbalanced, not equal-width).
+# Each is (name, band weights, between-band gap weight): widths/gaps are weight*u with
+# u = period/total, so bands+gaps partition exactly one period (seamless), and colors only
+# cycle the layer's existing band colors. Literal order == emission order.
+_STRIPE_RHYTHMS_SINGLE: tuple[tuple[str, tuple[float, ...], float], ...] = (
+    ("guard_5_2_2", (5.0, 2.0, 2.0), 0.5),  # wide stripe + thin guard pair (3 bands)
+    ("asym_3_2_1", (3.0, 2.0, 1.0), 0.6),  # graduated uneven cluster (3 bands)
+)
+_STRIPE_RHYTHMS_MULTI: tuple[tuple[str, tuple[float, ...], float], ...] = (
+    ("ratio_5_11", (5.0, 11.0), 0.4),  # uneven two-band, cycle existing colors
+    ("asym_6_1_3", (6.0, 1.0, 3.0), 0.4),  # uneven three-band, cycle existing colors
+)
+
+# Reserved palette slot for the derived tone-on-tone object_repeat ground color.
+_RESERVED_TONE_SLOT = "bg_texture_tone"
 
 
 @dataclass(frozen=True)
@@ -51,6 +69,7 @@ class RankedCandidate:
     seed: int
     source_fidelity: str
     rank_key: tuple
+    design_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -209,22 +228,426 @@ def generate_candidates(
     )
 
 
+def generate_candidate_set(
+    base_raws,
+    *,
+    candidate_count: int = DEFAULT_CANDIDATE_COUNT,
+    seed: int | None = None,
+    colorway: str | None = None,
+    source_fidelity: str = SOURCE_FIDELITY_VECTOR,
+    registry_version: str = REGISTRY_VERSION,
+    vary_ground: bool = False,
+) -> CandidateSet:
+    """Diversify and merge MULTIPLE base intents ("designs") into one ranked set.
+
+    Each design is diversified by the single-base :func:`generate_candidates`; the
+    results are globally de-duplicated by SVG, then selected round-robin across designs
+    (cross-design diversity first) up to ``candidate_count``. A one-element list
+    reproduces :func:`generate_candidates` exactly (svg + ids). Invalid designs are
+    dropped with a warning; if every design is invalid the last error is raised (the
+    route maps it to 422, same as the single-base path).
+
+    ``vary_ground`` (prompt path) adds a ground-kind-toggled sibling design per base — a
+    solid ground gains an ``object_repeat`` tonal-texture sibling, an object_repeat ground
+    gains a plain-solid sibling — so the round-robin surfaces both with/without ground
+    texture (~50:50). Off for the intent-direct/image paths (the supplied intent is
+    authoritative).
+    """
+    count = max(1, min(int(candidate_count), MAX_CANDIDATE_COUNT))
+
+    designs = list(base_raws)
+    if vary_ground:
+        expanded: list = []
+        for raw in designs:
+            expanded.append(raw)
+            sibling = _ground_kind_sibling(raw)
+            if sibling is not None:
+                expanded.append(sibling)
+        designs = expanded
+
+    warnings: list[str] = []
+    per_design: list[list[RankedCandidate]] = []
+    available = 0
+    last_exc: Exception | None = None
+    for i, base_raw in enumerate(designs):
+        try:
+            cs = generate_candidates(
+                base_raw,
+                candidate_count=count,
+                seed=seed,
+                colorway=colorway,
+                source_fidelity=source_fidelity,
+                registry_version=registry_version,
+            )
+        except (IntentInvalid, AssertionError, ValueError) as exc:
+            last_exc = exc
+            warnings.append(f"design {i} dropped: {exc}")
+            continue
+        # Re-tag each candidate with its design index and a namespaced id (design 0 keeps
+        # the original hash, so the single-base case is byte/id identical).
+        tagged = [
+            replace(
+                rc,
+                design_index=i,
+                id=_candidate_id(rc.candidate.layout_id, rc.colorway_id, rc.seed, i),
+            )
+            for rc in cs.candidates
+        ]
+        per_design.append(tagged)
+        # Per-design shortfall/partial artifacts are re-derived at the multi level below.
+        warnings.extend(
+            w for w in cs.warnings if not w.startswith(("diversity shortfall:", "partial:"))
+        )
+        available += cs.available_strategy_count
+
+    if not per_design:
+        if last_exc is not None:
+            raise last_exc
+        raise ValueError("no base intents to generate candidates from")
+
+    # Global SVG de-dup across designs: keep the best-ranked representative, tie-broken on
+    # the lower design index (deterministic; comparison is on pre-built tuples).
+    best_by_svg: dict[str, RankedCandidate] = {}
+    for rc in (rc for design in per_design for rc in design):
+        prev = best_by_svg.get(rc.candidate.svg)
+        if prev is None or (rc.rank_key, rc.design_index) < (
+            prev.rank_key,
+            prev.design_index,
+        ):
+            best_by_svg[rc.candidate.svg] = rc
+
+    # Regroup survivors per surviving design (each sorted by rank_key); selection consumes
+    # lists in ascending-design-index order, so set/dict iteration order never reaches the
+    # output. Keyed by design_index (which may be sparse when designs were dropped).
+    groups_by_design: dict[int, list[RankedCandidate]] = {}
+    for rc in sorted(best_by_svg.values(), key=lambda rc: (rc.design_index, rc.rank_key)):
+        groups_by_design.setdefault(rc.design_index, []).append(rc)
+    groups: list[list[RankedCandidate]] = [
+        groups_by_design[d] for d in sorted(groups_by_design)
+    ]
+
+    # Round-robin: one best-remaining candidate per design per pass.
+    selected: list[RankedCandidate] = []
+    cursors = [0] * len(groups)
+    progressed = True
+    while len(selected) < count and progressed:
+        progressed = False
+        for gi, group in enumerate(groups):
+            if len(selected) >= count:
+                break
+            if cursors[gi] < len(group):
+                selected.append(group[cursors[gi]])
+                cursors[gi] += 1
+                progressed = True
+    selected.sort(key=lambda rc: rc.rank_key)
+
+    distinct_designs = len({rc.design_index for rc in selected})
+    if count >= 2:
+        required = min(2, len(per_design), available)
+        if distinct_designs < required:
+            warnings.append(
+                f"diversity shortfall: {distinct_designs} distinct design(s) "
+                f"< required {required}"
+            )
+    if len(selected) < count:
+        warnings.append(
+            f"partial: {len(selected)} candidate(s) available after de-dup "
+            f"(requested {count})"
+        )
+
+    warnings = list(dict.fromkeys(warnings))
+    return CandidateSet(
+        candidates=selected,
+        warnings=warnings,
+        available_strategy_count=available,
+    )
+
+
+def _ground_kind_sibling(raw: dict) -> dict | None:
+    """The ground-kind-toggled sibling DESIGN (added on the prompt path so round-robin
+    selection then surfaces both ~50:50):
+
+    - a solid ground  -> an ``object_repeat`` (tone-on-tone texture) ground,
+    - an object_repeat -> a plain solid ground (its base ``color`` slot kept; the now-unused
+      tone slot is left in the palette, harmless -- an unreferenced slot is valid).
+
+    Returns a FRESH dict (never mutates ``raw``) or ``None``. The caller re-validates it
+    and drops it if invalid.
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("layers"), list):
+        return None
+    backgrounds = [
+        l for l in raw["layers"] if isinstance(l, dict) and l.get("type") == "background"
+    ]
+    if not backgrounds:
+        return None
+    ground = min(backgrounds, key=lambda l: l.get("z_order", 0))
+    params = ground.get("params") or {}
+    if params.get("kind") != "object_repeat":
+        return _ground_to_object_repeat(raw, ground)
+    if params.get("color") is None:
+        return None
+    sibling = copy.deepcopy(raw)
+    for layer in sibling["layers"]:
+        if isinstance(layer, dict) and layer.get("id") == ground.get("id"):
+            layer["params"] = {"color": params["color"]}
+    return sibling
+
+
+def _ground_to_object_repeat(raw: dict, ground: dict) -> dict | None:
+    """Sibling whose solid ground becomes an ``object_repeat`` tone-on-tone texture: a
+    deterministically chosen built-in motif on a fine lattice (cell derived from
+    ``texture_cell_mm``), colored a shade DERIVED from the ground (a new
+    ``bg_texture_tone`` slot mapped in every colorway). Returns ``None`` if it can't apply
+    (non-hex ground color, or screen-print color budget exceeded). Never mutates ``raw``.
+    """
+    try:
+        slots = raw["palette"]["slots"]
+        colorways = raw["colorways"]
+        tile = float(raw["canvas"]["tile_mm"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        not isinstance(slots, list)
+        or not isinstance(colorways, list)
+        or not slots
+        or not colorways
+    ):
+        return None
+    ground_slot = (ground.get("params") or {}).get("color")
+    settings = get_settings()
+
+    # Per-colorway tonal shade derived from that colorway's ground hex. Bail if any ground
+    # color is a non-hex spot color (can't derive) or screen printing would overflow.
+    tone_by_cw: dict[str, str] = {}
+    validated_colorways: list[tuple[str, dict]] = []
+    for cw in colorways:
+        if not isinstance(cw, dict):
+            return None
+        cw_id = cw.get("id")
+        mapping = cw.get("mapping", {})
+        if not isinstance(cw_id, str) or not isinstance(mapping, dict):
+            return None
+        ground_hex = mapping.get(ground_slot)
+        if not isinstance(ground_hex, str) or not is_hex_color(ground_hex):
+            return None
+        tone_by_cw[cw_id] = derive_tonal_hex(ground_hex, settings.texture_tone_shift)
+        validated_colorways.append((cw_id, mapping))
+    production = raw.get("production", {})
+    if not isinstance(production, dict):
+        return None
+    if production.get("method") == "screen":
+        try:
+            max_colors = int(production.get("max_colors", 12))
+        except (TypeError, ValueError):
+            return None
+        for cw_id, mapping in validated_colorways:
+            distinct = set(mapping.values()) | {tone_by_cw[cw_id]}
+            if len(distinct) > max_colors:
+                return None
+
+    # Motif pool: line weaves (twill/herringbone) read as continuous fabric only as a
+    # FULL-FIELD ground -- an overlaid stripe would slice them into noise. So when the
+    # design carries a stripe, restrict the ground to discrete motifs (dots/diamonds that
+    # peek cleanly between bars); a stripe-free design may use the whole vocabulary.
+    has_stripe = any(
+        isinstance(l, dict) and l.get("type") == "stripe" for l in raw["layers"]
+    )
+    pool = (
+        [m for m in TEXTURE_MOTIFS if m not in TEXTURE_LINE_MOTIFS]
+        if has_stripe
+        else list(TEXTURE_MOTIFS)
+    )
+    # Deterministic motif pick (stable across processes -- no builtin hash()).
+    canonical = json.dumps(raw, sort_keys=True, separators=(",", ":"))
+    idx = int(hashlib.sha256(canonical.encode("utf-8")).hexdigest(), 16) % len(pool)
+    motif_id = pool[idx]
+    cells = max(1, round(tile / settings.texture_cell_mm))
+    cell = tile / cells
+
+    gid = ground.get("id")
+    sibling = copy.deepcopy(raw)
+    sibling["palette"]["slots"].append(
+        {"id": _RESERVED_TONE_SLOT, "hex": tone_by_cw[validated_colorways[0][0]]}
+    )
+    for cw, (cw_id, _mapping) in zip(
+        sibling["colorways"], validated_colorways, strict=True
+    ):
+        mapping = cw.get("mapping") if isinstance(cw, dict) else None
+        if not isinstance(mapping, dict):
+            return None
+        mapping[_RESERVED_TONE_SLOT] = tone_by_cw[cw_id]
+    for layer in sibling["layers"]:
+        if isinstance(layer, dict) and layer.get("id") == gid:
+            layer["params"] = {
+                "color": ground_slot,
+                "kind": "object_repeat",
+                "motif_id": motif_id,
+                "cell_mm": _q(cell),
+                "texture_color": _RESERVED_TONE_SLOT,
+            }
+    return sibling
+
+
 def _layout_variants(base: Intent) -> Iterator[Intent]:
     """Deterministic layout variants of a base intent (identity first)."""
     yield base
-    base_kind = base.symmetry.kind if base.symmetry is not None else None
-    for kind in _SYMMETRY_KINDS:
-        if kind == base_kind:
-            continue
-        yield base.model_copy(update={"symmetry": SymmetrySpec(kind=kind)})
     for idx, layer in enumerate(base.layers):
+        if layer.type == "stripe":
+            yield from _stripe_variants(base, idx)
+            continue
         if not _is_lattice_layer(layer):
+            placement = getattr(layer, "placement", None)
+            if (
+                layer.type == "motif"
+                and placement is not None
+                and placement.type == "path_following"
+            ):
+                for spacing in (placement.spacing_mm * 0.75, placement.spacing_mm * 1.5):
+                    updated_layers = list(base.layers)
+                    updated_layers[idx] = layer.model_copy(
+                        update={
+                            "placement": placement.model_copy(
+                                update={"spacing_mm": _q(spacing)}
+                            )
+                        }
+                    )
+                    yield base.model_copy(update={"layers": updated_layers})
+                yield from _motif_size_variants(base, idx)
             continue
         current = layer.placement.lattice.drop_fraction
         for frac in _DROP_FRACTIONS:
             if frac == current:
                 continue
             yield _with_lattice_drop(base, idx, frac)
+        yield from _lattice_cell_variants(base, idx)
+        yield from _motif_size_variants(base, idx)
+
+
+def _q(value: float) -> float:
+    return round(float(value), 6)
+
+
+def _stripe_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
+    # Stripe count/period is fixed (normalized to 45 deg, k repeats on the prompt path);
+    # diversify only the band STRUCTURE within one period, never the period (count).
+    layer = base.layers[layer_idx]
+    params = layer.params
+    if len(params.bands) == 1:
+        current = params.bands[0].width_mm / params.period_mm
+        for ratio in (0.35, 0.65):
+            if abs(ratio - current) > 1e-6:
+                yield _with_stripe_band_ratio(base, layer_idx, ratio)
+        rhythms = _STRIPE_RHYTHMS_SINGLE
+    else:
+        rhythms = _STRIPE_RHYTHMS_MULTI
+    for _name, weights, gap in rhythms:
+        yield _with_stripe_rhythm(base, layer_idx, weights, gap)
+
+
+
+def _with_stripe_band_ratio(base: Intent, layer_idx: int, ratio: float) -> Intent:
+    layer = base.layers[layer_idx]
+    params = layer.params
+    band = params.bands[0]
+    updated_band = band.model_copy(update={"width_mm": _q(params.period_mm * ratio)})
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={
+            "params": params.model_copy(update={"bands": [updated_band]})
+        }
+    )
+    return base.model_copy(update={"layers": updated_layers})
+
+
+def _with_stripe_rhythm(
+    base: Intent, layer_idx: int, weights: tuple[float, ...], gap_weight: float
+) -> Intent:
+    """Replace a stripe's bands with a rhythm partitioning exactly one period_mm.
+
+    ``period_mm`` and ``angle`` are untouched, so the stripe stays tile-commensurate
+    (seamless preserved). Band widths/gaps are ``weight * u`` with
+    ``u = period / (sum(weights) + gap_weight * (n - 1))`` so the bands (plus the gaps
+    between them) sum to exactly one period. Colors only cycle the layer's existing band
+    colors in order — no new colors, no palette/colorway change.
+    """
+    layer = base.layers[layer_idx]
+    params = layer.params
+    period = params.period_mm
+    base_colors = [b.color for b in params.bands]  # len >= 1 (schema)
+    n = len(weights)
+    total = sum(weights) + gap_weight * (n - 1)
+    u = period / total
+    bands: list[Band] = []
+    cursor = 0.0
+    for i, w in enumerate(weights):
+        width = w * u
+        bands.append(
+            Band(
+                offset_mm=_q(cursor),
+                width_mm=_q(width),
+                color=base_colors[i % len(base_colors)],
+            )
+        )
+        cursor += width
+        if i < n - 1:
+            cursor += gap_weight * u
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={"params": params.model_copy(update={"bands": bands})}
+    )
+    return base.model_copy(update={"layers": updated_layers})
+
+
+def _lattice_cell_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
+    layer = base.layers[layer_idx]
+    spec = layer.placement.lattice
+    tile = base.canvas.tile_mm
+    nx = max(1, round(tile / spec.cell_w_mm))
+    ny = max(1, round(tile / spec.cell_h_mm))
+    for nxx, nyy in ((nx + 1, ny + 1), (max(1, nx - 1), max(1, ny - 1))):
+        if nxx == nx and nyy == ny:
+            continue
+        yield _with_lattice_cells(base, layer_idx, tile / nxx, tile / nyy)
+
+
+def _with_lattice_cells(
+    base: Intent, layer_idx: int, cell_w: float, cell_h: float
+) -> Intent:
+    layer = base.layers[layer_idx]
+    placement = layer.placement
+    spec = placement.lattice
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={
+            "placement": placement.model_copy(
+                update={
+                    "lattice": spec.model_copy(
+                        update={"cell_w_mm": _q(cell_w), "cell_h_mm": _q(cell_h)}
+                    )
+                }
+            )
+        }
+    )
+    return base.model_copy(update={"layers": updated_layers})
+
+
+def _motif_size_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
+    layer = base.layers[layer_idx]
+    size = layer.params.size_mm
+    for factor in (0.75, 1.35):
+        new_size = min(base.canvas.tile_mm, size * factor)
+        if abs(new_size - size) > 1e-6:
+            yield _with_motif_size(base, layer_idx, new_size)
+
+
+def _with_motif_size(base: Intent, layer_idx: int, size: float) -> Intent:
+    layer = base.layers[layer_idx]
+    updated_layers = list(base.layers)
+    updated_layers[layer_idx] = layer.model_copy(
+        update={"params": layer.params.model_copy(update={"size_mm": _q(size)})}
+    )
+    return base.model_copy(update={"layers": updated_layers})
 
 
 def _with_lattice_drop(base: Intent, layer_idx: int, frac: float | None) -> Intent:
@@ -269,6 +692,11 @@ def _clustering_score(intent: Intent) -> int:
     return score
 
 
-def _candidate_id(layout_id: str, colorway_id: str, seed: int) -> str:
-    raw = f"{layout_id}:{colorway_id}:{seed}".encode("utf-8")
+def _candidate_id(
+    layout_id: str, colorway_id: str, seed: int, design_index: int = 0
+) -> str:
+    # design_index 0 reproduces the original hash (single-base back-compat); >0 is
+    # namespaced so two designs sharing a (layout_id, colorway, seed) cannot collide.
+    key = layout_id if design_index == 0 else f"{design_index}:{layout_id}"
+    raw = f"{key}:{colorway_id}:{seed}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]

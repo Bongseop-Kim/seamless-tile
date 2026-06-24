@@ -15,6 +15,7 @@ from app.engine import determinism
 from app.motifs import store as store_mod
 from app.motifs.facets import variant_group_key
 from app.motifs.registry import (
+    BUILTIN_MOTIF_IDS,
     MOTIFS,
     normalize_motif_svg,
     promote_motif,
@@ -25,8 +26,7 @@ from app.motifs.store import MotifRecord, MotifStoreNotConfigured, set_default_s
 from scripts.seed_head_catalog import HEAD_CATALOG, seed
 
 
-def _svg(inner: str, viewbox: str = "0 0 100 100") -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}">{inner}</svg>'
+from tests._helpers import _svg
 
 
 class _FakeStore:
@@ -85,7 +85,7 @@ def _clean():
         llm_adapter.clear_motif_svg_cache()
         recraft_adapter.clear_motif_cache()
         recraft_adapter.clear_recraft_motif_cache()
-        for key in [k for k in MOTIFS if k not in ("circle", "bee")]:
+        for key in [k for k in MOTIFS if k not in BUILTIN_MOTIF_IDS]:
             del MOTIFS[key]
 
     _purge()
@@ -159,12 +159,13 @@ def test_reject_removes_from_store_memory_and_caches():
     assert recraft_adapter._motif_svg_cache == {}
 
 
-def test_reject_builtin_is_refused():
+@pytest.mark.parametrize("motif_id", sorted(BUILTIN_MOTIF_IDS))
+def test_reject_builtin_is_refused(motif_id):
     # The built-in guard fires before the store is resolved (no store configured here),
     # so a ValueError — not MotifStoreNotConfigured — proves the guard's precedence.
     with pytest.raises(ValueError):
-        reject_motif("circle")
-    assert "circle" in MOTIFS
+        reject_motif(motif_id)
+    assert motif_id in MOTIFS
 
 
 # --- AC#2: head-catalog seed yields a curated pool >= 2 with seed diversity ---

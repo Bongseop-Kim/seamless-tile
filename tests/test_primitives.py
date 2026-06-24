@@ -63,6 +63,20 @@ def test_stripe_renders_bands_at_snapped_angle():
     assert math.isclose(math.degrees(math.atan2(dy, dx)), s.snapped.angle_deg, abs_tol=1e-3)
 
 
+def test_negative_diagonal_renders_visual_up_right():
+    s = build_stripe(
+        StripeParams(
+            angle=-45,
+            period_mm=48 / math.sqrt(2),
+            bands=[Band(offset_mm=0, width_mm=8, color="accent")],
+        ),
+        48,
+    )
+    ln = ET.fromstring(s.render(make_palette(), "default")).findall("line")[0]
+    assert float(ln.get("x2")) > float(ln.get("x1"))
+    assert float(ln.get("y2")) < float(ln.get("y1"))
+
+
 def test_stripe_render_is_deterministic():
     s = build_stripe(stripe_params(), 48)
     assert s.render(make_palette(), "default") == s.render(make_palette(), "default")

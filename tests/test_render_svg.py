@@ -15,7 +15,7 @@ def test_render_svg_document_wraps_composed_body():
 
 
 def test_escape_attr_escapes_quotes_and_brackets():
-    assert escape_attr('a"<&>\'') == "a&quot;&lt;&amp;&gt;&#39;"
+    assert escape_attr('a"<&>\'') == "a&quot;&lt;&amp;&gt;&#x27;"
 
 
 def test_escape_text_escapes_brackets_and_amp():

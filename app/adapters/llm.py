@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
 from app.core.config import get_settings
@@ -29,7 +30,6 @@ DEFAULT_TILE_MM = 48.0
 DEFAULT_DPI = 300
 
 
-@runtime_checkable
 class LLMClient(Protocol):
     """Minimal text-completion seam. Kept tiny so a real SDK can back it later
     without churning the signature (no streaming/tool-use leakage into the core)."""
@@ -92,22 +92,75 @@ _EXAMPLE_INTENT = {
             "type": "stripe",
             "z_order": 1,
             "params": {
-                "angle": -36.87,
-                "period_mm": 9.6,
-                "bands": [{"offset_mm": 0, "width_mm": 4.8, "color": "accent"}],
+                "angle": -45.0,
+                "period_mm": 33.9411,
+                "bands": [{"offset_mm": 0, "width_mm": 14.0, "color": "accent"}],
             },
         },
         {
             "id": "dot_lane",
             "type": "motif",
             "z_order": 2,
-            "params": {"motif_id": "circle", "size_mm": 1.4, "color": "accent"},
+            "params": {"motif_id": "dot_lane", "size_mm": 1.4, "color": "accent"},
             "placement": {
                 "type": "path_following",
                 "host_layer": "stripe_base",
                 "lane": "center",
                 "spacing_mm": 6,
                 "phase_mm": 0,
+            },
+        },
+    ],
+}
+
+
+# A second example design whose GROUND is a typed object_repeat texture (a single-color
+# motif on a fine lattice, baked into the ground via background.params), with a stripe
+# overlaid -- shows the model the shape of a textured-ground design. The ground texture is
+# a property of the background, NOT a separate motif layer.
+_EXAMPLE_INTENT_TEXTURED = {
+    "intent_version": 1,
+    "canvas": {"tile_mm": 48, "dpi": 300},
+    "seed": 0,
+    "production": {"method": "digital", "max_colors": 12},
+    "palette": {
+        "slots": [
+            {"id": "ground", "hex": "#10243a"},
+            {"id": "ground_tone", "hex": "#16314f"},
+            {"id": "accent", "hex": "#ef8a7a"},
+        ]
+    },
+    "colorways": [
+        {
+            "id": "default",
+            "name": "default",
+            "mapping": {"ground": "#10243a", "ground_tone": "#16314f", "accent": "#ef8a7a"},
+        }
+    ],
+    "layers": [
+        {
+            "id": "ground",
+            "type": "background",
+            "z_order": 0,
+            "params": {
+                "color": "ground",
+                "kind": "object_repeat",
+                "motif_id": "circle",
+                "cell_mm": 8,
+                "texture_color": "ground_tone",
+            },
+        },
+        {
+            "id": "stripe_base",
+            "type": "stripe",
+            "z_order": 1,
+            "params": {
+                "angle": -45.0,
+                "period_mm": 33.9411,
+                "bands": [
+                    {"offset_mm": 0, "width_mm": 14.0, "color": "accent"},
+                    {"offset_mm": 18.0, "width_mm": 5.0, "color": "accent"},
+                ],
             },
         },
     ],
@@ -125,26 +178,38 @@ def _build_prompt(
     builtin_ids = ", ".join(sorted(MOTIFS))
     scope_vocab = ", ".join(sorted(facets.SCOPE_VOCAB))
     example = {
-        "intent": _EXAMPLE_INTENT,
-        "motif_specs": [
+        "designs": [
             {
-                "layer_id": "dot_lane",
-                "subject": "circle",
-                "scope": "whole",
-                "view": "front",
-                "style": "flat",
-                "description": "small solid dot",
-                "complexity": "simple",
-            }
-        ],
+                "intent": _EXAMPLE_INTENT,
+                "motif_specs": [
+                    {
+                        "layer_id": "dot_lane",
+                        "subject": "circle",
+                        "scope": "whole",
+                        "view": "front",
+                        "style": "flat",
+                        "description": "small solid dot",
+                        "complexity": "simple",
+                    }
+                ],
+            },
+            {"intent": _EXAMPLE_INTENT_TEXTURED, "motif_specs": []},
+        ]
     }
     lines = [
         "You convert a textile pattern description into intent JSON for a seamless "
         "SVG engine. The engine handles all geometry, repetition and seamlessness.",
-        'Output ONLY one JSON object with two keys: "intent" and "motif_specs" — '
-        "no SVG, no coordinates, no markdown, no prose.",
+        'Output ONLY one JSON object with a "designs" array. You MUST return 2 to 4 '
+        "GENUINELY DIFFERENT designs (not near-duplicates): vary the motif, layout and "
+        "structure — band rhythm, placement, and the ground kind (solid vs object_repeat "
+        "texture) — NOT just the color. For example, for a stripe request: one stripe on a "
+        "solid ground; one stripe over an object_repeat textured ground; one with a "
+        "different band rhythm. "
+        'Each entry has two keys "intent" and "motif_specs". No SVG, no coordinates, no '
+        "markdown, no prose.",
         "",
-        "Target shape (match exactly):",
+        "Valid example (follow the JSON shape; do not copy its pattern unless the "
+        "user asked for stripes/dot lanes):",
         json.dumps(example, ensure_ascii=False, indent=2),
         "",
         "Constraints:",
@@ -165,9 +230,26 @@ def _build_prompt(
         "- layer params colors reference palette slot ids, never raw hex.",
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
-        "- diagonal stripes are the default (necktie domain); the engine snaps the "
-        "angle to a rational tile slope, so -36.87 (a 3/4 slope) with period_mm = "
-        "tile_mm/5 is always seamless.",
+        "- Respect the user's pattern class. For simple polka dots on a solid "
+        "background, use a background layer plus a built-in circle motif on lattice "
+        "placement; do NOT add stripe host layers.",
+        "- Ground kind: a background layer's params.kind is 'solid' (default; just "
+        "params.color) or 'object_repeat' for an all-over tonal texture. For object_repeat "
+        "set params: color (base ground slot), motif_id (one of circle/diamond/square/"
+        "twill/herringbone), cell_mm (must divide tile_mm), and texture_color (a separate "
+        "tone-on-tone slot, close to the ground color). Do NOT build a ground from a "
+        "separate motif layer — the texture is a property of the background.",
+        "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
+        "cell_w_mm and cell_h_mm; type 'scatter' needs a scatter object; type "
+        "'path_following' needs host_layer+lane or path plus spacing_mm.",
+        "- For stripe prompts, use stripe layers. Diagonal stripes default to -45 deg "
+        "with period_mm = tile_mm/sqrt(2) (a couple of bold diagonal stripes per tile); "
+        "the engine normalizes the diagonal angle/period for you. For non-diagonal "
+        "stripes, use angle 0 or 90 with period_mm dividing tile_mm.",
+        "- Stripe band widths and the gaps between them should be VARIED/uneven by "
+        "default (guard stripes, thick/thin, ratios like 5:2:2, 3:2:1, 6:1:3); the bands "
+        "need not fill the period — leave ground gaps. Make stripes equal-width ONLY if "
+        "the user explicitly asks for uniform/even stripes.",
         f"- target canvas: {json.dumps(target_canvas)}.",
     ]
     if palette:
@@ -214,6 +296,22 @@ def _split_intent_and_specs(raw: dict) -> tuple[dict, list[dict]]:
     return intent, [s for s in specs if isinstance(s, dict)]
 
 
+def _split_designs(raw: dict) -> list[tuple[dict, list[dict]]]:
+    """Parse the model output into a list of ``(intent, motif_specs)`` designs.
+
+    Accepts the multi-design wrapper ``{"designs": [{"intent":..., "motif_specs":[...]},
+    ...]}``, the legacy single wrapper ``{"intent":..., "motif_specs":[...]}``, or a bare
+    intent dict. Detection is unambiguous: a valid ``Intent`` is ``extra="forbid"`` so it
+    never carries a top-level ``designs`` (or ``intent``) key.
+    """
+    designs = raw.get("designs")
+    if isinstance(designs, list) and designs:
+        out = [_split_intent_and_specs(d) for d in designs if isinstance(d, dict)]
+        if out:
+            return out
+    return [_split_intent_and_specs(raw)]
+
+
 def _validate_spec_facets(specs: list[dict]) -> list[str]:
     """Validate motif-spec facets against the controlled vocab (M2). ``scope`` is
     controlled (``facets.SCOPE_VOCAB``); ``subject`` is free text but required. Returns
@@ -243,36 +341,105 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
     return errors
 
 
-def build_intent(
+def _drop_redundant_builtin_specs(intent_raw: dict, specs: list[dict]) -> list[dict]:
+    layers = {
+        layer.get("id"): layer
+        for layer in intent_raw.get("layers", [])
+        if isinstance(layer, dict)
+    }
+    out: list[dict] = []
+    for spec in specs:
+        layer = layers.get(spec.get("layer_id"))
+        motif_id = (
+            layer.get("params", {}).get("motif_id")
+            if isinstance(layer, dict)
+            else None
+        )
+        subject = spec.get("subject")
+        if (
+            isinstance(motif_id, str)
+            and motif_id in MOTIFS
+            and isinstance(subject, str)
+            and subject.strip().casefold() == motif_id.casefold()
+        ):
+            continue
+        out.append(spec)
+    return out
+
+
+_STRIPE_AXIS_TOL_DEG = 8.0
+
+
+def _normalize_stripes(intent_raw: dict, settings) -> None:
+    """Prompt-path stripe normalization (in place): force a clearly-diagonal stripe to
+    -45° with a fixed small repeat count (period = tile/(k·√2), k = repeats//2), scaling
+    bands proportionally — so generated ties show a few bold 45° stripes instead of many
+    thin ones. Axis-aligned stripes (within tolerance of 0/90) are left untouched. Only
+    the LLM/prompt path calls this; intent-direct/image intents are unaffected."""
+    try:
+        tile = float(intent_raw["canvas"]["tile_mm"])
+        layers = intent_raw["layers"]
+    except (KeyError, TypeError, ValueError):
+        return
+    if not isinstance(layers, list):
+        return
+    k = max(1, settings.stripe_diagonal_repeats // 2)
+    target_period = tile / (k * math.sqrt(2.0))
+    for layer in layers:
+        if not isinstance(layer, dict) or layer.get("type") != "stripe":
+            continue
+        params = layer.get("params")
+        if not isinstance(params, dict):
+            continue
+        angle = params.get("angle")
+        period = params.get("period_mm")
+        bands = params.get("bands")
+        if not isinstance(angle, (int, float)) or not period or not isinstance(bands, list):
+            continue
+        a = abs(angle) % 90.0
+        if min(a, 90.0 - a) <= _STRIPE_AXIS_TOL_DEG:
+            continue  # axis-aligned (vertical/horizontal): respect the intent
+        params["angle"] = -45.0
+        scale = target_period / period
+        for b in bands:
+            if not isinstance(b, dict):
+                continue
+            if isinstance(b.get("offset_mm"), (int, float)):
+                b["offset_mm"] = round(b["offset_mm"] * scale, 6)
+            if isinstance(b.get("width_mm"), (int, float)):
+                b["width_mm"] = round(b["width_mm"] * scale, 6)
+        params["period_mm"] = round(target_period, 6)
+
+
+def build_intents(
     prompt: str,
     *,
     canvas: dict | None = None,
     palette: dict | None = None,
     client: LLMClient | None = None,
     use_cache: bool = True,
-) -> AdapterResult:
-    """Turn a text prompt into a validated, frozen intent dict + motif specs.
+) -> list[AdapterResult]:
+    """Turn a text prompt into a list of validated, frozen design intents (+ motif specs).
 
-    The model emits ``{"intent": ..., "motif_specs": [...]}`` (a bare intent without
-    specs is still accepted for the legacy path). ``motif_specs`` carry per-layer
-    facets (subject/part/...) for the deterministic motif resolver to act on; their
-    ``part`` facet is validated against the controlled vocabulary here.
-
-    Raises :class:`IntentInvalid` if the model cannot produce a valid intent (or valid
-    facets) within the initial attempt plus one constrained re-prompt, and
-    :class:`LLMNotConfigured` if no client is available.
+    The model emits ``{"designs": [{"intent":..., "motif_specs":[...]}, ...]}`` — multiple
+    distinct DESIGN interpretations of the prompt. The legacy single wrapper and a bare
+    intent are still accepted (yielding a one-element list). Each design is validated
+    independently; invalid designs are dropped. A re-prompt happens only if NO design is
+    valid (initial attempt + one constrained re-prompt), after which :class:`IntentInvalid`
+    is raised (the route maps that to 422). Only the finalized list is cached/frozen.
     """
     key = cache_key({"k": "llm", "prompt": prompt, "canvas": canvas, "palette": palette})
     if use_cache and key in _intent_cache:
-        c = _intent_cache[key]
-        # Hand back independent copies so a mutating caller can't corrupt the freeze,
-        # and replay the stage-0 warnings (so the same request keeps the same warnings).
-        return AdapterResult(
-            intent=copy.deepcopy(c["intent"]),
-            source_fidelity="vector",
-            warnings=list(c["warnings"]),
-            motif_specs=copy.deepcopy(c["motif_specs"]),
-        )
+        # Hand back independent copies so a mutating caller can't corrupt the freeze.
+        return [
+            AdapterResult(
+                intent=copy.deepcopy(c["intent"]),
+                source_fidelity="vector",
+                warnings=list(c["warnings"]),
+                motif_specs=copy.deepcopy(c["motif_specs"]),
+            )
+            for c in _intent_cache[key]
+        ]
 
     llm = _resolve_client(client)
 
@@ -290,37 +457,66 @@ def build_intent(
             last_exc = IntentInvalid(["LLM response JSON was not an object"])
             errors = last_exc.errors
             continue
-        intent_raw, specs = _split_intent_and_specs(raw)
-        intent_raw.setdefault("intent_version", 1)
-        facet_errors = _validate_spec_facets(specs)
-        if facet_errors:
-            last_exc = IntentInvalid(facet_errors)
-            errors = facet_errors
-            continue
-        try:
-            result = validate_intent(intent_raw, repair=True)
-        except IntentInvalid as exc:
-            last_exc = exc
-            errors = exc.errors
-            continue
-        frozen = result.intent.model_dump(mode="json")
-        warns = list(result.warnings)
-        specs_frozen = [dict(s) for s in specs]
-        if use_cache:
-            _intent_cache[key] = {
-                "intent": copy.deepcopy(frozen),
-                "warnings": warns,
-                "motif_specs": copy.deepcopy(specs_frozen),
-            }
-        return AdapterResult(
-            intent=frozen,
-            source_fidelity="vector",
-            warnings=list(warns),
-            motif_specs=specs_frozen,
-        )
+
+        results: list[AdapterResult] = []
+        frozen_cache: list[dict] = []
+        design_errors: list[str] = []
+        for idx, (intent_raw, specs) in enumerate(_split_designs(raw)):
+            intent_raw.setdefault("intent_version", 1)
+            _normalize_stripes(intent_raw, get_settings())
+            specs = _drop_redundant_builtin_specs(intent_raw, specs)
+            facet_errors = _validate_spec_facets(specs)
+            if facet_errors:
+                design_errors += [f"design[{idx}]: {e}" for e in facet_errors]
+                continue
+            try:
+                result = validate_intent(intent_raw, repair=True)
+            except IntentInvalid as exc:
+                design_errors += [f"design[{idx}]: {e}" for e in exc.errors]
+                continue
+            frozen = result.intent.model_dump(mode="json")
+            warns = list(result.warnings)
+            specs_frozen = [dict(s) for s in specs]
+            results.append(
+                AdapterResult(
+                    intent=frozen,
+                    source_fidelity="vector",
+                    warnings=list(warns),
+                    motif_specs=specs_frozen,
+                )
+            )
+            frozen_cache.append(
+                {
+                    "intent": copy.deepcopy(frozen),
+                    "warnings": warns,
+                    "motif_specs": copy.deepcopy(specs_frozen),
+                }
+            )
+
+        if results:
+            if use_cache:
+                _intent_cache[key] = frozen_cache
+            return results
+        # No valid design -> feed the collected errors back into the one re-prompt.
+        last_exc = IntentInvalid(design_errors or ["LLM produced no valid design"])
+        errors = last_exc.errors[:6]
 
     assert last_exc is not None  # the loop only exits early via return
     raise last_exc
+
+
+def build_intent(
+    prompt: str,
+    *,
+    canvas: dict | None = None,
+    palette: dict | None = None,
+    client: LLMClient | None = None,
+    use_cache: bool = True,
+) -> AdapterResult:
+    """Back-compat single-design wrapper: returns the first design of :func:`build_intents`."""
+    return build_intents(
+        prompt, canvas=canvas, palette=palette, client=client, use_cache=use_cache
+    )[0]
 
 
 # --- miss-path motif generation (single-color SVG; D8 simple=LLM) ------------
@@ -343,17 +539,6 @@ def _extract_svg(text: str) -> str:
         return ""
     match = _SVG_RE.search(text)
     return match.group(0) if match else text.strip()
-
-
-def _canonical_spec(spec: dict) -> dict:
-    """The normalized facet subset that determines the rendered motif (cache key/freeze).
-
-    Normalizing (NFC/strip/casefold) collapses trivial text variants to one frozen entry
-    so equivalent specs reuse the same generated motif id."""
-    return {
-        k: facets.normalize_facet(spec.get(k))
-        for k in ("subject", "scope", "view", "expression", "style", "description")
-    }
 
 
 def _build_svg_prompt(spec: dict, *, errors: list[str] | None = None) -> str:
@@ -400,7 +585,7 @@ def generate_motif_svg(
     ``embedding`` (S11) is the descriptor vector the resolver already computed for the
     miss; it is persisted with the motif so later requests can soft-match it.
     """
-    key = cache_key({"k": "motif_svg", "spec": _canonical_spec(spec)})
+    key = cache_key({"k": "motif_svg", "spec": facets.canonical_spec(spec)})
     if use_cache and key in _motif_svg_cache:
         return _motif_svg_cache[key]
 

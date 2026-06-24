@@ -66,4 +66,5 @@ def client_from_settings(settings) -> GeminiClient | None:
     if not api_key:
         return None
     model = getattr(settings, "gemini_model", None) or DEFAULT_MODEL
-    return GeminiClient(api_key, model)
+    temperature = getattr(settings, "gemini_temperature", 0.0)
+    return GeminiClient(api_key, model, temperature=temperature)

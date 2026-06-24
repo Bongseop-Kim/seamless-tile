@@ -23,7 +23,7 @@ import copy
 import hashlib
 import io
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from PIL import Image, ImageOps
 
@@ -63,12 +63,10 @@ class VectorResult:
     symbol_svg: str | None = None
 
 
-@runtime_checkable
 class VLMClient(Protocol):
     def describe(self, image_bytes: bytes) -> dict: ...
 
 
-@runtime_checkable
 class Vectorizer(Protocol):
     def trace(self, image_bytes: bytes) -> VectorResult: ...
 
@@ -189,14 +187,9 @@ def extract_palette(image_bytes: bytes, *, num_colors: int = DEFAULT_NUM_COLORS)
     return slots
 
 
-def judge_vectorization(
-    result: VectorResult,
-    *,
-    max_paths: int = VECTORIZE_MAX_PATHS,
-    max_colors: int = VECTORIZE_MAX_COLORS,
-) -> str:
+def judge_vectorization(result: VectorResult) -> str:
     """Fit (flat/geometric/simple) -> 'vector'; unfit (photo/painterly) -> 'raster_hybrid'."""
-    if result.path_count <= max_paths and result.color_count <= max_colors:
+    if result.path_count <= VECTORIZE_MAX_PATHS and result.color_count <= VECTORIZE_MAX_COLORS:
         return "vector"
     return "raster_hybrid"
 

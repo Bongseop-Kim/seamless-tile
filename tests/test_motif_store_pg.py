@@ -1,11 +1,12 @@
-"""Session-9 live Supabase/Postgres round-trip (skipped unless SUPABASE_DB_URL is set).
+"""Session-9 live Supabase/Postgres round-trip (explicit opt-in only).
 
-Mirrors the renderer skip gate (test_api_export.py): with no DSN configured this whole
-module is skipped, so default CI/local `pytest` stays green without a database. When a
-DSN is present (and the `motifs` schema — owned by the React monorepo's migrations,
-see ARCHITECTURE.md "영속화" — exists), it proves the psycopg store round-trips a record
+Default CI/local `pytest` skips this module, even when `.env` contains a DSN. When
+`RUN_LIVE_SUPABASE_TESTS=1` and `SUPABASE_DB_URL` are both set in the process
+environment (not just `.env`), it proves the psycopg store round-trips a record
 through jsonb/text[] and that upsert is idempotent.
 """
+
+import os
 
 import pytest
 
@@ -13,15 +14,25 @@ from app.core.config import get_settings
 from app.motifs.store import MotifRecord, PostgresMotifStore
 
 
-def _has_supabase_db_url() -> bool:
+def _live_supabase_enabled() -> bool:
+    dsn = os.environ.get("SUPABASE_DB_URL")
+    enabled = os.environ.get("RUN_LIVE_SUPABASE_TESTS") == "1"
+    return enabled and bool(dsn and dsn.strip())
+
+
+def _store() -> PostgresMotifStore:
     dsn = get_settings().supabase_db_url
-    return bool(dsn and dsn.strip())
+    assert dsn and dsn.strip()
+    return PostgresMotifStore(dsn)
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_supabase_db_url(),
-    reason="no SUPABASE_DB_URL configured (live Supabase integration test)",
-)
+pytestmark = [
+    pytest.mark.live_db,
+    pytest.mark.skipif(
+        not _live_supabase_enabled(),
+        reason="set RUN_LIVE_SUPABASE_TESTS=1 and SUPABASE_DB_URL for live Supabase tests",
+    ),
+]
 
 _TEST_ID_ROUNDTRIP = "recraft-pgtest-roundtrip"
 _TEST_ID_EMBEDDING = "recraft-pgtest-embedding"
@@ -34,7 +45,7 @@ def _delete(store: PostgresMotifStore, motif_id: str) -> None:
 
 
 def test_upsert_get_roundtrip_and_idempotent():
-    store = PostgresMotifStore(get_settings().supabase_db_url)
+    store = _store()
     record = MotifRecord(
         id=_TEST_ID_ROUNDTRIP,
         symbol='<symbol id="motif-x" overflow="visible"><circle r="0.5"/></symbol>',
@@ -72,7 +83,7 @@ def test_upsert_get_roundtrip_and_idempotent():
 def test_upsert_get_roundtrip_embedding():
     # pgvector stores float4, so the round-trip is NOT bit-identical: compare with a
     # tolerance. NULL embeddings round-trip to None.
-    store = PostgresMotifStore(get_settings().supabase_db_url)
+    store = _store()
     vec = [0.1, 0.2, 0.3, -0.5]
     record = MotifRecord(
         id=_TEST_ID_EMBEDDING,
@@ -95,7 +106,7 @@ def test_upsert_get_roundtrip_embedding():
 def test_set_status_delete_and_find_by_status_roundtrip():
     # S14: promotion (auto -> curated), the review queue (find_by_status), and rejection
     # (delete) round-trip through Postgres.
-    store = PostgresMotifStore(get_settings().supabase_db_url)
+    store = _store()
     record = MotifRecord(
         id=_TEST_ID_STATUS,
         symbol='<symbol id="motif-x" overflow="visible"><circle r="0.5"/></symbol>',

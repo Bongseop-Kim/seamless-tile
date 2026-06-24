@@ -33,24 +33,12 @@ class GenerateRequest(BaseModel):
     candidate_count: int = Field(default=4, ge=1, le=8)
 
 
-class ReproResponse(BaseModel):
-    """Reproduction metadata: same fields reproduce a byte-identical SVG."""
-
-    engine_version: str
-    registry_version: str
-    intent_version: int
-    colorway_id: str
-    seed: int
-    layout_id: str | None = None
-
-
 class CandidateResponse(BaseModel):
     id: str
-    svg: str
-    intent: dict[str, Any]  # the resolved variant intent this candidate composed
-    layout_id: str
-    source_fidelity: str
-    repro: ReproResponse  # extension beyond the architecture shape: determinism evidence
+    # public Supabase Storage URL of the rendered preview PNG; None when preview storage
+    # is unconfigured (see `warnings`). The SVG source and all repro/intent metadata are
+    # persisted server-side to seamless_generation_logs, not returned to the client.
+    png_url: str | None  # extension beyond the architecture shape: determinism evidence
 
 
 class GenerateResponse(BaseModel):

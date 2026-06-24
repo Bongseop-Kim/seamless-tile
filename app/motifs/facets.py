@@ -43,6 +43,19 @@ def normalize_facet(value: str | None) -> str:
     return unicodedata.normalize("NFC", value).strip().casefold()
 
 
+def canonical_spec(spec: dict) -> dict:
+    """The normalized facet subset that determines the rendered motif (cache key/freeze).
+
+    Normalizing (NFC/strip/casefold) collapses trivial text variants to one frozen entry
+    so equivalent specs reuse the same generated motif id. Shared by the LLM and Recraft
+    motif adapters as their freeze/cache key.
+    """
+    return {
+        k: normalize_facet(spec.get(k))
+        for k in ("subject", "scope", "view", "expression", "style", "description")
+    }
+
+
 def variant_group_key(subject: str | None, scope: str | None) -> str:
     """Deterministic group key = ``sha256_hex(canonical(v, norm(subject), norm(scope)))``.
 
