@@ -9,9 +9,17 @@ key present. All SDK/network failures are normalized to
 
 from __future__ import annotations
 
+import time
+
 from app.adapters.base import AdapterClientError
 
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
+
+# 503 (UNAVAILABLE / overload) and 429 (rate limit) are transient — a short wait
+# usually clears them. Other codes (4xx auth/bad-request) are not worth retrying.
+_RETRYABLE_CODES = frozenset({429, 503})
+_MAX_ATTEMPTS = 4  # initial try + 3 retries
+_BASE_DELAY_S = 0.5  # exponential: 0.5, 1.0, 2.0s
 
 
 class GeminiClient:
@@ -41,18 +49,22 @@ class GeminiClient:
     def complete(self, prompt: str) -> str:
         from google.genai import errors, types
 
-        try:
-            response = self._client.models.generate_content(
-                model=self._model,
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=self._temperature),
-            )
-        except errors.APIError as exc:
-            code = getattr(exc, "code", None)
-            message = getattr(exc, "message", str(exc))
-            raise AdapterClientError(f"Gemini API error ({code}): {message}") from exc
-        except Exception as exc:  # transport / unexpected SDK failure
-            raise AdapterClientError(f"Gemini request failed: {exc}") from exc
+        config = types.GenerateContentConfig(temperature=self._temperature)
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                response = self._client.models.generate_content(
+                    model=self._model, contents=prompt, config=config
+                )
+                break
+            except errors.APIError as exc:
+                code = getattr(exc, "code", None)
+                if code in _RETRYABLE_CODES and attempt < _MAX_ATTEMPTS - 1:
+                    time.sleep(_BASE_DELAY_S * 2**attempt)
+                    continue
+                message = getattr(exc, "message", str(exc))
+                raise AdapterClientError(f"Gemini API error ({code}): {message}") from exc
+            except Exception as exc:  # transport / unexpected SDK failure
+                raise AdapterClientError(f"Gemini request failed: {exc}") from exc
 
         text = response.text
         if not text:
