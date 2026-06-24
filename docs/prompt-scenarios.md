@@ -3,19 +3,19 @@
 prompt 입력 경로만 검증한다 (`intent`·`reference_image` 미사용). 로컬 서버를 띄우고 요청은 직접 보내며 결과를 하나씩 확인한다.
 
 > **응답 슬림화(v2)**: generate 응답은 `request_id`, `candidates[].{id, png_url}`, `warnings[]`만 포함한다. `svg`·`intent`·`layout_id`·`source_fidelity`·`repro`는 응답에서 제거되어 `seamless_generation_logs` 테이블(admin "Seamless 생성 로그")에 기록된다. 아래 시나리오에서 이들 필드 확인은 **admin 로그 상세** 기준으로 검증한다. `png_url`은 Supabase Storage에 렌더된 미리보기 PNG의 public URL(storage 미설정 시 `null` + warning).
-
 > **비용 주의**: prompt 요청은 매번 Gemini를 호출하고(저렴하지만 무료 아님), detailed/멀티컬러 모티프는 **Recraft 생성(고비용 💰)** 을 유발한다. 동일 입력 재호출은 freeze 캐시로 외부 호출 0(무료). 아래 등급·실행 순서를 따라 비용을 최소화하라.
 
 ---
 
 ## 동작 모델 (prompt-only 경로)
 
-```
-prompt(str) → Gemini gemini-2.5-flash-lite → {intent, motif_specs}
-            → (motif_specs 있으면) resolve_motifs: 캐시/store 매치 or 생성
+```text
+prompt(str) → Gemini gemini-2.5-flash-lite → designs[] = [{intent, motif_specs}, ...]
+            → design별 motif_specs resolve: 캐시/store 매치 or 생성
                  · complexity="simple"   → LLM(Gemini)로 모티프 SVG 생성
                  · complexity="detailed" → Recraft로 모티프 생성 💰
-            → 결정론 엔진(validate → compose → sanitize) → candidates[] SVG
+            → 결정론 엔진: design별 candidate 생성 → SVG dedup/round-robin merge
+            → merged candidates[] SVG
 ```
 
 알아둘 점:
@@ -240,7 +240,7 @@ curl -s http://localhost:8000/api/v1/generate \
 | `candidates[].png_url` | 응답 | Supabase Storage 미리보기 PNG public URL (미설정 시 `null`) |
 | `warnings[]` | 응답 | dpi 클램프, 다양성 부족, 모티프 드롭, preview 미설정(부분성공) 등 |
 | `candidates[].svg` | 로그 | 최종 seamless SVG. `<pattern ... userSpaceOnUse>`, 미허용 태그 없음 |
-| `intent` | 로그 | LLM이 만든 + 해석된 intent(요청 단위 1건). 레이어/배치/대칭/색 검증의 핵심 |
+| `intent` | 로그 | LLM이 만든 + 해석된 `designs[]` 묶음. design별 레이어/배치/대칭/색 검증의 핵심 |
 | `candidates[].layout_id` | 로그 | 구조 지문(seed·colorway 제외). 다양성/결정론 비교 키 |
 | `candidates[].source_fidelity` | 로그 | prompt 경로는 항상 `vector` (Recraft 판별용 아님) |
 | `candidates[].colorway_id`·`seed`, `engine/registry_version` | 로그 | 재현성 증빙(repro). 로그 row 컬럼 + candidates jsonb |

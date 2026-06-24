@@ -407,7 +407,12 @@ def _ground_to_object_repeat(raw: dict, ground: dict) -> dict | None:
         tile = float(raw["canvas"]["tile_mm"])
     except (KeyError, TypeError, ValueError):
         return None
-    if not slots or not colorways:
+    if (
+        not isinstance(slots, list)
+        or not isinstance(colorways, list)
+        or not slots
+        or not colorways
+    ):
         return None
     ground_slot = (ground.get("params") or {}).get("color")
     settings = get_settings()
@@ -415,15 +420,29 @@ def _ground_to_object_repeat(raw: dict, ground: dict) -> dict | None:
     # Per-colorway tonal shade derived from that colorway's ground hex. Bail if any ground
     # color is a non-hex spot color (can't derive) or screen printing would overflow.
     tone_by_cw: dict[str, str] = {}
+    validated_colorways: list[tuple[str, dict]] = []
     for cw in colorways:
-        ground_hex = cw.get("mapping", {}).get(ground_slot)
+        if not isinstance(cw, dict):
+            return None
+        cw_id = cw.get("id")
+        mapping = cw.get("mapping", {})
+        if not isinstance(cw_id, str) or not isinstance(mapping, dict):
+            return None
+        ground_hex = mapping.get(ground_slot)
         if not isinstance(ground_hex, str) or not is_hex_color(ground_hex):
             return None
-        tone_by_cw[cw["id"]] = derive_tonal_hex(ground_hex, settings.texture_tone_shift)
-    if raw.get("production", {}).get("method") == "screen":
-        max_colors = raw["production"].get("max_colors", 12)
-        for cw in colorways:
-            distinct = set(cw.get("mapping", {}).values()) | {tone_by_cw[cw["id"]]}
+        tone_by_cw[cw_id] = derive_tonal_hex(ground_hex, settings.texture_tone_shift)
+        validated_colorways.append((cw_id, mapping))
+    production = raw.get("production", {})
+    if not isinstance(production, dict):
+        return None
+    if production.get("method") == "screen":
+        try:
+            max_colors = int(production.get("max_colors", 12))
+        except (TypeError, ValueError):
+            return None
+        for cw_id, mapping in validated_colorways:
+            distinct = set(mapping.values()) | {tone_by_cw[cw_id]}
             if len(distinct) > max_colors:
                 return None
 
@@ -449,10 +468,15 @@ def _ground_to_object_repeat(raw: dict, ground: dict) -> dict | None:
     gid = ground.get("id")
     sibling = copy.deepcopy(raw)
     sibling["palette"]["slots"].append(
-        {"id": _RESERVED_TONE_SLOT, "hex": tone_by_cw[colorways[0]["id"]]}
+        {"id": _RESERVED_TONE_SLOT, "hex": tone_by_cw[validated_colorways[0][0]]}
     )
-    for cw in sibling["colorways"]:
-        cw["mapping"][_RESERVED_TONE_SLOT] = tone_by_cw[cw["id"]]
+    for cw, (cw_id, _mapping) in zip(
+        sibling["colorways"], validated_colorways, strict=True
+    ):
+        mapping = cw.get("mapping") if isinstance(cw, dict) else None
+        if not isinstance(mapping, dict):
+            return None
+        mapping[_RESERVED_TONE_SLOT] = tone_by_cw[cw_id]
     for layer in sibling["layers"]:
         if isinstance(layer, dict) and layer.get("id") == gid:
             layer["params"] = {

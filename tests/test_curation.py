@@ -159,12 +159,13 @@ def test_reject_removes_from_store_memory_and_caches():
     assert recraft_adapter._motif_svg_cache == {}
 
 
-def test_reject_builtin_is_refused():
+@pytest.mark.parametrize("motif_id", sorted(BUILTIN_MOTIF_IDS))
+def test_reject_builtin_is_refused(motif_id):
     # The built-in guard fires before the store is resolved (no store configured here),
     # so a ValueError — not MotifStoreNotConfigured — proves the guard's precedence.
     with pytest.raises(ValueError):
-        reject_motif("circle")
-    assert "circle" in MOTIFS
+        reject_motif(motif_id)
+    assert motif_id in MOTIFS
 
 
 # --- AC#2: head-catalog seed yields a curated pool >= 2 with seed diversity ---

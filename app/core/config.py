@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # preview upload is a graceful no-op (png_url is null + a warning), like the motif store.
     supabase_url: str | None = None  # https://<ref>.supabase.co  (env: SUPABASE_URL)
     preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
-    preview_dpi: int = Field(192, ge=1)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
+    preview_dpi: int = Field(192, ge=1, le=1200)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
 
     # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
     # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 0이면 비활성(lookup+store 생략) —

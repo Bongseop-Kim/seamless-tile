@@ -48,10 +48,12 @@ def _block_external_side_effects(request, monkeypatch):
 
     get_settings.cache_clear()
     clear_default_store()
+    generate_route.reset_response_cache()
     monkeypatch.setattr(generate_route, "insert_generation_log", lambda row: None)
     monkeypatch.setattr(generate_route, "preview_configured", lambda: False)
 
     yield
 
     clear_default_store()
+    generate_route.reset_response_cache()
     get_settings.cache_clear()

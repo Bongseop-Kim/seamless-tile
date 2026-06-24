@@ -37,10 +37,10 @@ def derive_tonal_hex(hex_color: str, shift: float) -> str:
     if not is_hex_color(hex_color):
         return hex_color
     r, g, b = _hex_to_rgb(hex_color)
-    h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-    direction = 1.0 if l < 0.5 else -1.0
-    new_l = max(0.0, min(1.0, l + direction * shift))
-    nr, ng, nb = colorsys.hls_to_rgb(h, new_l, s)
+    h, lightness, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    direction = 1.0 if lightness < 0.5 else -1.0
+    new_lightness = max(0.0, min(1.0, lightness + direction * shift))
+    nr, ng, nb = colorsys.hls_to_rgb(h, new_lightness, s)
     return rgb_to_hex(round(nr * 255), round(ng * 255), round(nb * 255))
 
 

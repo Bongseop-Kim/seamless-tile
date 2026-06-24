@@ -337,6 +337,12 @@ def test_ground_kind_sibling_skips_non_hex_ground():
     assert _ground_kind_sibling(raw) is None
 
 
+def test_ground_kind_sibling_skips_malformed_colorway():
+    raw = _single_band_stripe_intent()
+    del raw["colorways"][0]["id"]
+    assert _ground_kind_sibling(raw) is None
+
+
 def test_stripe_presets_are_uneven():
     from app.engine.candidates import _STRIPE_RHYTHMS_MULTI, _STRIPE_RHYTHMS_SINGLE
 

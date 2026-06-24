@@ -323,7 +323,7 @@ async def generate_candidate(
             return_exceptions=True,
         )
         png_urls: list[str | None] = []
-        for rc, res in zip(result.candidates, rendered):
+        for rc, res in zip(result.candidates, rendered, strict=True):
             if isinstance(res, BaseException):
                 warnings.append(f"preview unavailable for candidate {rc.id}: {res}")
                 png_urls.append(None)
@@ -341,7 +341,7 @@ async def generate_candidate(
 
     candidates = [
         CandidateResponse(id=rc.id, png_url=url)
-        for rc, url in zip(result.candidates, png_urls)
+        for rc, url in zip(result.candidates, png_urls, strict=True)
     ]
 
     # Cache only fully-successful renders: a None url means preview was unconfigured or a
@@ -351,7 +351,10 @@ async def generate_candidate(
     # served URL is always valid; worst case one orphaned PNG. Per-key asyncio.Lock if it ever matters.
     if key is not None and all(url is not None for url in png_urls):
         _RESPONSE_CACHE[key] = (
-            [(rc.id, url) for rc, url in zip(result.candidates, png_urls)],
+            [
+                (rc.id, url)
+                for rc, url in zip(result.candidates, png_urls, strict=True)
+            ],
             warnings,
         )
         _RESPONSE_CACHE.move_to_end(key)
@@ -391,7 +394,7 @@ async def generate_candidate(
                     "svg": rc.candidate.svg,
                     "png_url": url,
                 }
-                for rc, url in zip(result.candidates, png_urls)
+                for rc, url in zip(result.candidates, png_urls, strict=True)
             ],
             warnings=warnings,
             generate_ms=generate_ms,

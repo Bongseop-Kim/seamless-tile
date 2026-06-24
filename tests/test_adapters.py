@@ -162,9 +162,11 @@ def test_normalize_stripes_forces_diagonal_to_visual_up_right():
     from app.core.config import get_settings
 
     raw = mvp_intent()
-    next(l for l in raw["layers"] if l["type"] == "stripe")["params"]["angle"] = -36.87
+    next(layer for layer in raw["layers"] if layer["type"] == "stripe")["params"][
+        "angle"
+    ] = -36.87
     _normalize_stripes(raw, get_settings())
-    st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
+    st = next(layer for layer in raw["layers"] if layer["type"] == "stripe")["params"]
     assert st["angle"] == -45.0
     assert abs(st["period_mm"] - 48 / math.sqrt(2)) < 1e-3  # k=1 -> 2 stripes/tile
     validate_intent(raw)  # still valid + seamless
@@ -175,9 +177,11 @@ def test_normalize_stripes_preserves_axis():
     from app.core.config import get_settings
 
     raw = mvp_intent()
-    next(l for l in raw["layers"] if l["type"] == "stripe")["params"]["angle"] = 90.0
+    next(layer for layer in raw["layers"] if layer["type"] == "stripe")["params"][
+        "angle"
+    ] = 90.0
     _normalize_stripes(raw, get_settings())
-    st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
+    st = next(layer for layer in raw["layers"] if layer["type"] == "stripe")["params"]
     assert st["angle"] == 90.0  # vertical/horizontal stripes untouched
 
 
@@ -192,14 +196,14 @@ def test_normalize_stripes_repeats_controls_k():
         stripe_diagonal_repeats = 4
 
     _normalize_stripes(raw, _Settings())
-    st = next(l for l in raw["layers"] if l["type"] == "stripe")["params"]
+    st = next(layer for layer in raw["layers"] if layer["type"] == "stripe")["params"]
     assert abs(st["period_mm"] - 48 / (2 * math.sqrt(2))) < 1e-3  # k=2 -> 4 stripes/tile
 
 
 def test_build_intents_normalizes_diagonal_stripe():
     llm = _ScriptedLLM(json.dumps(mvp_intent()))
     res = llm_build_intents("diagonal repp stripe tie", client=llm, use_cache=False)
-    st = next(l for l in res[0].intent["layers"] if l["type"] == "stripe")["params"]
+    st = next(layer for layer in res[0].intent["layers"] if layer["type"] == "stripe")["params"]
     assert st["angle"] == -45.0
 
 

@@ -40,7 +40,7 @@ def compose(intent: Intent, palette: Palette, colorway_id: str | None = None) ->
         if layer.type in ("background", "stripe")
     }
 
-    symbol_defs: dict[str, str] = {}  # motif_id -> <symbol>, deduped, insertion-ordered
+    symbol_defs: dict[str, str] = {}  # symbol id -> <symbol>, deduped, insertion-ordered
     fragments: list[str] = []
     for layer in layers:
         fragment = _render_layer(
@@ -130,7 +130,7 @@ def _render_ground_texture(
     instances = clone_instances(
         place_lattice(placement, tile), motif=motif, size_mm=size_mm, tile_mm=tile
     )
-    symbol_defs.setdefault(motif.id, motif.symbol)
+    symbol_defs.setdefault(f"motif-{motif.id}", motif.symbol)
     color = escape_attr(palette.resolve_color(p.texture_color, colorway_id))
     return "".join(
         f'<use href="#motif-{motif.id}" color="{color}" '
@@ -188,7 +188,7 @@ def _render_motif_layer(
         return "".join(uses)
 
     # Single-color (legacy): one symbol, one <use color> per instance.
-    symbol_defs.setdefault(motif.id, motif.symbol)
+    symbol_defs.setdefault(f"motif-{motif.id}", motif.symbol)
     color = escape_attr(palette.resolve_color(layer.params.color, colorway_id))
     uses: list[str] = []
     for inst in instances:

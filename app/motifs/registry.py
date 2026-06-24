@@ -388,10 +388,9 @@ def reject_motif(motif_id: str) -> None:
     process-local (the caches are module-level globals): a separately running server
     keeps its own caches and must be restarted after a reject.
 
-    Built-in motifs (``circle``/``bee``) are code constants, not catalog rows, and
-    cannot be rejected.
+    Built-in motifs are code constants, not catalog rows, and cannot be rejected.
     """
-    if motif_id in {_CIRCLE.id, _BEE.id}:
+    if motif_id in BUILTIN_MOTIF_IDS:
         raise ValueError(f"cannot reject built-in motif {motif_id!r}")
     from app.motifs.store import _resolve_store
 
