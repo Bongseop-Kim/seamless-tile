@@ -506,6 +506,22 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"layer {layer.id!r}: host_layer {placement.host_layer!r} "
                         f"does not exist"
                     )
+                else:
+                    # Only a stripe exposes the lanes() contract a host-based
+                    # path_following resolves against. An LLM that hosts on a background
+                    # (or another motif) would otherwise crash deep in compose with
+                    # AttributeError ('Background' object has no attribute 'lanes') -> 500.
+                    host = layers_by_id.get(placement.host_layer)
+                    if (
+                        placement.type == "path_following"
+                        and host is not None
+                        and host.type != "stripe"
+                    ):
+                        errors.append(
+                            f"layer {layer.id!r}: path_following host_layer "
+                            f"{placement.host_layer!r} must be a stripe, not "
+                            f"{host.type!r}"
+                        )
             if (
                 placement.path is not None
                 and placement.path.kind == "wave"

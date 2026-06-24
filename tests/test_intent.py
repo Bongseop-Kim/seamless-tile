@@ -139,6 +139,16 @@ def test_unknown_host_layer_rejected():
         validate_intent(intent)
 
 
+def test_path_following_host_must_be_stripe():
+    # Only a stripe exposes lanes(); an LLM that hosts path_following on the background
+    # would otherwise crash in compose (AttributeError: 'Background' has no 'lanes') -> 500.
+    intent = mvp_intent()
+    intent["layers"][2]["placement"]["host_layer"] = "ground"  # a background layer
+    with pytest.raises(IntentInvalid) as exc:
+        validate_intent(intent)
+    assert "must be a stripe" in str(exc.value)
+
+
 @pytest.mark.parametrize("field", ["host_layer", "lane", "spacing_mm"])
 def test_path_following_requires_fields(field):
     intent = mvp_intent()
