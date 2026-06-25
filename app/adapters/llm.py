@@ -17,6 +17,7 @@ import copy
 import json
 import math
 import re
+from pathlib import Path
 from typing import Protocol
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
@@ -114,6 +115,75 @@ _EXAMPLE_INTENT = {
 }
 
 
+# Structural fields kept when distilling a gallery intent into a best-practice example.
+# Everything else (palette/colorways/production/seed, and per-layer color refs) is dropped:
+# the examples teach COMPOSITION (band rhythm, placement, sizing), not color or motif art.
+_SKELETON_PARAM_KEYS = ("angle", "period_mm", "size_mm")
+
+
+def _structural_skeleton(intent: dict) -> dict:
+    """Distill a resolved gallery intent into a color/motif-free structural example.
+
+    Keeps canvas + each layer's type/z_order/placement and the geometry params (angle,
+    period_mm, bands offset/width, size_mm). Drops palette/colorways/production/seed and
+    every color reference. Replaces a motif layer's real ``motif_id`` with the layer id
+    (the placeholder convention the model is told to follow) so examples never teach it to
+    invent registry ids. Pure: returns a fresh dict, never mutates the input."""
+    skel: dict = {}
+    if isinstance(intent.get("canvas"), dict):
+        skel["canvas"] = dict(intent["canvas"])
+    layers_out: list[dict] = []
+    for layer in intent.get("layers", []) or []:
+        if not isinstance(layer, dict):
+            continue
+        lid = layer.get("id")
+        lout: dict = {"id": lid, "type": layer.get("type")}
+        if "z_order" in layer:
+            lout["z_order"] = layer["z_order"]
+        params = layer.get("params")
+        if isinstance(params, dict):
+            pout: dict = {}
+            if "motif_id" in params:  # placeholder = layer id (drops the real registry id)
+                pout["motif_id"] = lid
+            for k in _SKELETON_PARAM_KEYS:
+                if k in params:
+                    pout[k] = params[k]
+            bands = params.get("bands")
+            if isinstance(bands, list):
+                pout["bands"] = [
+                    {bk: b[bk] for bk in ("offset_mm", "width_mm") if bk in b}
+                    for b in bands
+                    if isinstance(b, dict)
+                ]
+            if pout:
+                lout["params"] = pout
+        if isinstance(layer.get("placement"), dict):
+            lout["placement"] = copy.deepcopy(layer["placement"])
+        layers_out.append(lout)
+    skel["layers"] = layers_out
+    return skel
+
+
+def _load_gallery_skeletons() -> list[dict]:
+    """Load gallery/*.json and distill each into a structural skeleton (sorted by filename
+    for prompt determinism). Best-effort: skips unreadable/invalid files; returns [] if the
+    directory is absent so the app never hard-depends on the gallery."""
+    gallery_dir = Path(__file__).resolve().parents[2] / "gallery"
+    skeletons: list[dict] = []
+    for path in sorted(gallery_dir.glob("*.json")):
+        try:
+            intent = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(intent, dict):
+            skeletons.append(_structural_skeleton(intent))
+    return skeletons
+
+
+# Computed once at import (sorted, deterministic); reused across every prompt build.
+_GALLERY_SKELETONS = _load_gallery_skeletons()
+
+
 def _build_prompt(
     user_prompt: str,
     *,
@@ -191,6 +261,20 @@ def _build_prompt(
         "the user explicitly asks for uniform/even stripes.",
         f"- target canvas: {json.dumps(target_canvas)}.",
     ]
+    # Best-practice block is large and identical across requests: keep it in the common
+    # prefix (before the variable palette/description tail) so Gemini implicit caching can
+    # hit it. See https://ai.google.dev/gemini-api/docs — "put large/common content first".
+    if _GALLERY_SKELETONS:
+        lines += [
+            "",
+            "Curated best-practice compositions (study these): emulate the stripe angles "
+            "and band rhythm (uneven offset/width ratios), and the motif placement, sizing "
+            "and layer composition. These are STRUCTURE ONLY — colors and motif art are "
+            "stripped/placeholder; choose your own palette and motif_specs to fit the "
+            "description. Keep the output shape of the example above (designs/intent/"
+            "motif_specs).",
+            json.dumps(_GALLERY_SKELETONS, ensure_ascii=False, indent=2),
+        ]
     if palette:
         lines.append(f"- preferred palette hint: {json.dumps(palette)}.")
     lines += ["", f"Description: {user_prompt}"]

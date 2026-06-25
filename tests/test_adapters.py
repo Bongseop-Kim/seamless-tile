@@ -223,6 +223,70 @@ def test_llm_prompt_does_not_make_stripes_the_default():
     assert "do NOT add stripe host layers" in prompt
 
 
+def test_structural_skeleton_strips_color_and_motif_id():
+    intent = {
+        "intent_version": 1,
+        "canvas": {"tile_mm": 48.0, "dpi": 300},
+        "seed": 20240,
+        "production": {"method": "digital", "max_colors": 12},
+        "palette": {"slots": [{"id": "ground", "hex": "#06152b"}]},
+        "colorways": [{"id": "default", "name": "default", "mapping": {"ground": "#06152b"}}],
+        "layers": [
+            {"id": "ground", "type": "background", "z_order": 0, "params": {"color": "ground"}},
+            {
+                "id": "stripe_base",
+                "type": "stripe",
+                "z_order": 1,
+                "params": {
+                    "angle": -45.0,
+                    "period_mm": 33.94,
+                    "bands": [{"offset_mm": 0, "width_mm": 14.0, "color": "accent"}],
+                },
+            },
+            {
+                "id": "motif",
+                "type": "motif",
+                "z_order": 2,
+                "params": {"motif_id": "recraft-832977800421", "size_mm": 14.0, "colors": {"s0": "ink"}},
+                "placement": {"type": "scatter", "scatter": {"mode": "poisson", "min_dist_mm": 12}},
+            },
+        ],
+    }
+    skel = llm_adapter._structural_skeleton(intent)
+
+    # color/palette/meta dropped
+    blob = json.dumps(skel)
+    assert "palette" not in skel and "colorways" not in skel and "seed" not in skel
+    assert "#06152b" not in blob and "ground" not in json.dumps(skel.get("layers")[0].get("params", {}))
+    assert "color" not in skel["layers"][1]["params"]
+    assert "colors" not in skel["layers"][2]["params"]
+    # motif_id -> layer id placeholder (real registry id gone)
+    assert "recraft-" not in blob
+    assert skel["layers"][2]["params"]["motif_id"] == "motif"
+    # structure preserved
+    assert skel["canvas"] == {"tile_mm": 48.0, "dpi": 300}
+    assert skel["layers"][1]["params"]["angle"] == -45.0
+    assert skel["layers"][1]["params"]["period_mm"] == 33.94
+    assert skel["layers"][1]["params"]["bands"] == [{"offset_mm": 0, "width_mm": 14.0}]
+    assert skel["layers"][2]["params"]["size_mm"] == 14.0
+    assert skel["layers"][2]["placement"]["type"] == "scatter"
+    # input not mutated
+    assert intent["layers"][2]["params"]["motif_id"] == "recraft-832977800421"
+
+
+def test_llm_prompt_includes_best_practice_block_without_color_leak():
+    llm = _ScriptedLLM(json.dumps(mvp_intent()))
+    llm_build_intent("anything", client=llm, use_cache=False)
+    prompt = llm.calls[0]
+    if llm_adapter._GALLERY_SKELETONS:  # gallery present in repo checkout
+        assert "Curated best-practice compositions" in prompt
+        # the curated block must not leak real registry ids
+        bp = prompt.split("Curated best-practice compositions", 1)[1]
+        assert "recraft-" not in bp
+    # existing constraints still present (no regression)
+    assert "Placement specs are mandatory" in prompt
+
+
 def test_llm_adapter_reprompts_once_then_succeeds():
     bad = json.dumps({"intent_version": 1})  # missing canvas/palette/... -> invalid
     good = json.dumps(mvp_intent())
