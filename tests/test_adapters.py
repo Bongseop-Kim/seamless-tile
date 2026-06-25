@@ -287,6 +287,18 @@ def test_llm_prompt_includes_best_practice_block_without_color_leak():
     assert "Placement specs are mandatory" in prompt
 
 
+def test_llm_prompt_includes_fabrication_and_color_guidance():
+    llm = _ScriptedLLM(json.dumps(mvp_intent()))
+    llm_build_intent("anything", client=llm, use_cache=False)
+    prompt = llm.calls[0]
+    assert "FABRICATION FIRST" in prompt
+    assert "yarn_dyed" in prompt and "print" in prompt
+    assert "if the description names specific colors, use those" in prompt
+    if llm_adapter._COLOR_GUIDE:  # color_guide.md present in repo checkout
+        assert "Color guide:" in prompt
+        assert "Cloud Dancer" in prompt
+
+
 def test_llm_adapter_reprompts_once_then_succeeds():
     bad = json.dumps({"intent_version": 1})  # missing canvas/palette/... -> invalid
     good = json.dumps(mvp_intent())

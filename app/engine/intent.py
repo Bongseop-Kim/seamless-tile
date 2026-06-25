@@ -6,7 +6,7 @@ pydantic. Cross-field semantic validation and repair live in ``app.validate.inte
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Canvas(BaseModel):
@@ -19,8 +19,16 @@ class Canvas(BaseModel):
 class Production(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    method: Literal["digital", "screen"] = "digital"
+    # Top-level fabrication axis: yarn-dyed (woven) vs print. Color-count limits and
+    # palette guidance differ by this. Legacy "digital"/"screen" (print sub-methods) map
+    # to "print" for backward compat.
+    method: Literal["yarn_dyed", "print"] = "print"
     max_colors: int = Field(default=12, gt=0)
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _coerce_legacy_method(cls, v: object) -> object:
+        return "print" if v in ("digital", "screen") else v
 
 
 class ColorSlotSpec(BaseModel):

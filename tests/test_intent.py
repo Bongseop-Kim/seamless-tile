@@ -209,18 +209,27 @@ def test_period_not_dividing_tile_rejected():
         validate_intent(intent, repair=False)
 
 
-def test_color_count_over_max_rejected_for_screen():
+def test_color_count_over_max_rejected_for_yarn_dyed():
     intent = mvp_intent()
-    intent["production"] = {"method": "screen", "max_colors": 2}  # 3 colors > 2
+    intent["production"] = {"method": "yarn_dyed", "max_colors": 2}  # 3 colors > 2
     with pytest.raises(IntentInvalid):
         validate_intent(intent)
 
 
-def test_color_count_not_enforced_for_digital():
+def test_color_count_not_enforced_for_print():
     intent = mvp_intent()
-    intent["production"] = {"method": "digital", "max_colors": 2}
-    # digital jobs are not color-limited
+    intent["production"] = {"method": "print", "max_colors": 2}
+    # print jobs are not color-limited
     assert validate_intent(intent).intent.production.max_colors == 2
+
+
+def test_legacy_method_digital_screen_coerced_to_print():
+    intent = mvp_intent()
+    # legacy print sub-methods map to "print" (backward compat) -> color count not enforced
+    intent["production"] = {"method": "digital", "max_colors": 2}
+    assert validate_intent(intent).intent.production.method == "print"
+    intent["production"] = {"method": "screen", "max_colors": 2}
+    assert validate_intent(intent).intent.production.method == "print"
 
 
 def test_duplicate_layer_id_rejected():

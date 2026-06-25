@@ -323,9 +323,9 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
         if fixed_any:
             intent = intent.model_copy(update={"layers": repaired_layers})
 
-    # 4. per-colorway resolved color count vs production.max_colors (screen printing
-    #    is color-limited; digital is not — ARCHITECTURE.md 색·colorway 모델).
-    if intent.production.method == "screen":
+    # 4. per-colorway resolved color count vs production.max_colors (yarn-dyed is
+    #    color-limited by the loom's color yarns; print is not — ARCHITECTURE.md 색·colorway 모델).
+    if intent.production.method == "yarn_dyed":
         for cw in palette.colorways:
             n = len(palette.distinct_colors(cw.id))
             if n > intent.production.max_colors:

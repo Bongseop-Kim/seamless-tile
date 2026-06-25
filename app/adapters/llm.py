@@ -76,7 +76,7 @@ _EXAMPLE_INTENT = {
     "intent_version": 1,
     "canvas": {"tile_mm": 48, "dpi": 300},
     "seed": 0,
-    "production": {"method": "digital", "max_colors": 12},
+    "production": {"method": "print", "max_colors": 12},
     "palette": {
         "slots": [
             {"id": "ground", "hex": "#10243a"},
@@ -184,6 +184,19 @@ def _load_gallery_skeletons() -> list[dict]:
 _GALLERY_SKELETONS = _load_gallery_skeletons()
 
 
+def _load_color_guide() -> str:
+    """Load the repo-root color_guide.md (palette/color-count rules) as prompt text.
+    Best-effort: returns '' if absent so the app never hard-depends on it."""
+    path = Path(__file__).resolve().parents[2] / "color_guide.md"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+_COLOR_GUIDE = _load_color_guide()
+
+
 def _build_prompt(
     user_prompt: str,
     *,
@@ -275,6 +288,17 @@ def _build_prompt(
             "motif_specs).",
             json.dumps(_GALLERY_SKELETONS, ensure_ascii=False, indent=2),
         ]
+    lines += [
+        "",
+        "FABRICATION FIRST: before choosing colors, decide from the description whether "
+        "it is yarn-dyed (woven — stripes/checks/gingham/chambray) or print, and set "
+        'production.method to "yarn_dyed" or "print" accordingly. Yarn-dyed is color-'
+        "limited: keep production.max_colors and each colorway to 2–8 colors.",
+        "COLORS: if the description names specific colors, use those. Otherwise pick from "
+        "the recommended palette in the color guide below.",
+    ]
+    if _COLOR_GUIDE:
+        lines += ["", "Color guide:", _COLOR_GUIDE]
     if palette:
         lines.append(f"- preferred palette hint: {json.dumps(palette)}.")
     lines += ["", f"Description: {user_prompt}"]

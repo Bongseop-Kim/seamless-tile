@@ -116,7 +116,7 @@ GenerateRequest
   "intent_version": 1,
   "canvas": { "tile_mm": 48, "dpi": 300 },          // dpi ∈ {150,300,600}
   "seed": 184231,
-  "production": { "method": "digital", "max_colors": 12 },  // digital | screen
+  "production": { "method": "print", "max_colors": 12 },  // yarn_dyed | print (legacy digital/screen -> print)
   "palette": { "slots": [{ "id": "ground", "hex": "#10243a", "spot": "19-4024 TCX" }, ...] },
   "colorways": [{ "id": "default", "mapping": { "ground": "#10243a", ... } }],  // default 필수
   "layers": [
@@ -267,9 +267,10 @@ seam은 사후 측정이 아니라 by-construction으로 보장하는 것이 1�
   항상 활성 colorway의 mapping을 통해 해석한다**(슬롯 hex가 아니다). `default` colorway는 필수이며 API
   `colorway`가 없으면 `default`를 쓴다. 슬롯·colorway 데이터 모델과 그 불변식(default 필수, mapping이 선언
   슬롯을 정확히 덮음)은 `app/engine/palette.py:ColorSlot/Colorway/Palette`에서, 그 검증·gamut 경고·
-  screen max_colors 체크는 `app/validate/intent.py:validate_intent`에서 한다.
-- 생산 제약: `canvas.dpi`(150/300/600), `production.{method, max_colors}`. method가 screen이면 각 colorway의
-  해석된 distinct 색 수 ≤ `max_colors`를 검증한다(digital은 무제한).
+  yarn_dyed max_colors 체크는 `app/validate/intent.py:validate_intent`에서 한다.
+- 생산 제약: `canvas.dpi`(150/300/600), `production.{method, max_colors}`. method는 선염/날염 축
+  `yarn_dyed | print`이며(legacy `digital`/`screen`은 `print`로 정규화), `yarn_dyed`이면 각 colorway의
+  해석된 distinct 색 수 ≤ `max_colors`를 검증한다(`print`는 무제한).
 - **멀티컬러 (D15 — 색 굽기 폐기)**: `<symbol>`은 colorway-무관하게 유지하고, 색은 인스턴스(`<use color>`)
   단위로 바인딩한다. intake 정규화는 색을 `currentColor`로 뭉개지 않고 **모티프-로컬 슬롯 토큰**(`s0,s1,…`,
   문서 DFS 첫 등장 순)으로 보존한다(단색 모티프만 `currentColor`로 collapse). compose 시 슬롯마다 별도
