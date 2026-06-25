@@ -75,22 +75,17 @@
       "type": "motif",
       "z_order": 2,
       "params": {
-        "motif_id": "recraft-832977800421",
+        "motif_id": "bee",
         "size_mm": 6.0,
         "colors": {
-          "s0": "ink",
-          "s1": "leaf",
-          "s2": "gold",
-          "s3": "sky",
-          "s4": "plum",
-          "s5": "leaf"
+          "s0": "leaf"
         }
       },
       "placement": {
         "type": "lattice",
         "lattice": {
-          "cell_w_mm": 16,
-          "cell_h_mm": 16
+          "cell_w_mm": 12,
+          "cell_h_mm": 12
         }
       }
     }
