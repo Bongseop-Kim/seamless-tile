@@ -8,10 +8,10 @@ contract holds: the engine only ever sees an intent with concrete motif ids.
 
 Retrieval (spec §6.1, D18): **exact descriptor match** → **scope hard filter** →
 **embedding soft similarity (τ gate)** → **generate-on-miss**. Every hit routes through
-the variant_group's curated sampling pool (§7.1); when that pool is empty (degenerate
-until S14 curation), it falls back to the matched motif. The embedding stage is
-fail-soft: if no embedding client is configured, or the call fails, or no candidate has
-a comparable embedding, it degrades to the S10 lowest-id hard-filter reuse.
+the variant_group's reusable sampling pool (§7.1); when that pool is empty, it falls
+back to the matched motif. The embedding stage is fail-soft: if no embedding client is
+configured, or the call fails, or no candidate has a comparable embedding, it degrades
+to the S10 lowest-id hard-filter reuse.
 """
 
 from __future__ import annotations
@@ -119,18 +119,15 @@ def _best_by_similarity(candidates: list, query_vec: list[float] | None):
 
 
 def _select_variant(store, variant_group, seed: int, fallback_id: str) -> str:
-    """Seed-sample one variant from the group's curated pool (§7.1), else ``fallback_id``.
+    """Seed-sample one variant from the group's reusable pool (§7.1), else ``fallback_id``.
 
-    The pool is curated-only (§7.4); when it is empty (degenerate until S14 curation) the
-    matched motif itself is returned, so S11 hits resolve to the matched id.
+    When it is empty, the matched motif itself is returned, so S11 hits resolve to the
+    matched id.
     """
     if not variant_group:
         return fallback_id
     try:
-        pool = [
-            rec.id
-            for rec in store.find_by_variant_group(variant_group, status="curated")
-        ]
+        pool = [rec.id for rec in store.find_by_variant_group(variant_group)]
     except MotifStoreError:
         pool = []
     if not pool:
@@ -198,7 +195,7 @@ def resolve_motifs(
 
     Each spec is matched to a layer by ``layer_id``: exact descriptor match → subject/
     part hard-filter → embedding soft similarity (τ) → generate-on-miss, with hits
-    seed-sampled from the curated variant pool. ``seed`` must be the SAME effective seed
+    seed-sampled from the reusable variant pool. ``seed`` must be the SAME effective seed
     the engine composes with (the route unifies it) so variant selection and composition
     agree. Layers without a matching spec are left untouched.
 

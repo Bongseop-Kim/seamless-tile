@@ -36,7 +36,7 @@ pytestmark = [
 
 _TEST_ID_ROUNDTRIP = "recraft-pgtest-roundtrip"
 _TEST_ID_EMBEDDING = "recraft-pgtest-embedding"
-_TEST_ID_STATUS = "recraft-pgtest-status"
+_TEST_ID_POOL = "recraft-pgtest-pool"
 
 
 def _delete(store: PostgresMotifStore, motif_id: str) -> None:
@@ -103,33 +103,24 @@ def test_upsert_get_roundtrip_embedding():
         _delete(store, _TEST_ID_EMBEDDING)
 
 
-def test_set_status_delete_and_find_by_status_roundtrip():
-    # S14: promotion (auto -> curated), the review queue (find_by_status), and rejection
-    # (delete) round-trip through Postgres.
+def test_find_by_variant_group_and_delete_roundtrip():
+    # Reusable pool lookup and delete round-trip through Postgres.
     store = _store()
     record = MotifRecord(
-        id=_TEST_ID_STATUS,
+        id=_TEST_ID_POOL,
         symbol='<symbol id="motif-x" overflow="visible"><circle r="0.5"/></symbol>',
         bbox_mm=(-0.5, -0.5, 0.5, 0.5),
         anchor=(0.0, 0.0),
         subject="pig",
         scope="whole",
         variant_group="abc123",
-    )  # status defaults to 'auto'
+    )
     try:
         store.upsert(record)
-        # find_by_status: the new row is in the 'auto' review queue, not 'curated'.
-        assert _TEST_ID_STATUS in {r.id for r in store.find_by_status("auto")}
-        assert _TEST_ID_STATUS not in {r.id for r in store.find_by_status("curated")}
-
-        # set_status: promote auto -> curated.
-        store.set_status(_TEST_ID_STATUS, "curated")
-        got = store.get(_TEST_ID_STATUS)
-        assert got is not None and got.status == "curated"
-        assert _TEST_ID_STATUS in {r.id for r in store.find_by_status("curated")}
+        assert _TEST_ID_POOL in {r.id for r in store.find_by_variant_group("abc123")}
 
         # delete: the row is gone.
-        store.delete(_TEST_ID_STATUS)
-        assert store.get(_TEST_ID_STATUS) is None
+        store.delete(_TEST_ID_POOL)
+        assert store.get(_TEST_ID_POOL) is None
     finally:
-        _delete(store, _TEST_ID_STATUS)
+        _delete(store, _TEST_ID_POOL)

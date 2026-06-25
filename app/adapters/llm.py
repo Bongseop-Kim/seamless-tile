@@ -280,7 +280,7 @@ def _build_prompt(
     if _GALLERY_SKELETONS:
         lines += [
             "",
-            "Curated best-practice compositions (study these): emulate the stripe angles "
+            "Best-practice compositions (study these): emulate the stripe angles "
             "and band rhythm (uneven offset/width ratios), and the motif placement, sizing "
             "and layer composition. These are STRUCTURE ONLY — colors and motif art are "
             "stripped/placeholder; choose your own palette and motif_specs to fit the "

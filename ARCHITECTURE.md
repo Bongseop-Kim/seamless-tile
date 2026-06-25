@@ -160,7 +160,7 @@ LLM이 만든 intent를 그대로 신뢰하지 않는다. 엔진과 어댑터 �
 - **결정론 계약**: 안정 정렬(`z_order` → `id`), mm→px 반올림은 래스터 경계에서만, RNG은
   `random.Random(seed)`만 사용(전역 random 미사용). candidate에 재현 메타 `ReproMeta`를 기록한다
   (`app/engine/determinism.py:ReproMeta` — `intent_version·engine_version·registry_version·seed·colorway_id·layout_id`).
-  이 중 `registry_version`은 상수가 아니라 **요청 시점에 curated 풀을 지문화**한 값이다
+  이 중 `registry_version`은 상수가 아니라 **요청 시점에 재사용 풀을 지문화**한 값이다
   (`REGISTRY_VERSION+"+pool.<hex8>"`, `app/adapters/registry_fingerprint.py:registry_version_for`).
 
 ## Placement 모델
@@ -312,9 +312,9 @@ motif는 단순 도형(circle)부터 복잡 도형(bee·paisley)까지 포함한
 3. **소프트 유사도**: descriptor 임베딩 코사인 최근접이 `tau` 이상이면 재사용(`motif_similarity_tau=0.60`).
    임베딩 텍스트는 `scope`를 제외한다(scope는 의미 토큰이 아니라 가드레일). 임베딩 미설정/실패는 fail-soft —
    최저 id 후보로 degrade.
-4. **miss → 생성**: 생성 후 `normalize_motif_svg`(Tier-1 게이트) → `register_motif` → DB 영속화(`status='auto'`).
+4. **miss → 생성**: 생성 후 `normalize_motif_svg`(Tier-1 게이트) → `register_motif` → DB 영속화.
 
-hit/생성된 모티프는 **변형 풀**을 거친다: `variant_group`의 curated 변형 중 seed로 1개 선택
+hit/생성된 모티프는 **변형 풀**을 거친다: `variant_group`의 reusable 변형 중 seed로 1개 선택
 (`determinism.select_variant`, 순수 함수 — 랜덤 금지). `variant_group` 키는 `sha256(version, norm(subject),
 norm(scope))`로 결정론적이다(`app/motifs/facets.py:variant_group_key`, `VARIANT_GROUP_VERSION=2`).
 
@@ -369,7 +369,8 @@ LLM·임베딩·생성기·참조 이미지·저장소는 코어 바깥 어댑�
 - `id`는 content-hash **PK**, INSERT는 `ON CONFLICT (id) DO NOTHING`로 멱등.
 - 통제 facet 컬럼은 `scope`(`whole|partial`)다 — 과거 `part`에서 rename됨(commit `2fd5e17`).
 - `color_slots`/`bbox`/`anchor`는 `jsonb`, `tags`는 native `text[]`(jsonb 아님), `embedding`은 pgvector.
-- `source ∈ {builtin, llm, recraft}`(기본 `recraft`), `status ∈ {auto, curated}`(기본 `auto`).
+- `source ∈ {builtin, llm, recraft}`(기본 `recraft`). `status`/curation은 서비스 계약에서 제거됐다.
+- 모노레포 DB 스키마에 transition 동안 `status` 컬럼이 남아 있어도 이 서비스는 읽기/쓰기/분기에 사용하지 않는다.
 - 부팅 시 `hydrate_from_store`로 일괄 복원 + 콜드 미스 시 lazy 단건 로드(`app/main.py` lifespan,
   `registry.py:get_motif`).
 

@@ -52,7 +52,6 @@ class MotifRecord:
     description: str | None = None
     tags: list[str] = field(default_factory=list)
     source: str = "recraft"  # 'builtin' | 'llm' | 'recraft'
-    status: str = "auto"  # 'auto' | 'curated'
     quality: float | None = None
     variant_group: str | None = None
     color_slots: list[str] = field(default_factory=lambda: ["s0"])
@@ -92,36 +91,16 @@ class MotifStore(Protocol):
         """
         ...
 
-    def find_by_variant_group(
-        self, variant_group: str, *, status: str = "curated"
-    ) -> list[MotifRecord]:
-        """The sampling pool for a variant_group: rows with the given status, by id.
+    def find_by_variant_group(self, variant_group: str) -> list[MotifRecord]:
+        """The sampling pool for a variant_group, ordered by id.
 
-        Defaults to ``status='curated'`` (only curated variants enter the seed-sampling
-        pool, spec §7.4). Empty list == no pool (degenerate; the resolver falls back to
-        the matched motif). Used by the variant selection step (spec §7.1, S11).
-        """
-        ...
-
-    def find_by_status(self, status: str) -> list[MotifRecord]:
-        """Rows with the given status, ordered by id (the curation/review queue).
-
-        Used by the curation CLI to list pending (``status='auto'``) motifs. Empty
-        list == none pending (NOT an exception), like :meth:`find_by_facets`.
-        """
-        ...
-
-    def set_status(self, motif_id: str, status: str) -> None:
-        """Transition a motif's status (e.g. 'auto' -> 'curated'): promotion (spec §8).
-
-        A no-op when ``motif_id`` is absent (0 rows updated). Unlike :meth:`upsert`
-        (ON CONFLICT DO NOTHING), this UPDATEs an existing row, which is the only way
-        to promote a persisted motif into the curated sampling pool (spec §7.4).
+        Empty list == no pool; the resolver falls back to the matched motif. Used by
+        the variant selection step (spec §7.1, S11).
         """
         ...
 
     def delete(self, motif_id: str) -> None:
-        """Remove a motif row (rejection, spec §6.4/§8). A no-op when absent."""
+        """Remove a motif row (admin cleanup, spec §6.4). A no-op when absent."""
         ...
 
 
@@ -178,7 +157,6 @@ _COLUMNS = (
     "description",
     "tags",
     "source",
-    "status",
     "quality",
     "variant_group",
     "embedding",
@@ -231,10 +209,10 @@ class PostgresMotifStore:
             cur.execute(
                 "INSERT INTO motifs "
                 "(id, symbol, color_slots, bbox, anchor, subject, scope, view, "
-                " expression, style, description, tags, source, status, quality, "
+                " expression, style, description, tags, source, quality, "
                 " variant_group, embedding) "
                 "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, "
-                " %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
+                " %s, %s, %s, %s, %s, %s, %s::extensions.vector) "
                 "ON CONFLICT (id) DO NOTHING",
                 (
                     record.id,
@@ -250,7 +228,6 @@ class PostgresMotifStore:
                     record.description,
                     list(record.tags),
                     record.source,
-                    record.status,
                     record.quality,
                     record.variant_group,
                     _vector_to_text(record.embedding),
@@ -283,34 +260,15 @@ class PostgresMotifStore:
             rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
-    def find_by_variant_group(
-        self, variant_group: str, *, status: str = "curated"
-    ) -> list[MotifRecord]:
+    def find_by_variant_group(self, variant_group: str) -> list[MotifRecord]:
         with self._cursor("variant-group query") as cur:
             cur.execute(
                 f"SELECT {_SELECT_LIST} FROM motifs "
-                "WHERE variant_group = %s AND status = %s ORDER BY id",
-                (variant_group, status),
+                "WHERE variant_group = %s ORDER BY id",
+                (variant_group,),
             )
             rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
-
-    def find_by_status(self, status: str) -> list[MotifRecord]:
-        with self._cursor("status query") as cur:
-            cur.execute(
-                f"SELECT {_SELECT_LIST} FROM motifs "
-                "WHERE status = %s ORDER BY id",
-                (status,),
-            )
-            rows = cur.fetchall()
-        return [_row_to_record(r) for r in rows]
-
-    def set_status(self, motif_id: str, status: str) -> None:
-        with self._cursor("status update") as cur:
-            cur.execute(
-                "UPDATE motifs SET status = %s WHERE id = %s",
-                (status, motif_id),
-            )
 
     def delete(self, motif_id: str) -> None:
         with self._cursor("delete") as cur:
@@ -332,7 +290,6 @@ def _row_to_record(row) -> MotifRecord:
         description,
         tags,
         source,
-        status,
         quality,
         variant_group,
         embedding,
@@ -351,7 +308,6 @@ def _row_to_record(row) -> MotifRecord:
         description=description,
         tags=list(tags or []),
         source=source,
-        status=status,
         quality=quality,
         variant_group=variant_group,
         # embedding arrives as `embedding::text` ('[a,b,c]', valid JSON) or NULL.

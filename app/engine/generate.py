@@ -41,7 +41,7 @@ def generate(
 
     ``seed`` overrides the intent's seed in the reproduction metadata when given;
     otherwise the intent's own seed is recorded. ``registry_version`` is stamped into
-    the repro meta as-is (the route derives it from the curated pool); it defaults to
+    the repro meta as-is (the route derives it from the reusable pool); it defaults to
     the baseline constant so direct engine callers stay store-free.
     """
     result = validate_intent(raw)

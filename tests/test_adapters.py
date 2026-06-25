@@ -279,9 +279,9 @@ def test_llm_prompt_includes_best_practice_block_without_color_leak():
     llm_build_intent("anything", client=llm, use_cache=False)
     prompt = llm.calls[0]
     if llm_adapter._GALLERY_SKELETONS:  # gallery present in repo checkout
-        assert "Curated best-practice compositions" in prompt
-        # the curated block must not leak real registry ids
-        bp = prompt.split("Curated best-practice compositions", 1)[1]
+        assert "Best-practice compositions" in prompt
+        # the best-practice block must not leak real registry ids
+        bp = prompt.split("Best-practice compositions", 1)[1]
         assert "recraft-" not in bp
     # existing constraints still present (no regression)
     assert "Placement specs are mandatory" in prompt

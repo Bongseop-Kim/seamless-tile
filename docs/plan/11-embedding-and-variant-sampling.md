@@ -20,15 +20,14 @@ S9(영속화), S10(글루·단색 E2E).
 - (신규) `app/adapters/embedding.py`: OpenAI `text-embedding-3-small` 호출(어댑터, freeze/cache).
 - descriptor 임베딩 저장·검색 — **소량 구간 seq scan**(ivfflat은 S14, D18).
 - 2단계 조회: 하드필터 후 **τ 이상 hit / 미만 miss**. τ는 뉘앙스만 판단.
-- 시드 변형 선택(§7.1): `pool = sorted(curated, key=motif_id)`,
+- 시드 변형 선택(§7.1): `pool = sorted(reusable, key=motif_id)`,
   `variant = pool[stable_hash(variant_group+":"+seed) % len(pool)]`. `stable_hash`는 sha256+canonical
   **신규 헬퍼**(=같은 알고리즘, `layout_id_for`와 같은 함수 아님).
 - 후보 팬아웃: 후보마다 다른 변형(`candidates.py` 다양성 축).
 - 풀 변경 시 **`registry_version` bump**(§7.3, M5).
 
 ## 비범위
-ivfflat 인덱스(S14), Tier2 curated 승격(S14). **주의**: 그 전까지 풀은 ≤1(degenerate)이라 변형
-샘플링 코드는 켜되 **실효는 S14부터**. 멀티컬러(S12).
+ivfflat 인덱스(S14). 멀티컬러(S12).
 
 ## 작업 / 만들·수정 파일
 - (신규) `app/adapters/embedding.py`.

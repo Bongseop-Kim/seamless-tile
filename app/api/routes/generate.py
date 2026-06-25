@@ -177,7 +177,7 @@ async def generate_candidate(
     input_type = "intent"
 
     # Cache short-circuit BEFORE any adapter/engine/render work. The repro seal moves with
-    # the curated pool, so it is part of the key (pool change -> auto-invalidation); it is a
+    # the reusable motif pool, so it is part of the key (pool change -> auto-invalidation); it is a
     # pure function of the pool, memoized per (store, epoch), so calling it on a hit is cheap.
     settings = get_settings()
     loop = asyncio.get_event_loop()

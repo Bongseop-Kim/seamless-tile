@@ -135,7 +135,7 @@ MOTIFS: dict[str, MotifDef] = {}
 
 
 # No motifs ship built-in (kept as an empty set so consumers — e.g. test cleanup and the
-# reject_motif guard — can still distinguish built-ins from dynamically registered motifs).
+# delete_motif guard — can still distinguish built-ins from dynamically registered motifs).
 BUILTIN_MOTIF_IDS: frozenset[str] = frozenset(MOTIFS)
 
 
@@ -169,7 +169,6 @@ def register_motif(
     description: str | None = None,
     tags: list[str] | None = None,
     source: str = "recraft",
-    status: str = "auto",
     color_slots: list[str] | None = None,
     embedding: list[float] | None = None,
 ) -> str:
@@ -203,13 +202,11 @@ def register_motif(
         description=description,
         tags=tags or [],
         source=source,
-        status=status,
         color_slots=color_slots or list(motif.color_slots),
         embedding=embedding,
     )
     MOTIFS[motif.id] = motif
-    if status == "curated":
-        _bump_curated_pool_epoch()
+    _bump_registry_pool_epoch()
     return motif.id
 
 
@@ -272,46 +269,28 @@ def hydrate_from_store(store: "MotifStore") -> int:
     return len(records)
 
 
-def promote_motif(motif_id: str) -> None:
-    """Promote a persisted motif from 'auto' to 'curated' (spec §8 Tier2).
-
-    Only curated variants enter the seed-sampling pool (spec §7.4), so this is what
-    activates a motif for variant sampling. The in-memory ``MOTIFS`` dict holds only
-    geometry (no status), so nothing in-process needs to change — the variant pool
-    query reads the status from the store on the next request.
-
-    Curation is an explicit admin action, so unlike authoring write-through a missing
-    store (``MotifStoreNotConfigured``) or a DB failure (``MotifStoreError``)
-    propagates rather than being swallowed.
-    """
-    from app.motifs.store import _resolve_store
-
-    _resolve_store().set_status(motif_id, "curated")
-    _bump_curated_pool_epoch()
-
-
-def reject_motif(motif_id: str) -> None:
-    """Reject a motif, propagating removal across DB, in-memory and caches (spec §6.4).
+def delete_motif(motif_id: str) -> None:
+    """Delete a motif, propagating removal across DB, in-memory and caches (spec §6.4).
 
     Keeps the three layers consistent: the store row is deleted, the in-memory
     ``MOTIFS`` entry is evicted, and the adapter caches that map a spec/prompt to a
     motif id are flushed, so a deleted motif can never be re-served from a warm cache.
-    A full flush is deliberate — curation is a rare manual action, so dropping warm
-    caches is cheaper and safer than maintaining per-id reverse indices. The intent and
-    embedding caches hold no concrete motif id, so they are left intact. The flush is
-    process-local (the caches are module-level globals): a separately running server
-    keeps its own caches and must be restarted after a reject.
+    A full flush is deliberate — admin deletion is rare, so dropping warm caches is
+    cheaper and safer than maintaining per-id reverse indices. The intent and embedding
+    caches hold no concrete motif id, so they are left intact. The flush is process-local
+    (the caches are module-level globals): a separately running server keeps its own
+    caches and must be restarted after a delete.
 
-    Built-in motifs are code constants, not catalog rows, and cannot be rejected.
+    Built-in motifs are code constants, not catalog rows, and cannot be deleted.
     """
     if motif_id in BUILTIN_MOTIF_IDS:
-        raise ValueError(f"cannot reject built-in motif {motif_id!r}")
+        raise ValueError(f"cannot delete built-in motif {motif_id!r}")
     from app.motifs.store import _resolve_store
 
     _resolve_store().delete(motif_id)
     MOTIFS.pop(motif_id, None)
     _flush_motif_id_caches()
-    _bump_curated_pool_epoch()  # the deleted row may have been curated
+    _bump_registry_pool_epoch()
 
 
 def _flush_motif_id_caches() -> None:
@@ -324,23 +303,22 @@ def _flush_motif_id_caches() -> None:
     recraft.clear_recraft_motif_cache()
 
 
-# Monotonic counter bumped whenever the curated sampling pool changes (promote / reject /
-# curated-register). Lets `adapters.registry_fingerprint.registry_version_for` memoize its
-# per-request pool fingerprint and invalidate on curation instead of querying the store on
-# every generate request. Process-local, the same scope as the cache flush in `reject_motif`
-# (a separately running server keeps its own counter; mutations are expected to go through
-# this module's promote/reject API).
-_curated_pool_epoch = 0
+# Monotonic counter bumped whenever the reusable motif pool changes. Lets
+# `adapters.registry_fingerprint.registry_version_for` memoize its per-request pool
+# fingerprint instead of querying the store on every generate request. Process-local,
+# the same scope as the cache flush in `delete_motif` (a separately running server keeps
+# its own counter; mutations are expected to go through this module's register/delete API).
+_registry_pool_epoch = 0
 
 
-def curated_pool_epoch() -> int:
-    """Current curated-pool epoch (bumped on every curated-pool mutation)."""
-    return _curated_pool_epoch
+def registry_pool_epoch() -> int:
+    """Current reusable-pool epoch (bumped on every pool mutation)."""
+    return _registry_pool_epoch
 
 
-def _bump_curated_pool_epoch() -> None:
-    global _curated_pool_epoch
-    _curated_pool_epoch += 1
+def _bump_registry_pool_epoch() -> None:
+    global _registry_pool_epoch
+    _registry_pool_epoch += 1
 
 
 def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:

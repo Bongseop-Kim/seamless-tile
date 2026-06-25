@@ -42,7 +42,7 @@
 | D2 | 서비스 입구는 **prompt(+reference svg)**, `intent` 직접은 내부용 | 기존 설계와 일치 |
 | D3 | 매핑 키는 동물이 아니라 **구조화된 모티프 명세** | subject/view/scope/expression/style |
 | D4 | 모티프는 **Supabase(Postgres + pgvector)에 영속화**(작은 텍스트 SVG → TEXT/JSONB), facet+임베딩 메타 포함 | 원본 대용량 에셋이 생기면 Supabase Storage |
-| D5 | **조회 먼저 → 없으면 생성**(generate-on-miss) + **검수 후 승격** 루프 | 품질 바닥 + 비용/일관성 |
+| D5 | **조회 먼저 → 없으면 생성**(generate-on-miss) + Tier1 통과 즉시 재사용 | 비용/일관성 |
 | D6 | **변형 샘플링** 사용: 명세당 변형 풀에서 선택 | 창작 서비스 톤 |
 | D7 | 변형 선택은 **시드 기반(결정론)**, 랜덤 금지 | 결정성 계약 보존 |
 | D8 | 모티프 생성 소스: **단순=LLM / 정교=Recraft** 로 라우팅, 공존 | |
@@ -51,7 +51,7 @@
 | D11 | 생성 소스 라우팅: LLM이 명세에 `complexity(simple\|detailed)` 힌트 산출 + 규칙(`simple→LLM`, `detailed 또는 멀티컬러 요구→Recraft`). 기본 LLM, 오버라이드 가능 | 비용↔품질 균형 |
 | D12 | 임베딩=채팅 LLM과 **별개 모델**. **임베딩 = OpenAI `text-embedding-3-small`, 채팅 LLM = Gemini 2.5 Flash-Lite/Flash**(최신 모델 나오면 교체 가능). 임베딩 대상은 **LLM이 정규화한 영문 descriptor** | Claude엔 native 임베딩 없음. 모델 확정 → τ 실측 가능 |
 | D13 | 조회는 **2단계 매칭**: 하드 필터(`scope`) → 소프트 유사도(τ, 뉘앙스만). 단, **정확매칭 우선**(아래 D18) 이후 임베딩. τ 시작값 재사용 우선 + 실측 보정. subject 의미 식별은 임베딩 담당 | 단일 임계 한계 해소 |
-| D14 | 미스 생성 모티프는 **즉시 제공**(Tier1 자동: `sanitize`+구조검사 통과 시 요청자에게 바로, `status='auto'`). 공유 샘플링 풀 편입(`curated`)은 **사람 수동 검수**. **비전 LLM 의미검사는 비용상 보류** | UX(즉시) + 품질 바닥(풀은 검수본만) |
+| D14 | 미스 생성 모티프는 **즉시 제공 + 즉시 재사용**(Tier1 자동: `sanitize`+구조검사 통과 시 DB 영속화 및 샘플링 풀 편입). **비전 LLM 의미검사는 비용상 보류** | UX(즉시) + 단순 운영 |
 | D15 | 멀티컬러는 **"색 굽기(bake)" 폐기** → 엔진의 `<use color>` 단색 교체를 **슬롯 다개로 확장**. `<symbol>`은 colorway-무관(슬롯 참조만), 색은 인스턴스(`<use>`)에서 바인딩 | (리뷰 C1) 굽기는 content-hash id·symbol dedup·결정성 파손 |
 | D16 | `variant_group` 키 = **결정론적**: `hash(subject + scope + 정규화 핵심 facet)`. miss 모티프 합류 = 키 동일이면 기존 group, 아니면 신규(τ 미사용, N1) | (리뷰 M4) 풀·재현 토대 |
 | D17 | 재현은 **resolved-intent 스냅샷**으로 닫는다(엔진은 concrete-motif intent만 받음). 풀은 가변 전역이므로 풀 변경 시 `registry_version` bump | (리뷰 C2·M5) `repro`엔 motif_id 필드 없음 |
@@ -74,7 +74,7 @@
    │   ├ hit  → 변형 풀에서 seed로 1개 선택                  │
    │   └ miss → 생성(단순=LLM / 정교=Recraft)               │
    │            → normalize_motif_svg → register            │
-   │            → DB 영속화 → (검수 후 풀 편입)              │
+   │            → DB 영속화 → 즉시 풀 편입                  │
    └─────────────────────────────────────────────────────────┘
                     │  concrete motif_id 확정 (intent에 박음)
         엔진 compose (멀티컬러 + colorway) → seamless SVG 후보 N개
@@ -159,7 +159,6 @@ CREATE TABLE motifs (
   tags          text[] DEFAULT '{}',     -- [자유] 보조 키워드
   embedding     vector,                  -- pgvector (description/명세 임베딩)
   source        text NOT NULL,           -- 'builtin' | 'llm' | 'recraft'
-  status        text NOT NULL DEFAULT 'auto',  -- 'auto' | 'curated'
   quality       real,                    -- 큐레이션 점수(선택)
   variant_group text NOT NULL,           -- 같은 명세의 변형 묶음 키
   created_at    timestamptz NOT NULL DEFAULT now()
@@ -252,7 +251,7 @@ CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 3. **분기**:
    - **hit** → 해당 `variant_group`의 **풀에서 시드로 변형 1개 선택**(§7).
    - **miss** → 생성(§6.2) → `normalize_motif_svg` → `register_motif` → DB 영속화
-     (`status='auto'`) → 새 `variant_group` 시작.
+     → 새 `variant_group` 시작.
 4. **주입**: 선택/생성된 **concrete `motif_id`를 intent의 해당 motif 레이어에 박음.**
 5. 엔진 compose → 후보 N개. 각 후보의 **resolved-intent 스냅샷**(concrete `motif_id` 포함)이 재현
    단위다(§7.3, D17).
@@ -286,8 +285,8 @@ CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 | Tier1 게이트 탈락(sanitize/구조검사) | **재생성 1회 → 그래도 탈락이면** 해당 모티프 후보 드롭. 다른 모티프/후보가 있으면 부분 성공, 전부 실패면 502 |
 | DB 영속화 실패 | 모티프는 인메모리로 이번 요청 제공(graceful) + 영속화 비동기 재시도. 영속화 안 됐으면 다음 요청에서 재생성될 수 있음(멱등) |
 
-- **캐시 무효화**: 모티프가 Tier2에서 반려·삭제되면 인메모리 `MOTIFS` + 어댑터 캐시(`_intent_cache`/
-  `_motif_cache`)와 DB의 일관성을 맞춰야 한다(삭제 전파). 규칙은 구현 세션에서 확정.
+- **캐시 무효화**: admin delete 시 인메모리 `MOTIFS` + 어댑터 캐시(`_intent_cache`/
+  `_motif_cache`)와 DB의 일관성을 맞춘다(삭제 전파).
 
 ---
 
@@ -305,7 +304,7 @@ CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 
 ### 7.1 시드 기반 선택
 ```text
-pool    = sorted(curated 변형들, key=motif_id)         # 풀 내용에 안정적인 정렬
+pool    = sorted(reusable 변형들, key=motif_id)        # 풀 내용에 안정적인 정렬
 variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
 ```
 - `stable_hash` = **같은 해시 알고리즘**(sha256 + canonical 직렬화)을 쓴다는 뜻 — `layout_id_for`는
@@ -325,8 +324,8 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
   기능이다. 가치는 §8 안전망 논리에 있다 — Tier1이 의미검사를 안 하므로(명세와 안 맞는 모티프가
   나갈 수 있음) 그 완충재가 "후보 N개"인데, 가장 틀리기 쉬운 축이 모티프 모양 자체라 같은 변형을
   N개 내보내면 그 축에서 완충이 무력화된다.
-- **실효 전제**: 풀 ≥2(같은 `variant_group`에 curated 변형 2개 이상)일 때만 의미. 롱테일 온디맨드
-  명세는 풀=1 → 자연 degrade(§7.4). S14 시드가 head/인기 명세는 ≥2로 만들어 둠. **head 트래픽
+- **실효 전제**: 풀 ≥2(같은 `variant_group`에 reusable 변형 2개 이상)일 때만 의미. 롱테일 온디맨드
+  명세는 풀=1 → 자연 degrade(§7.4). head/인기 명세는 seed 스크립트로 ≥2로 만들 수 있음. **head 트래픽
   비중이 의미 있을 때 구현 권장, tail 위주면 §7.4 degrade에 기대 보류.**
 - **구현 시 주의**: 단순 축 추가가 아니다. (1) `_candidate_id`가 `layout:colorway:seed`만 해싱하므로
   모티프만 다른 후보끼리 **id가 충돌** — motif_id(또는 resolved-intent 해시)를 접어 넣어야 한다.
@@ -347,22 +346,20 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
   (intent 스냅샷으로 이미 닫히므로 불필요한 선택지 — 결정 부담만 늘림). 후속에 명시적 필요가 생기면 그때.
 
 ### 7.4 풀 구성 규칙
-- **`status='curated'`(승인) 변형만 샘플링 풀에 진입**(품질 바닥). `auto`는 검수 대기.
+- **Tier1 통과 + DB 영속화된 변형은 즉시 샘플링 풀에 진입**한다.
 - 콜드스타트(풀=1)는 자연 degrade(항상 그 1개).
 
 ---
 
-## 8. 검수 / 승격 루프 (D5·D14)
+## 8. Tier1 게이트 / 즉시 재사용 (D5·D14)
 
-**2단계 게이트** — 요청자는 즉시 받고, 공유 풀은 검수본만.
+**단일 게이트** — 요청자 제공과 공유 풀 편입은 같은 Tier1 통과 조건을 쓴다.
 
 ```text
 생성 → [Tier1 즉시 사용 게이트 — 전부 자동]
         sanitize(allowlist) + 구조검사 통과 (탈락 시 동작 = §6.4)
-        → status='auto', DB 영속화, 요청자에게 즉시 제공 (재현 = resolved-intent 스냅샷, §7.3)
-     → [Tier2 라이브러리 승격 — 사람 수동 검수]
-        승인 → status='curated' → 샘플링 풀(§7.4) 편입
-        반려 → 폐기 또는 수동 보정 후 재등록
+        → DB 영속화, 요청자에게 즉시 제공, 샘플링 풀(§7.4) 즉시 편입
+          (재현 = resolved-intent 스냅샷, §7.3)
 ```
 
 - **Tier1(자동, 요청 경로 내)**: `sanitize`(이미 강제) + 구조 휴리스틱(drawable 존재, degenerate
@@ -370,14 +367,13 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
   구현은 `app/motifs/registry.py`의 `normalize_motif_svg`(임계값은 `Settings.motif_*`). "배치 후
   seamless 유지"는 모티프를 **여백 타일로 1회 렌더해 선언 bbox를 벗어나는 overflow를 `edge_seam`으로
   거르는 휴리스틱**이며(렌더러 미설치 시 #4·#5는 graceful skip, 순수 기하 #3은 항상 실행), 실제 타일
-  seamless는 엔진 by-construction 보장(대칭 overflow는 edge_seam이 못 잡는 휴리스틱 한계 수용).
-- **Tier2(사람, 비동기)**: 사람이 보고 `curated` 승격. 공유 샘플링 풀엔 `curated`만 들어가므로
-  품질 바닥이 유지된다.
-- 인기 상위(head) 명세는 **미리 고퀄로 시드**(검수 부담↓), 롱테일은 온디맨드 생성 후 검수로 성장.
+	  seamless는 엔진 by-construction 보장(대칭 overflow는 edge_seam이 못 잡는 휴리스틱 한계 수용).
+- 사람이 보는 검수/승격 큐는 제거한다. 품질 관리는 Tier1 게이트, head 카탈로그 seed, 필요 시 admin delete로 한다.
+- 인기 상위(head) 명세는 **미리 고퀄로 시드**, 롱테일은 온디맨드 생성 후 즉시 재사용 풀로 성장.
 
 **감수하는 리스크**: Tier1이 의미검사를 안 하므로, 구조는 멀쩡하나 "명세와 안 맞는"(예: 돼지 같지
 않은) 모티프가 요청자에게 갈 수 있다. 완충: 한 요청에 **후보 N개**(`candidate_count`) 제시 +
-**재생성** 옵션. 공유 풀에는 검수 전이라 흘러가지 않는다.
+**재생성** 옵션. Tier1 통과분은 공유 풀에 즉시 들어가므로 admin delete가 수동 안전장치다.
 
 ---
 
@@ -426,14 +422,12 @@ P0  모티프 DB(Supabase) + 글루 + LLM 단색 생성 + 정확매칭/하드필
       (ivfflat·임베딩 호출 없음. exact descriptor + subject/part 필터만, D18)
 P1  임베딩 유사도(OpenAI) + 변형 샘플링(시드) + variant_group(D16)        ← 카탈로그 차오르며 가치↑
 P2  멀티컬러 엔진(§4, 슬롯확장 D15) + Recraft 연결(§6.2 게이트)            ← Recraft 가치 실현
-P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시 React 모노레포 migration으로) ivfflat 인덱스
+P3  head 카탈로그 시드 + (행 수 충분 시 React 모노레포 migration으로) ivfflat 인덱스
 ```
 - **P0**: 현행 단색 엔진으로 끝까지 동작 + 영속화. 임베딩/τ/풀 없이 **정확매칭+하드필터**만(콜드스타트
   dead-code 회피, 리뷰 M3). 모델은 확정됐으나 P0엔 임베딩 호출을 넣지 않는다.
 - **P1**: 카탈로그가 어느 정도 차면 임베딩 유사도를 켠다(소량 구간은 seq scan, ivfflat은 P3).
-  변형 샘플링은 **풀=curated만**(§7.4)인데 Tier2 승격이 P3라 **P1~P2 동안 풀은 사실상 ≤1개** →
-  변형 샘플링은 P1에서 degenerate(코드는 켜되 실효는 P3부터). P1의 가치는 **fuzzy 재사용 조회**이지
-  변형 다양성이 아니다(N1/N2 후속 정합 메모).
+  변형 샘플링은 Tier1 통과 row를 즉시 풀로 쓰므로 풀 ≥2인 명세부터 바로 실효가 생긴다.
 - **P2**: 멀티컬러는 §4.2 슬롯확장(기본 (b), 굽기 금지)으로 C1 해소 후. Recraft는 §6.2 적합성 게이트
   통과분만. **D1상 멀티컬러는 "필수"지만, 단색 E2E가 더 짧은 가치 경로라 P2로 둔다** — Recraft의
   멀티컬러 가치는 P2에서 실현(N3).
@@ -442,7 +436,7 @@ P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시 
 
 ## 12. 리스크 / 열린 이슈
 
-**확정(리뷰 반영)**: 라우팅(D11), 모델(D12), 2단계+정확매칭(D13·D18), 검수(D14), 멀티컬러 방식
+**확정(리뷰 반영)**: 라우팅(D11), 모델(D12), 2단계+정확매칭(D13·D18), 즉시 재사용(D14), 멀티컬러 방식
 (D15 슬롯확장), variant_group(D16), 재현(D17 intent 스냅샷+registry_version).
 
 **남은 열린 항목**:
@@ -455,4 +449,4 @@ P3  Tier2 검수/승격 루프 + head 카탈로그 시드 + (행 수 충분 시 
   (`motif_max_aspect_ratio`), seam `edge_seam ≤ 2.0`(`motif_edge_seam_tol`, `00-overview`와 정합), 렌더러
   부재 시 graceful skip(`motif_render_check`로 일괄 토글). **실제 모티프로 임계 보정은 후속**(비율/seam 튜닝).
 - **variant_group "핵심 facet" 범위**: 기준 축은 `subject + scope`. expression 포함 여부로 그룹 입자 결정(D16 구체화).
-- **캐시 무효화 규칙 (§6.4)**: Tier2 반려·삭제 시 인메모리/어댑터 캐시/DB 일관성 전파.
+- **캐시 무효화 규칙 (§6.4)**: admin delete 시 인메모리/어댑터 캐시/DB 일관성 전파.

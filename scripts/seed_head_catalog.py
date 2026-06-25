@@ -1,14 +1,12 @@
-"""Seed a small, high-quality 'head' motif catalog as curated rows (Session 14 / P3).
+"""Seed a small, high-quality 'head' motif catalog as reusable rows.
 
-The head catalog is the popular-spec set pre-seeded at high quality so the curated
-sampling pool is non-degenerate from day one (spec §8, §7.4) and Tier2 review starts
-from a baseline rather than an empty pool. Each entry is registered with
-``status='curated'`` so it enters the seed-sampling pool immediately; content-hash ids
-+ ON CONFLICT DO NOTHING make re-running the script idempotent.
+The head catalog is the popular-spec set pre-seeded at high quality so the sampling pool
+is non-degenerate from day one. Each entry enters the seed-sampling pool immediately;
+content-hash ids + ON CONFLICT DO NOTHING make re-running the script idempotent.
 
 To exercise variant diversity (pool >= 2), several entries share the same
-(subject, scope) -> the same variant_group, so one spec resolves to different curated
-variants per seed (spec §7.1).
+(subject, scope) -> the same variant_group, so one spec resolves to different variants
+per seed (spec §7.1).
 
 Needs SUPABASE_DB_URL (server-side only; bypasses RLS — CLAUDE.md). The runtime never
 runs DDL: the `motifs` table/indexes are owned by the React monorepo (CLAUDE.md); this
@@ -99,7 +97,7 @@ HEAD_CATALOG: list[dict] = [
 
 
 def seed(store) -> list[str]:
-    """Register every catalog entry as a curated motif; return the motif ids.
+    """Register every catalog entry as a reusable motif; return the motif ids.
 
     Installs ``store`` as the default so ``register_motif``'s write-through persists to
     it. Idempotent: the same SVG always hashes to the same id, and upsert is
@@ -116,7 +114,6 @@ def seed(store) -> list[str]:
             description=entry.get("description"),
             style=entry.get("style"),
             source="seed",
-            status="curated",
         )
         ids.append(motif_id)
     return ids
@@ -128,7 +125,7 @@ def main() -> int:
         print("SUPABASE_DB_URL is not set — cannot seed the motif store.", file=sys.stderr)
         return 2
     ids = seed(store)
-    print(f"seeded {len(ids)} curated motif(s):")
+    print(f"seeded {len(ids)} reusable motif(s):")
     for entry, motif_id in zip(HEAD_CATALOG, ids):
         print(f"  {motif_id}  {entry['subject']}/{entry['scope']}  {entry['description']}")
     return 0

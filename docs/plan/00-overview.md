@@ -21,7 +21,7 @@
                   └──> 8  (보안·Recraft)   # 3·4·6·7 의존
 
 # 상위 기능층 (spec: motif-library-and-multicolor)
-9 (영속화) ──> 10 (글루·단색 E2E) ──> 11 (임베딩·변형) ──> 14 (검수·풀 성숙)
+9 (영속화) ──> 10 (글루·단색 E2E) ──> 11 (임베딩·변형) ──> 14 (카탈로그·풀 성숙)
                      └──> 13 (Recraft) ── 의존 ──> 12 (멀티컬러 엔진, 엔진 독립)
 # P0=9+10, P1=11, P2=12+13, P3=14
 ```
@@ -46,7 +46,7 @@
 | 11 | `11-embedding-and-variant-sampling.md` | 임베딩 τ 조회 + 시드 변형 샘플링 | seed별 변형 + registry_version 봉인 |
 | 12 | `12-multicolor-engine.md` | 멀티컬러 엔진(슬롯 보존·(b) 바인딩) | N>2 슬롯 렌더 + dedup 유지 + 바이트동일 |
 | 13 | `13-recraft-and-routing.md` | Recraft 연결 + 적합성 게이트 + 라우팅 | detailed 명세 → 멀티컬러 합성 |
-| 14 | `14-curation-and-catalog.md` | Tier2 검수·승격 + 풀 성숙 + ivfflat | curated만 풀 진입 + 변형 실효 |
+| 14 | `14-catalog-and-pool.md` | head 카탈로그 시드 + 풀 성숙 + ivfflat | 즉시 재사용 풀 + 변형 실효 |
 
 세션 9–14는 상위 기능층(멀티컬러 모티프 라이브러리 & 프롬프트 생성)으로,
 설계 기준은 `docs/spec/motif-library-and-multicolor.md`다. 각 세션 파일은 **새 대화창에서 단독 실행**
