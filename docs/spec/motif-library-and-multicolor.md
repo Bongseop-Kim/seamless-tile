@@ -285,8 +285,9 @@ CREATE INDEX ON motifs USING ivfflat (embedding vector_cosine_ops);
 | Tier1 게이트 탈락(sanitize/구조검사) | **재생성 1회 → 그래도 탈락이면** 해당 모티프 후보 드롭. 다른 모티프/후보가 있으면 부분 성공, 전부 실패면 502 |
 | DB 영속화 실패 | 모티프는 인메모리로 이번 요청 제공(graceful) + 영속화 비동기 재시도. 영속화 안 됐으면 다음 요청에서 재생성될 수 있음(멱등) |
 
-- **캐시 무효화**: admin delete 시 인메모리 `MOTIFS` + 어댑터 캐시(`_intent_cache`/
-  `_motif_cache`)와 DB의 일관성을 맞춘다(삭제 전파).
+- **캐시 무효화**: admin delete 시 인메모리 `MOTIFS` + 모티프 id 어댑터 캐시(`clear_motif_svg_cache`/
+  `clear_motif_cache`/`clear_recraft_motif_cache`)를 DB와 일치시키고 재사용 풀 epoch를 bump한다(삭제
+  전파). intent·임베딩 캐시는 구체 motif_id를 담지 않으므로 그대로 둔다.
 
 ---
 

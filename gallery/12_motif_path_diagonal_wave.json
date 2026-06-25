@@ -6,7 +6,7 @@
   },
   "seed": 20240,
   "production": {
-    "method": "digital",
+    "method": "print",
     "max_colors": 12
   },
   "palette": {

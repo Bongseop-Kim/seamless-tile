@@ -45,10 +45,9 @@ def registry_version_for(store: MotifStore | None) -> str:
     if _cache is not None and _cache[0] is store and _cache[1] == epoch:
         return _cache[2]
     try:
-        records = store.all()
+        pool_ids = sorted(store.all_ids())
     except MotifStoreError:
         return REGISTRY_VERSION  # transient outage: degrade, do not cache
-    pool_ids = sorted(rec.id for rec in records)
     if not pool_ids:
         version = REGISTRY_VERSION
     else:

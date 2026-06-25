@@ -2,11 +2,14 @@
 codes fail fast. sleep is monkeypatched so the test never actually waits."""
 
 import pytest
-from google.genai import errors
 
 from app.adapters import gemini
 from app.adapters.base import AdapterClientError
 from app.adapters.gemini import GeminiClient
+
+# google-genai is an optional dependency (not in requirements.txt); skip this module
+# cleanly at collection time when it is not installed.
+errors = pytest.importorskip("google.genai.errors")
 
 
 class _FakeModels:

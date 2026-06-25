@@ -294,6 +294,8 @@ def build_intent(
         # would raise TypeError on the dict membership test and escape as a 500.
         if isinstance(cand, str) and cand in MOTIFS:
             motif_id = cand
+    if motif_id is None:
+        warnings.append("motif inference unavailable/ignored; using palette only")
 
     # Vectorization fit/unfit -> source_fidelity (vectorizer is mocked in tests).
     source_fidelity = "vector"

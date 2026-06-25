@@ -82,6 +82,11 @@ class MotifStore(Protocol):
         """All rows, for boot hydration."""
         ...
 
+    def all_ids(self) -> list[str]:
+        """All motif ids, ordered by id. Cheap id-only scan for the reusable-pool
+        fingerprint (avoids loading symbol/embedding payloads)."""
+        ...
+
     def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
         """Rows whose controlled facet matches ``scope``, ordered by id.
 
@@ -248,6 +253,12 @@ class PostgresMotifStore:
             cur.execute(f"SELECT {_SELECT_LIST} FROM motifs ORDER BY id")
             rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
+
+    def all_ids(self) -> list[str]:
+        with self._cursor("id scan") as cur:
+            cur.execute("SELECT id FROM motifs ORDER BY id")
+            rows = cur.fetchall()
+        return [r[0] for r in rows]
 
     def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
         with self._cursor("facet query") as cur:

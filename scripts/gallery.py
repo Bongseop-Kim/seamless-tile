@@ -52,9 +52,13 @@ def _load_gallery_motifs() -> tuple[dict[str, str], list[tuple[str, str]]]:
     aliases: dict[str, str] = {}
     registered: list[tuple[str, str]] = []
     for svg_path in svgs:
-        raw = _flatten_unsuitable(svg_path.read_text(encoding="utf-8"))
-        motif = normalize_motif_svg(raw, max_color_slots=6, render_check=False)
-        motif_id = register_motif(motif, source="gallery")
+        try:
+            raw = _flatten_unsuitable(svg_path.read_text(encoding="utf-8"))
+            motif = normalize_motif_svg(raw, max_color_slots=6, render_check=False)
+            motif_id = register_motif(motif, source="gallery")
+        except Exception as exc:  # noqa: BLE001 — 한 asset 실패가 나머지 등록을 막지 않게
+            print(f"  warn asset {svg_path.stem}: {exc!r} — skipped", file=sys.stderr)
+            continue
         aliases.setdefault(svg_path.stem, motif_id)
         aliases[motif_id] = motif_id
         aliases.setdefault("default", motif_id)
@@ -94,32 +98,32 @@ def main() -> int:
     failures: list[tuple[str, str]] = []
     skipped: list[str] = []
     for p in files:
-        intent = json.loads(p.read_text(encoding="utf-8"))
-        layers = intent.get("layers", [])
-        motif_layers = [L for L in layers if L.get("type") == "motif"]
-        if motif_layers:
-            if not motif_aliases:
-                skipped.append(p.stem)
-                continue
-            for L in motif_layers:
-                requested = L.get("params", {}).get("motif_id", "default")
-                motif_id = motif_aliases.get(requested)
-                if motif_id is None:
-                    motif_id = motif_aliases["default"]
-                    print(
-                        f"  warn {p.stem}: unknown motif_id {requested!r}; "
-                        f"using default motif {motif_id}",
-                        file=sys.stderr,
-                    )
-                L["params"]["motif_id"] = motif_id
         try:
+            intent = json.loads(p.read_text(encoding="utf-8"))
+            layers = intent.get("layers", [])
+            motif_layers = [L for L in layers if L.get("type") == "motif"]
+            if motif_layers:
+                if not motif_aliases:
+                    skipped.append(p.stem)
+                    continue
+                for L in motif_layers:
+                    requested = L.get("params", {}).get("motif_id", "default")
+                    motif_id = motif_aliases.get(requested)
+                    if motif_id is None:
+                        motif_id = motif_aliases["default"]
+                        print(
+                            f"  warn {p.stem}: unknown motif_id {requested!r}; "
+                            f"using default motif {motif_id}",
+                            file=sys.stderr,
+                        )
+                    L["params"]["motif_id"] = motif_id
             cand = generate(intent)
+            svg = _scale_svg(cand.svg, float(intent["canvas"]["tile_mm"]))
+            (GALLERY_DIR / f"{p.stem}.svg").write_text(svg, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 — 한 json 실패가 나머지를 막지 않게
             failures.append((p.stem, repr(exc)))
             print(f"  FAIL {p.stem}: {exc}", file=sys.stderr)
             continue
-        svg = _scale_svg(cand.svg, float(intent["canvas"]["tile_mm"]))
-        (GALLERY_DIR / f"{p.stem}.svg").write_text(svg, encoding="utf-8")
         warn = f"  ({len(cand.warnings)} warning(s))" if cand.warnings else ""
         print(f"  ok   {p.stem}{warn}")
         for w in cand.warnings:

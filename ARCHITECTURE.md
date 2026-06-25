@@ -447,7 +447,7 @@ POST /api/v1/generate
 - 포괄 요청은 여러 compatible 후보를 반환한다. 다양성 축은 **layout(placement)·colorway·seed**
   셋이다(seed는 scatter layer가 있고 layout×colorway가 요청 수를 못 채울 때만 확장). 랭킹은 `rank_key =
   (색 수, clustering, layout_id, colorway_id, seed)` 오름차순이다 — seam 통과는 랭킹 항이 아니라 그 이전의
-  하드 by-construction 드롭이다. 중복은 **동일 SVG 문자열**로 de-dup한다. `layout_id`는 배치·대칭 구성의
+  하드 by-construction 드롭이다. 중복은 **동일 SVG 문자열**로 de-dup한다. `layout_id`는 배치(placement) 구성의
   식별자이며 다양성·de-dup·재현 키의 일부다(`app/engine/candidates.py:generate_candidates`).
 - 구체 요청은 `candidate_count=1`로 줄일 수 있다.
 - **에러 분류**: 스키마(pydantic) 실패 → `400`; 시맨틱 검증 실패 → `422`; 업스트림 어댑터(LLM/Recraft/임베딩/

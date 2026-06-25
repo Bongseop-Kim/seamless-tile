@@ -22,7 +22,7 @@ prompt(str) → Gemini gemini-2.5-flash-lite → designs[] = [{intent, motif_spe
 
 - 같은 `(prompt, canvas, palette)`는 freeze 캐시로 Gemini 0회 재호출. 모티프도 spec 단위 freeze → 같은 spec 재요청 시 생성 0회.
 - 결정론: 같은 `prompt + seed + colorway` → **바이트 동일 SVG**. 재현성 테스트의 2번째 호출은 캐시로 무료.
-- 내장 모티프 `circle`, `bee`는 생성 없이 직접 참조 가능.
+- `circle`, `bee`는 **내장 모티프가 아니라 테스트 fixture**다(엔진은 내장 모티프를 싣지 않는다 — `BUILTIN_MOTIF_IDS`는 빈 집합). 그룹 A의 "내장 재사용·생성 0" 기대는 fixture 기준이며, 라이브 서비스에서는 이들도 LLM/Recraft로 생성된다.
 - `source_fidelity`는 prompt 경로에서 **항상 `"vector"`** (이미지 경로 전용이 `raster_hybrid`). → **Recraft 사용 여부 판별 불가**. 판별은 intent의 motif `colors` dict(멀티컬러) + **서버 로그의 외부 호출**로 한다.
 - HTTP 코드: **422**(스키마/시맨틱 실패), **502**(LLM·Recraft 미구성/외부 실패), **500**(엔진 합성 실패), **200 + warnings**(부분 성공).
 
@@ -63,7 +63,7 @@ curl -s http://localhost:8000/api/v1/generate \
 
 ---
 
-## 그룹 A — 내장 모티프 / 무생성 (🟢 우선 실행)
+## 그룹 A — 내장(테스트 fixture) 모티프 / 무생성 (🟢 우선 실행)
 
 ### A1. 대각 스트라이프 (넥타이 기본)
 
@@ -164,7 +164,7 @@ curl -s http://localhost:8000/api/v1/generate \
 ### F3. 스크린 프린트 색 제한
 
 - **prompt**: `For screen printing, limit to 6 spot colors, bold geometric repeat.`
-- **확인**: `intent.production.method == "screen"` 추정 · distinct color ≤ `max_colors` 검증 통과(초과면 422) · 색 수 확인
+- **확인**: `intent.production.method == "print"` 추정(레거시 `"screen"`/`"digital"` 입력은 `"print"`로 정규화) · distinct color ≤ `max_colors` 검증 통과(초과면 422) · 색 수 확인
 
 ---
 

@@ -219,18 +219,20 @@ async def generate_candidate(
         ]
     elif request.reference_image is not None:
         input_type = "reference_image"
-        adapted = _run_adapter(
-            lambda: image_build_intent(request.reference_image, canvas=request.canvas)
+        adapted = await asyncio.to_thread(
+            _run_adapter,
+            lambda: image_build_intent(request.reference_image, canvas=request.canvas),
         )
         source_fidelity = adapted.source_fidelity
         warnings += adapted.warnings
         designs = [(adapted.intent, adapted.motif_specs)]
     elif request.prompt is not None:
         input_type = "prompt"
-        adapted_list = _run_adapter(
+        adapted_list = await asyncio.to_thread(
+            _run_adapter,
             lambda: llm_build_intents(
                 request.prompt, canvas=request.canvas, palette=request.palette
-            )
+            ),
         )
         source_fidelity = adapted_list[0].source_fidelity
         for adapted in adapted_list:

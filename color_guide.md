@@ -46,4 +46,4 @@ Use ONLY when the prompt does not specify colors. If the prompt names colors, us
 - All colors from one palette? Colorway keeps same count?
 - Fabric ground used as a color? Standard code in `spot` where known?
 - Enough contrast (no muddy dark-on-dark)?
-- Within count range for the fabrication (yarn_dyed 2–8, print 4–12)?
+- Color count fits the fabrication (yarn_dyed 2–8 hard limit; print recommended 4–12, digital unlimited)?

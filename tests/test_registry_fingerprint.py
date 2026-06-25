@@ -21,17 +21,17 @@ def _rec(motif_id: str) -> MotifRecord:
 
 
 class _FakeStore:
-    """Minimal MotifStore: only ``all`` is exercised by the helper."""
+    """Minimal MotifStore: only ``all_ids`` is exercised by the helper."""
 
     def __init__(self, *records: MotifRecord) -> None:
         self.rows = {r.id: r for r in records}
 
-    def all(self) -> list[MotifRecord]:
-        return sorted(self.rows.values(), key=lambda r: r.id)
+    def all_ids(self) -> list[str]:
+        return sorted(self.rows)
 
 
 class _ErroringStore:
-    def all(self) -> list[MotifRecord]:
+    def all_ids(self) -> list[str]:
         raise MotifStoreError("simulated DB outage")
 
 
@@ -84,9 +84,9 @@ class _CountingStore(_FakeStore):
         super().__init__(*records)
         self.calls = 0
 
-    def all(self) -> list[MotifRecord]:
+    def all_ids(self) -> list[str]:
         self.calls += 1
-        return super().all()
+        return super().all_ids()
 
 
 def test_result_is_memoized_per_store_and_epoch():

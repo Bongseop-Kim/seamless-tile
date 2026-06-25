@@ -293,7 +293,7 @@ def _build_prompt(
         "FABRICATION FIRST: before choosing colors, decide from the description whether "
         "it is yarn-dyed (woven — stripes/checks/gingham/chambray) or print, and set "
         'production.method to "yarn_dyed" or "print" accordingly. Yarn-dyed is color-'
-        "limited: keep production.max_colors and each colorway to 2–8 colors.",
+        "limited: keep production.max_colors and each colorway to 2-8 colors.",
         "COLORS: if the description names specific colors, use those. Otherwise pick from "
         "the recommended palette in the color guide below.",
     ]
