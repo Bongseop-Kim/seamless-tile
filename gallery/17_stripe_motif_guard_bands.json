@@ -71,7 +71,33 @@
       }
     },
     {
-      "id": "motif",
+      "id": "stripe",
+      "type": "stripe",
+      "z_order": 1,
+      "params": {
+        "angle": -45,
+        "period_mm": 33.941125,
+        "bands": [
+          {
+            "offset_mm": -0.7,
+            "width_mm": 0.7,
+            "color": "plum"
+          },
+          {
+            "offset_mm": 0,
+            "width_mm": 24,
+            "color": "accent"
+          },
+          {
+            "offset_mm": 24,
+            "width_mm": 0.7,
+            "color": "plum"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dots",
       "type": "motif",
       "z_order": 2,
       "params": {
@@ -87,11 +113,12 @@
         }
       },
       "placement": {
-        "type": "lattice",
-        "lattice": {
-          "cell_w_mm": 16,
-          "cell_h_mm": 16
-        }
+        "type": "path_following",
+        "host_layer": "stripe",
+        "lane": "b1.center",
+        "spacing_mm": 16.970563,
+        "phase_mm": 0,
+        "rotation": "follow_path"
       }
     }
   ]

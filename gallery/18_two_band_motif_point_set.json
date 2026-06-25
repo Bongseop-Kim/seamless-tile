@@ -71,12 +71,33 @@
       }
     },
     {
-      "id": "motif",
+      "id": "stripe",
+      "type": "stripe",
+      "z_order": 1,
+      "params": {
+        "angle": -45,
+        "period_mm": 33.941125,
+        "bands": [
+          {
+            "offset_mm": 28.5,
+            "width_mm": 3,
+            "color": "accent"
+          },
+          {
+            "offset_mm": 32.7,
+            "width_mm": 3,
+            "color": "plum"
+          }
+        ]
+      }
+    },
+    {
+      "id": "large_motif",
       "type": "motif",
       "z_order": 2,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 14.0,
+        "size_mm": 12.0,
         "colors": {
           "s0": "ink",
           "s1": "leaf",
@@ -87,10 +108,18 @@
         }
       },
       "placement": {
-        "type": "lattice",
-        "lattice": {
-          "cell_w_mm": 16,
-          "cell_h_mm": 16
+        "type": "point_set",
+        "point_set": {
+          "points": [
+            [
+              12,
+              12
+            ],
+            [
+              36,
+              36
+            ]
+          ]
         }
       }
     }

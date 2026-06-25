@@ -13,35 +13,35 @@
     "slots": [
       {
         "id": "ground",
-        "hex": "#10243a"
+        "hex": "#06152b"
       },
       {
         "id": "accent",
-        "hex": "#ef8a7a"
+        "hex": "#a69a42"
       },
       {
         "id": "gold",
-        "hex": "#f5ca57"
+        "hex": "#d6b24a"
       },
       {
         "id": "ink",
-        "hex": "#2e2a2a"
+        "hex": "#080c14"
       },
       {
         "id": "teal",
-        "hex": "#2bb3a3"
+        "hex": "#0aa7d9"
       },
       {
         "id": "plum",
-        "hex": "#8e4585"
+        "hex": "#b51626"
       },
       {
         "id": "sky",
-        "hex": "#5aa9e6"
+        "hex": "#064fae"
       },
       {
         "id": "leaf",
-        "hex": "#6cae5a"
+        "hex": "#e2d9bd"
       }
     ]
   },
@@ -50,14 +50,14 @@
       "id": "default",
       "name": "default",
       "mapping": {
-        "ground": "#10243a",
-        "accent": "#ef8a7a",
-        "gold": "#f5ca57",
-        "ink": "#2e2a2a",
-        "teal": "#2bb3a3",
-        "plum": "#8e4585",
-        "sky": "#5aa9e6",
-        "leaf": "#6cae5a"
+        "ground": "#06152b",
+        "accent": "#a69a42",
+        "gold": "#d6b24a",
+        "ink": "#080c14",
+        "teal": "#0aa7d9",
+        "plum": "#b51626",
+        "sky": "#064fae",
+        "leaf": "#e2d9bd"
       }
     }
   ],

@@ -71,12 +71,38 @@
       }
     },
     {
+      "id": "stripe",
+      "type": "stripe",
+      "z_order": 1,
+      "params": {
+        "angle": -45,
+        "period_mm": 33.941125,
+        "bands": [
+          {
+            "offset_mm": 12.8,
+            "width_mm": 2,
+            "color": "accent"
+          },
+          {
+            "offset_mm": 17,
+            "width_mm": 2,
+            "color": "gold"
+          },
+          {
+            "offset_mm": 21.2,
+            "width_mm": 2,
+            "color": "plum"
+          }
+        ]
+      }
+    },
+    {
       "id": "motif",
       "type": "motif",
       "z_order": 2,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 14.0,
+        "size_mm": 6.0,
         "colors": {
           "s0": "ink",
           "s1": "leaf",
@@ -87,11 +113,16 @@
         }
       },
       "placement": {
-        "type": "lattice",
-        "lattice": {
-          "cell_w_mm": 16,
-          "cell_h_mm": 16
-        }
+        "type": "path_following",
+        "path": {
+          "kind": "wave",
+          "angle": -45,
+          "wavelength": 22.627417,
+          "amplitude": 6
+        },
+        "spacing_mm": 8,
+        "phase_mm": 0,
+        "rotation": "follow_path"
       }
     }
   ]
