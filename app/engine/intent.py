@@ -217,20 +217,6 @@ Layer = Annotated[
 ]
 
 
-class SymmetrySpec(BaseModel):
-    """Tile-level arrangement symmetry, baked into a super-tile by the SeamlessEngine.
-
-    SVG ``<pattern>`` cannot reflect natively, so mirror/glide are realized by baking
-    reflected copies of the whole tile into a 2x1 / 1x2 / 2x2 super-tile that then
-    block-tiles. ``glide_*`` adds a ``shift_mm`` (default tile/2) along the seam axis.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["mirror_h", "mirror_v", "mirror_2x2", "glide_h", "glide_v"]
-    shift_mm: float | None = Field(default=None, gt=0)
-
-
 class Intent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -241,4 +227,3 @@ class Intent(BaseModel):
     palette: PaletteSpec
     colorways: list[ColorwaySpec] = Field(min_length=1, max_length=32)
     layers: list[Layer] = Field(min_length=1, max_length=64)
-    symmetry: SymmetrySpec | None = None

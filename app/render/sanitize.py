@@ -17,8 +17,8 @@ Allowlist rationale:
   rect/line/circle/ellipse/use) plus the vector primitives a Recraft motif may carry
   (path/polygon/polyline). ``<script>``/``<foreignObject>``/``<image>``/``<filter>``
   are *not* listed, so injection and embedded raster are rejected by construction.
-- ``transform`` and ``patternTransform`` are allowed — they are load-bearing for the
-  mirror super-tile and per-instance ``<use>`` transforms (the spec risk note).
+- ``transform`` and ``patternTransform`` are allowed — they are load-bearing for
+  per-instance ``<use>`` transforms (the spec risk note).
 - ``href`` must be an internal ``#id`` fragment (no ``javascript:``/external URL).
 - Color attributes (``fill``/``stroke``/``color``) accept ``currentColor``/``none``/a
   hex (``HEX_RE``) / internal ``url(#id)``; external ``url(...)`` and scheme-bearing

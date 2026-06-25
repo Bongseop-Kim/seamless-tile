@@ -37,7 +37,7 @@
 | 2 | `02-primitives-and-host-contract.md` | background·stripe·lanes()·각도 스냅 | stripe geometry + lane 계약 + commensurate 각도 |
 | 3 | `03-placement-composition-vertical-slice.md` | path_following·`<pattern>` 합성·motif registry | MVP intent가 `<pattern>`+`<use>` SVG로 합성 |
 | 4 | `04-seamless-and-generate-mvp.md` | seamless 강제·검증·generate 파이프라인 | **MVP: 사선 타이 seamless SVG + 결정론** |
-| 5 | `05-coverage-symmetry-and-scatter.md` | lattice/scatter/point_set·mirror/sateen | 비사선 계열 생성(과적합 반증) + mirror seam |
+| 5 | `05-coverage-and-scatter.md` | lattice/scatter/point_set·sateen | 비사선 계열 생성(과적합 반증) |
 | 6 | `06-product-api-and-ops.md` | `/api/v1/generate`·다양성/랭킹·에러/관측 | intent 직접 경로로 후보 반환·de-dup·랭킹 |
 | 7 | `07-llm-and-reference-image-adapters.md` | prompt→intent, image→intent | 모킹 어댑터로 prompt/이미지→SVG |
 | 8 | `08-security-hardening-and-recraft.md` | SVG sanitize·업로드 검증·Recraft intake | injection 차단 + Recraft motif 결정론 등록 |

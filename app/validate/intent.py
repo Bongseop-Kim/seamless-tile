@@ -502,12 +502,6 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"length {closure} (tile*hypot({snapped.p}, {snapped.q}))"
                     )
 
-    sym = intent.symmetry
-    if sym is not None and sym.shift_mm is not None and not divides(tile, sym.shift_mm):
-        errors.append(
-            f"symmetry shift_mm {sym.shift_mm} does not divide tile_mm {tile}"
-        )
-
     if errors:
         raise IntentInvalid(errors)
 

@@ -319,7 +319,7 @@ variant = pool[ stable_hash(variant_group + ":" + seed) % len(pool) ]
   시안 제시(`app/engine/candidates.py`의 다양성 축에 "motif variant" 추가).
 - **현황**: 미구현. `resolve_motifs()`가 요청당 1회·단일 seed로 `motif_id`를 레이어에 고정한 뒤
   `generate_candidates`가 돌므로, 한 요청의 N개 후보는 모티프 변형을 공유한다(다양성 축은
-  symmetry/drop_fraction/seed뿐). 요청 seed를 바꾸면 변형이 바뀌는 **요청-레벨 결정성은 정상** —
+  placement/colorway/seed뿐). 요청 seed를 바꾸면 변형이 바뀌는 **요청-레벨 결정성은 정상** —
   누락은 "한 요청 내 후보 간" 다양성에 한정된다.
 - **보류 판단(correctness 아님, 제품/UX 결정)**: 결정성·재현성을 깨는 버그가 아니라 품질 향상
   기능이다. 가치는 §8 안전망 논리에 있다 — Tier1이 의미검사를 안 하므로(명세와 안 맞는 모티프가

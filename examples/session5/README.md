@@ -1,6 +1,6 @@
-# 세션 5 미리보기 — 커버리지·대칭·scatter
+# 세션 5 미리보기 — 커버리지·scatter
 
-세션 5에서 추가한 placement/대칭 기능을 실제 SVG/PNG로 보여주는 쇼케이스다.
+세션 5에서 추가한 placement 기능을 실제 SVG/PNG로 보여주는 쇼케이스다.
 모두 `default` colorway(네이비 ground / 코랄 accent / 골드 gold)로 렌더링했다.
 
 ## 재생성
@@ -18,7 +18,7 @@ PNG는 `rsvg-convert`가 있을 때만 생성된다(없으면 건너뜀). 결과
 
 | 접미사 | 내용 |
 |---|---|
-| `*-tile.svg` | 단일 패턴 타일(`<pattern>` 1장; mirror는 96mm super-tile) |
+| `*-tile.svg` | 단일 패턴 타일(`<pattern>` 1장) |
 | `*-tiled.svg` | 4×4 반복본 — 브라우저로 열어 이음매(seam) 확인 |
 | `*-tiled.png` | 4×4 반복본 200dpi 래스터(가장 보기 편함) |
 
@@ -30,10 +30,9 @@ PNG는 `rsvg-convert`가 있을 때만 생성된다(없으면 건너뜀). 결과
 | `02-scatter-poisson-bluenoise` | scatter `poisson` | seed 결정론 blue-noise, 최소거리 유지 |
 | `03-scatter-sateen` | scatter `sateen` | 사틴 step 배열, 같은 행/열 정렬 없음 |
 | `04-wave-lane-vine` | 곡선 `wave` lane | 사인 곡선 위 도트 + 곡선을 따라 회전하는 벌 |
-| `05-mirror-2x2-bees` | tile 레벨 `symmetry` (mirror super-tile) | 반사된 벌 쌍, 96mm super-tile seam 연속 |
 | `06-point-set-anchors` | `point_set` | 명시 앵커점(모서리 4 + 중앙) 배치 |
 
 ## 새 패턴 추가
 
 `generate.py`의 `SHOWCASES` 딕셔너리에 intent를 추가하면 된다. intent 계약은
-저장소 루트의 `ARCHITECTURE.md`와 `docs/plan/05-coverage-symmetry-and-scatter.md` 참고.
+저장소 루트의 `ARCHITECTURE.md` 참고.

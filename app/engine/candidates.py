@@ -2,8 +2,8 @@
 
 The single-candidate pipeline lives in :mod:`app.engine.generate`. This module
 sits one level up and turns a single base intent into a ranked, de-duplicated set
-of candidates by branching along three deterministic axes — layout (placement +
-symmetry), colorway, and seed — so the same request with the same seed always
+of candidates by branching along three deterministic axes — layout (placement),
+colorway, and seed — so the same request with the same seed always
 yields the same candidate set (``request_id`` aside, which is request metadata).
 
 Kept in the engine layer (not the API route) so the determinism contract stays

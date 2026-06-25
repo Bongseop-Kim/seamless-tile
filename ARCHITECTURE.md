@@ -26,13 +26,13 @@ seamless 보장은 모두 결정론적 엔진이 담당한다.
   단, 코드상 *primitive 모듈*은 `background`·`stripe` 둘뿐이고(`app/engine/primitives/`), `motif`는
   registry 산출물로 다룬다(`app/motifs/registry.py:get_motif`, composition이 `<symbol>`/`<use>`로 인스턴싱).
   `stripe`는 band를 그리는 동시에 placement가 따라갈 lane 중심선(lane field)을 노출하는 primitive다.
-- **모양과 배열의 분리**: motif는 "무엇을 그리는가"만 책임진다. mirror·half-drop·sateen 같은 *배열
-  대칭*은 motif가 아니라 Seamless/Placement의 책임이다.
+- **모양과 배열의 분리**: motif는 "무엇을 그리는가"만 책임진다. half-drop·sateen 같은 *배열
+  변위*는 motif가 아니라 Placement의 책임이다.
 - **Placement는 계약에만 의존**: Placement는 구체 primitive 타입이 아니라 host가 노출하는 geometry
   계약(lane field)에만 의존한다.
 - **Layer 합성 분리**: 최종 SVG는 Composition engine이 layer를 `z_order`(→ `id`) 순으로 합성한다.
-- **구조적 seamless**: 픽셀 보정이 아니라 commensurability, 대칭 연산(mirror/glide super-tile),
-  pattern transform, torus wrap, boundary clone으로 경계 연속성을 보장한다.
+- **구조적 seamless**: 픽셀 보정이 아니라 commensurability, pattern transform, torus wrap,
+  boundary clone으로 경계 연속성을 보장한다.
 - **결정론**: 같은 `intent_version`·intent·seed·colorway는 항상 바이트 동일 SVG를 만든다. motif
   생성(LLM/Recraft)·임베딩 검색·변형 샘플링 같은 비결정 단계는 엔진 경계 밖에서 끝낸다.
 - **벡터 우선**: SVG가 단일 진실 공급원이다. PNG/TIFF는 SVG를 래스터화한 파생물이다.
@@ -57,7 +57,7 @@ app/
 │   ├── primitives/              # background, stripe(lane field 노출)
 │   ├── placement/               # lattice, point_set, path_following, scatter — 모두 Instance 방출
 │   ├── composition.py           # layers[] -> <pattern>/<symbol>/<use> SVG tile (멀티컬러 슬롯 바인딩)
-│   ├── seamless.py              # commensurability 재단언, boundary clone, mirror/glide super-tile
+│   ├── seamless.py              # commensurability 재단언, boundary clone
 │   ├── determinism.py           # 안정 정렬, layout_id, ReproMeta, select_variant/stable_hash
 │   ├── generate.py              # intent -> 단일 candidate(byte-deterministic, 래스터 제외)
 │   └── candidates.py            # intent -> 랭킹된 candidate set(다양성 축·rank·de-dup)
@@ -108,7 +108,7 @@ GenerateRequest
 
 최종 제품 API는 SVG를 직접 요청하지 않는다. 사용자는 prompt·참조 이미지·canvas·palette·seed
 정도만 보내고, 엔진이 이를 intent JSON으로 바꿔 실행한다. intent의 권위 있는 스키마는 pydantic
-모델이다 — 필드·타입·검증자는 `app/engine/intent.py:Intent`(+ `Placement`/`MotifParams`/`SymmetrySpec`)에서
+모델이다 — 필드·타입·검증자는 `app/engine/intent.py:Intent`(+ `Placement`/`MotifParams`)에서
 읽는다. 아래는 형태 감을 잡는 골격일 뿐이다.
 
 ```jsonc
@@ -119,7 +119,6 @@ GenerateRequest
   "production": { "method": "digital", "max_colors": 12 },  // digital | screen
   "palette": { "slots": [{ "id": "ground", "hex": "#10243a", "spot": "19-4024 TCX" }, ...] },
   "colorways": [{ "id": "default", "mapping": { "ground": "#10243a", ... } }],  // default 필수
-  "symmetry": { "kind": "mirror_2x2" },             // 선택, top-level
   "layers": [
     { "id": "ground", "type": "background", "z_order": 0, "params": { "color": "ground" } },
     { "id": "stripe_base", "type": "stripe", "z_order": 1,
@@ -136,7 +135,7 @@ GenerateRequest
 
 - `stripe`는 motif를 직접 그리지 않고, `motif`는 자신의 배치 수를 직접 정하지 않는다.
 - 단순(circle)·복잡(bee, paisley) 도형 모두 `motif_id`로 표현한다.
-- 배열 대칭(mirror/half-drop/glide/sateen)은 motif가 아니라 Seamless/Placement가 책임진다.
+- 배열 변위(half-drop/sateen)는 motif가 아니라 Placement가 책임진다.
 - layer params의 색은 raw hex가 아니라 **색 슬롯 id**를 참조한다. 단색은 `color`(슬롯 1개),
   멀티컬러는 `colors{ 모티프슬롯 -> 팔레트슬롯 }`(정확히 하나만 지정 — `MotifParams` 검증자).
 - `placement`는 `MotifLayer`에만 있다. `placement.host_layer`는 host의 lane 계약을 통해 layer 관계를
@@ -233,12 +232,9 @@ Seamless는 각 primitive가 아니라 엔진 전체의 공통 책임이며, **b
 
 - **commensurability**: `period | tile`, lane spacing은 closure `L`의 약수로 스냅, 각도 p/q 스냅. 생성
   경계에서 재단언한다(`app/engine/seamless.py:assert_seamless_invariants` — 단, `spacing|L`은 강제하지 않음).
-- **repeat lattice·대칭**: block/half-drop/brick은 `drop_fraction`+`drop_axis`로 일반화한다
-  (`app/engine/placement/lattice.py`). mirror/glide는 SVG `<pattern>`이 반사를 네이티브로 못 하므로 엔진이
-  super-tile에 반사 사본을 bake한 뒤 block 타일링한다 — 구현 종류는 `mirror_h`(2×1)·`mirror_v`(1×2)·
-  `mirror_2x2`(2×2)·`glide_h`·`glide_v`다(`app/engine/seamless.py:super_tile`; `SymmetrySpec`는 top-level
-  intent 필드). sateen은 N×N step-offset로 정렬선·군집을 결정론적으로 깬다(`scatter.py:_place_sateen`).
-  ogee/전체 wallpaper group은 향후 과제다.
+- **repeat lattice·scatter**: block/half-drop/brick은 `drop_fraction`+`drop_axis`로 일반화한다
+  (`app/engine/placement/lattice.py`). sateen은 N×N step-offset로 정렬선·군집을 결정론적으로 깬다
+  (`scatter.py:_place_sateen`).
 - **boundary clone**: bbox가 타일 경계를 넘는 instance에 ±`tile` 시프트 사본을 더한다(엣지 1~3개, 코너는
   4개 사본). clone은 동일 `<symbol>`을 가리키는 `<use>`일 뿐 geometry를 복제하지 않는다
   (`app/engine/seamless.py:clone_instances`, `size_mm ≤ tile_mm` 가정).
@@ -402,14 +398,14 @@ LLM·임베딩·생성기·참조 이미지·저장소는 코어 바깥 어댑�
 어떤 텍스타일 계열을 어떤 엔진 구성으로 만드는지의 (목표) 매핑이다. 커버리지를 명시하고 추상화 과적합을
 방지한다.
 
-| 계열 | primitive | placement | seamless 대칭 |
+| 계열 | primitive | placement | seamless repeat |
 |---|---|---|---|
 | 사선 스트라이프(repp) | stripe(직선 lane) | — | block + 각도 스냅 |
 | 클럽 타이(사선 스트라이프 + 모티프) | stripe + motif | path_following(사선) | block |
 | 푸라르/올오버 도트·소모티프 | motif | lattice 또는 sateen | half-drop / sateen |
 | 플로럴(곡선 덩굴) | stripe(곡선 lane) + motif | path_following(곡선) + scatter | block / half-drop |
-| 페이즐리(boteh) | motif | lattice + path_following | mirror / (ogee=향후) |
-| 다마스크 | motif | lattice | mirror(super-tile) |
+| 페이즐리(boteh) | motif | lattice + path_following | block / half-drop |
+| 다마스크 | motif | lattice | block / sateen |
 | 이카트·사진적 텍스처 | — | — | 벡터 부적합 → 비목표/하이브리드 |
 
 > 모든 계열은 background layer를 깔 수 있다(표는 stripe/motif 구성만 표기). placement `—`는 모티프
@@ -446,7 +442,7 @@ POST /api/v1/generate
 - `intent`를 직접 주면 그것이 권위이고 prompt/reference_image/canvas/palette는 무시(+경고)한다. 없으면
   `reference_image` → 없으면 `prompt` 경로로 처리한다. LLM adapter는 intent JSON(+ 모티프 명세)만 만들 뿐
   SVG를 만들지 않는다.
-- 포괄 요청은 여러 compatible 후보를 반환한다. 다양성 축은 **layout(placement+symmetry)·colorway·seed**
+- 포괄 요청은 여러 compatible 후보를 반환한다. 다양성 축은 **layout(placement)·colorway·seed**
   셋이다(seed는 scatter layer가 있고 layout×colorway가 요청 수를 못 채울 때만 확장). 랭킹은 `rank_key =
   (색 수, clustering, layout_id, colorway_id, seed)` 오름차순이다 — seam 통과는 랭킹 항이 아니라 그 이전의
   하드 by-construction 드롭이다. 중복은 **동일 SVG 문자열**로 de-dup한다. `layout_id`는 배치·대칭 구성의

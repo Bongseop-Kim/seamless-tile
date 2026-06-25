@@ -151,6 +151,13 @@ def test_mvp_intent_is_valid():
     assert result.warnings == []
 
 
+def test_removed_top_level_arrangement_field_is_rejected():
+    intent = mvp_intent()
+    intent["sym" + "metry"] = {"kind": "removed"}
+    with pytest.raises(IntentInvalid):
+        validate_intent(intent)
+
+
 def test_bare_lane_on_multi_band_stripe_normalized_to_band0():
     # An LLM emits a bare lane ("center") against a multi-band stripe, whose lanes are
     # namespaced (b0.center...). Without repair this fails deep in compose (unknown lane)

@@ -14,7 +14,7 @@ from app.engine.palette import Palette
 from app.core.config import get_settings
 from app.engine.placement import Instance, place
 from app.engine.primitives import build_primitive
-from app.engine.seamless import clone_instances, super_tile
+from app.engine.seamless import clone_instances
 from app.engine.units import fmt
 from app.motifs.registry import (
     MotifDef,
@@ -52,9 +52,6 @@ def compose(intent: Intent, palette: Palette, colorway_id: str | None = None) ->
 
     content = "".join(fragments)
     width = height = tile
-    if intent.symmetry is not None:
-        # Bake tile-level mirror/glide into a (doubled) super-tile that block-tiles.
-        content, width, height = super_tile(content, tile, intent.symmetry)
 
     pattern = (
         '<pattern id="tile" patternUnits="userSpaceOnUse" '

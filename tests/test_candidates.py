@@ -69,12 +69,10 @@ def test_layout_id_is_seed_and_colorway_independent():
 
 def test_lattice_yields_drop_fraction_layouts():
     cs = generate_candidates(lattice_intent(), candidate_count=4)
-    # Symmetry variants are disabled; lattice spacing/drop/size still diversify.
     assert cs.available_strategy_count >= 4
     layouts = [c.candidate.layout_id for c in cs.candidates]
     assert len(cs.candidates) == 4
     assert len(set(layouts)) == 4
-    assert all(c.intent.symmetry is None for c in cs.candidates)
 
 
 def test_single_colorway_lattice_still_returns_four_design_candidates():
@@ -83,7 +81,6 @@ def test_single_colorway_lattice_still_returns_four_design_candidates():
     cs = generate_candidates(intent, candidate_count=4)
 
     assert len(cs.candidates) == 4
-    assert all(c.intent.symmetry is None for c in cs.candidates)
     variants = {
         (
             c.intent.layers[1].placement.lattice.cell_w_mm,
@@ -95,13 +92,12 @@ def test_single_colorway_lattice_still_returns_four_design_candidates():
     assert len(variants) == 4
 
 
-def test_stripe_candidates_vary_width_and_count_without_symmetry():
+def test_stripe_candidates_vary_width_and_count():
     intent = mvp_intent()
     intent["layers"] = intent["layers"][:2]
     cs = generate_candidates(intent, candidate_count=4)
 
     assert len(cs.candidates) == 4
-    assert all(c.intent.symmetry is None for c in cs.candidates)
     stripe_params = [c.intent.layers[1].params for c in cs.candidates]
     # Diversifies along period AND band structure (rhythm presets), so the candidates
     # carry >= 2 distinct stripe signatures (period + per-band offset/width layout).
