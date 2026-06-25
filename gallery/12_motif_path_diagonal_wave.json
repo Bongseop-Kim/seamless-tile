@@ -76,7 +76,7 @@
       "z_order": 2,
       "params": {
         "motif_id": "recraft-832977800421",
-        "size_mm": 14.0,
+        "size_mm": 6.0,
         "colors": {
           "s0": "accent",
           "s1": "gold",
@@ -90,12 +90,13 @@
         "type": "path_following",
         "path": {
           "kind": "wave",
-          "angle": 0,
-          "wavelength": 24,
-          "amplitude": 4
+          "angle": -45,
+          "wavelength": 22.627417,
+          "amplitude": 6
         },
         "spacing_mm": 8,
-        "phase_mm": 0
+        "phase_mm": 0,
+        "rotation": "follow_path"
       }
     }
   ]
