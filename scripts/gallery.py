@@ -6,9 +6,10 @@
 실행하면 된다(svg는 출력물 — gitignore). 새 패턴은 json 새 파일로 추가.
 
 모티프 '모양'은 변주 대상이 아니다(창작 영역). motif layer가 있는 json은
-`scripts/gallery_assets/*.svg`의 더미 모티프를 in-memory 등록해 쓰고, json의 motif_id는
-무시하고 등록 id로 런타임 치환한다(더미를 바꿔도 안 깨진다). 더미가 없으면 motif json은
-스킵하고 배경/stripe json만 렌더한다.
+`scripts/gallery_assets/*.svg`를 in-memory 등록해 쓴다. json의 motif_id는 asset 파일명
+stem(예: `crest.svg` -> `crest`)이나 실제 등록 id를 참조할 수 있다. 알 수 없는 id는
+첫 asset(`default`)로 치환해 기존 gallery json을 계속 렌더한다. asset이 없으면 motif
+json은 스킵하고 배경/stripe json만 렌더한다.
 
 실행:  .venv/bin/python scripts/gallery.py
 검증:  같은 json은 바이트 동일 svg(결정론).
@@ -36,18 +37,29 @@ ASSETS_DIR = _ROOT / "scripts" / "gallery_assets"
 GALLERY_DIR = _ROOT / "gallery"
 
 
-def _load_dummy() -> str | None:
-    """gallery_assets/*.svg 중 첫 파일(이름 정렬)을 in-memory 등록하고 motif_id 반환.
-    없으면 None. _flatten_unsuitable로 full-canvas 배경 제거, render_check=False로
-    librsvg 의존을 피한다."""
+def _load_gallery_motifs() -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """gallery_assets/*.svg 전체를 in-memory 등록하고 alias -> motif_id 맵 반환.
+
+    Alias는 asset stem과 실제 등록 id 둘 다 지원한다. `default`는 이름 정렬 첫 asset이다.
+    _flatten_unsuitable로 full-canvas 배경 제거, render_check=False로 librsvg 의존을 피한다.
+    """
     if not ASSETS_DIR.is_dir():
-        return None
+        return {}, []
     svgs = sorted(ASSETS_DIR.glob("*.svg"))
     if not svgs:
-        return None
-    raw = _flatten_unsuitable(svgs[0].read_text(encoding="utf-8"))
-    motif = normalize_motif_svg(raw, max_color_slots=6, render_check=False)
-    return register_motif(motif, source="gallery")
+        return {}, []
+
+    aliases: dict[str, str] = {}
+    registered: list[tuple[str, str]] = []
+    for svg_path in svgs:
+        raw = _flatten_unsuitable(svg_path.read_text(encoding="utf-8"))
+        motif = normalize_motif_svg(raw, max_color_slots=6, render_check=False)
+        motif_id = register_motif(motif, source="gallery")
+        aliases.setdefault(svg_path.stem, motif_id)
+        aliases[motif_id] = motif_id
+        aliases.setdefault("default", motif_id)
+        registered.append((svg_path.stem, motif_id))
+    return aliases, registered
 
 
 def _scale_svg(svg: str, tile_mm: float) -> str:
@@ -71,11 +83,13 @@ def main() -> int:
         print(f"no *.json in {GALLERY_DIR}", file=sys.stderr)
         return 1
 
-    dummy_id = _load_dummy()
-    if dummy_id is not None:
-        print(f"dummy motif registered: {dummy_id}")
+    motif_aliases, registered_motifs = _load_gallery_motifs()
+    if registered_motifs:
+        print("gallery motifs registered:")
+        for alias, motif_id in registered_motifs:
+            print(f"  {alias}: {motif_id}")
     else:
-        print(f"no dummy SVG in {ASSETS_DIR}/ — motif json will be skipped", file=sys.stderr)
+        print(f"no SVG assets in {ASSETS_DIR}/ — motif json will be skipped", file=sys.stderr)
 
     failures: list[tuple[str, str]] = []
     skipped: list[str] = []
@@ -84,11 +98,20 @@ def main() -> int:
         layers = intent.get("layers", [])
         motif_layers = [L for L in layers if L.get("type") == "motif"]
         if motif_layers:
-            if dummy_id is None:
+            if not motif_aliases:
                 skipped.append(p.stem)
                 continue
-            for L in motif_layers:  # json의 motif_id 무시, 등록 id로 치환
-                L["params"]["motif_id"] = dummy_id
+            for L in motif_layers:
+                requested = L.get("params", {}).get("motif_id", "default")
+                motif_id = motif_aliases.get(requested)
+                if motif_id is None:
+                    motif_id = motif_aliases["default"]
+                    print(
+                        f"  warn {p.stem}: unknown motif_id {requested!r}; "
+                        f"using default motif {motif_id}",
+                        file=sys.stderr,
+                    )
+                L["params"]["motif_id"] = motif_id
         try:
             cand = generate(intent)
         except Exception as exc:  # noqa: BLE001 — 한 json 실패가 나머지를 막지 않게
