@@ -34,16 +34,16 @@ def seeded_rng(seed: int) -> random.Random:
 
 
 def layout_id_for(intent: "Intent") -> str:
-    """Stable id of the placement+symmetry configuration that defines a layout.
+    """Stable id of the placement configuration that defines a layout.
 
     Hashes the intent's structural fields and deliberately excludes ``seed``,
     ``colorways`` and ``palette`` so that two candidates differing only by the
     colorway or seed axis share a ``layout_id`` (they are the same layout), while
-    a change to placement, geometry or symmetry yields a different id. Used for
+    a change to placement or geometry yields a different id. Used for
     de-dup and diversity ranking by the candidate orchestrator.
 
-    ``exclude_none=True`` keeps optional, defaulted-``None`` fields (e.g. a solid
-    ground's ``object_repeat`` params) out of the canonical payload, so adding such
+    ``exclude_none=True`` keeps optional, defaulted-``None`` fields (e.g. a motif
+    layer's unset ``colors`` map) out of the canonical payload, so adding such
     fields does not perturb the layout_id of intents that don't use them.
     """
     payload = intent.model_dump(

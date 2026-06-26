@@ -21,7 +21,7 @@
                   └──> 8  (보안·Recraft)   # 3·4·6·7 의존
 
 # 상위 기능층 (spec: motif-library-and-multicolor)
-9 (영속화) ──> 10 (글루·단색 E2E) ──> 11 (임베딩·변형) ──> 14 (검수·풀 성숙)
+9 (영속화) ──> 10 (글루·단색 E2E) ──> 11 (임베딩·변형) ──> 14 (카탈로그·풀 성숙)
                      └──> 13 (Recraft) ── 의존 ──> 12 (멀티컬러 엔진, 엔진 독립)
 # P0=9+10, P1=11, P2=12+13, P3=14
 ```
@@ -37,7 +37,7 @@
 | 2 | `02-primitives-and-host-contract.md` | background·stripe·lanes()·각도 스냅 | stripe geometry + lane 계약 + commensurate 각도 |
 | 3 | `03-placement-composition-vertical-slice.md` | path_following·`<pattern>` 합성·motif registry | MVP intent가 `<pattern>`+`<use>` SVG로 합성 |
 | 4 | `04-seamless-and-generate-mvp.md` | seamless 강제·검증·generate 파이프라인 | **MVP: 사선 타이 seamless SVG + 결정론** |
-| 5 | `05-coverage-symmetry-and-scatter.md` | lattice/scatter/point_set·mirror/sateen | 비사선 계열 생성(과적합 반증) + mirror seam |
+| 5 | `05-coverage-and-scatter.md` | lattice/scatter/point_set·sateen | 비사선 계열 생성(과적합 반증) |
 | 6 | `06-product-api-and-ops.md` | `/api/v1/generate`·다양성/랭킹·에러/관측 | intent 직접 경로로 후보 반환·de-dup·랭킹 |
 | 7 | `07-llm-and-reference-image-adapters.md` | prompt→intent, image→intent | 모킹 어댑터로 prompt/이미지→SVG |
 | 8 | `08-security-hardening-and-recraft.md` | SVG sanitize·업로드 검증·Recraft intake | injection 차단 + Recraft motif 결정론 등록 |
@@ -46,7 +46,7 @@
 | 11 | `11-embedding-and-variant-sampling.md` | 임베딩 τ 조회 + 시드 변형 샘플링 | seed별 변형 + registry_version 봉인 |
 | 12 | `12-multicolor-engine.md` | 멀티컬러 엔진(슬롯 보존·(b) 바인딩) | N>2 슬롯 렌더 + dedup 유지 + 바이트동일 |
 | 13 | `13-recraft-and-routing.md` | Recraft 연결 + 적합성 게이트 + 라우팅 | detailed 명세 → 멀티컬러 합성 |
-| 14 | `14-curation-and-catalog.md` | Tier2 검수·승격 + 풀 성숙 + ivfflat | curated만 풀 진입 + 변형 실효 |
+| 14 | `14-catalog-and-pool.md` | head 카탈로그 시드 + 풀 성숙 + ivfflat | 즉시 재사용 풀 + 변형 실효 |
 
 세션 9–14는 상위 기능층(멀티컬러 모티프 라이브러리 & 프롬프트 생성)으로,
 설계 기준은 `docs/spec/motif-library-and-multicolor.md`다. 각 세션 파일은 **새 대화창에서 단독 실행**

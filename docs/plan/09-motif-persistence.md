@@ -25,7 +25,7 @@
 - `subject`·`part` 통제 어휘 스켈레톤(컬럼 + 기본 검증).
 
 ## 비범위
-임베딩/pgvector 검색(S11), 멀티컬러(S12), Recraft(S13), 검수 워크플로(S14).
+임베딩/pgvector 검색(S11), 멀티컬러(S12), Recraft(S13), head 카탈로그/풀 성숙(S14).
 
 ## 작업 / 만들·수정 파일
 - (신규) `app/motifs/store.py`, 마이그레이션 SQL(Supabase).

@@ -6,10 +6,8 @@ field does. All share one palette/canvas; only the highlighted attribute changes
 Covered:
   lattice   : block / half-drop / brick / drop_fraction=1/3   (placement.lattice)
   scatter   : poisson (blue-noise) / sateen                   (placement.scatter)
-  symmetry  : mirror_2x2 / glide_h                            (intent.symmetry)
 
-Directional motifs (bee) are used for symmetry so the reflection/glide is visible;
-circles are used elsewhere so the placement itself is the only variable.
+Circles are used so the placement itself is the only variable.
 
 Usage:
     .venv/bin/python examples/intent-showcase/generate.py
@@ -46,8 +44,8 @@ PALETTE = {"slots": [
 COLORWAYS = [{"id": "default", "mapping": {"ground": "#10243a", "accent": "#ef8a7a", "gold": "#f5ca57"}}]
 
 
-def base(layers, symmetry=None):
-    intent = {
+def base(layers):
+    return {
         "intent_version": 1,
         "canvas": {"tile_mm": TILE, "dpi": 300},
         "seed": 7,
@@ -56,9 +54,6 @@ def base(layers, symmetry=None):
         "colorways": COLORWAYS,
         "layers": layers,
     }
-    if symmetry:
-        intent["symmetry"] = symmetry
-    return intent
 
 
 def bg():
@@ -90,9 +85,6 @@ SHOWCASES = {
     # --- scatter modes ---------------------------------------------------------
     "scatter-01-poisson": base([bg(), motif("circle", "accent", 3, {"type": "scatter", "scatter": {"mode": "poisson", "min_dist_mm": 7}})]),
     "scatter-02-sateen": base([bg(), motif("circle", "gold", 4, {"type": "scatter", "scatter": {"mode": "sateen", "sateen_n": 6, "sateen_step": 5}})]),
-    # --- tile-level symmetry (directional bee so the reflection shows) ---------
-    "symmetry-01-mirror2x2": base([bg(), motif("bee", "gold", 7, lattice(cell=24, drop_fraction=0.5))], symmetry={"kind": "mirror_2x2"}),
-    "symmetry-02-glide-h": base([bg(), motif("bee", "gold", 7, lattice(cell=24, drop_fraction=0.5))], symmetry={"kind": "glide_h"}),
 }
 
 

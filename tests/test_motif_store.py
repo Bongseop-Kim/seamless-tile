@@ -122,7 +122,6 @@ def test_restart_simulation_boot_hydrate():
 
     assert count == 1
     assert motif_id in MOTIFS
-    assert "circle" in MOTIFS and "bee" in MOTIFS  # built-ins untouched
 
 
 def test_register_unconfigured_is_noop():

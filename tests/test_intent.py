@@ -6,7 +6,42 @@ from pydantic import ValidationError
 from app.engine.determinism import ReproMeta, seeded_rng, sorted_layers
 from app.engine.intent import ScatterSpec
 from app.engine.seamless import assert_seamless_invariants
+from app.motifs.registry import MOTIFS, MotifDef, _ORIGIN, _UNIT_BBOX, _symbol
 from app.validate.intent import IntentInvalid, validate_intent
+
+
+def _register_test_motifs() -> None:
+    """circle/bee are no longer shipped built-ins; the engine tests still exercise the
+    seamless/composition/determinism machinery against fixed geometry, so re-register the
+    same ids + verbatim geometry as TEST fixtures. Done at import time (not a conftest
+    fixture) because the determinism subprocess tests import this module directly without
+    pytest. ``setdefault`` keeps it idempotent and re-import-safe."""
+    MOTIFS.setdefault(
+        "circle",
+        MotifDef(
+            id="circle",
+            symbol=_symbol("circle", '<circle cx="0" cy="0" r="0.5" fill="currentColor"/>'),
+            bbox_mm=_UNIT_BBOX,
+            anchor=_ORIGIN,
+        ),
+    )
+    MOTIFS.setdefault(
+        "bee",
+        MotifDef(
+            id="bee",
+            symbol=_symbol(
+                "bee",
+                '<ellipse cx="0" cy="0" rx="0.22" ry="0.42" fill="currentColor"/>'
+                '<ellipse cx="-0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>'
+                '<ellipse cx="0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>',
+            ),
+            bbox_mm=_UNIT_BBOX,
+            anchor=_ORIGIN,
+        ),
+    )
+
+
+_register_test_motifs()
 
 
 def mvp_intent() -> dict:
@@ -116,11 +151,44 @@ def test_mvp_intent_is_valid():
     assert result.warnings == []
 
 
+def test_removed_top_level_arrangement_field_is_rejected():
+    intent = mvp_intent()
+    intent["sym" + "metry"] = {"kind": "removed"}
+    with pytest.raises(IntentInvalid):
+        validate_intent(intent)
+
+
+def test_bare_lane_on_multi_band_stripe_normalized_to_band0():
+    # An LLM emits a bare lane ("center") against a multi-band stripe, whose lanes are
+    # namespaced (b0.center...). Without repair this fails deep in compose (unknown lane)
+    # and drops every candidate -> opaque 500. Repair normalizes it to band 0.
+    intent = mvp_intent()
+    intent["layers"][1]["params"]["bands"] = [
+        {"offset_mm": 0, "width_mm": 2.4, "color": "accent"},
+        {"offset_mm": 4.8, "width_mm": 2.4, "color": "accent"},
+    ]
+    result = validate_intent(intent)
+    lanes = [la.placement.lane for la in result.intent.layers if la.type == "motif"]
+    assert lanes == ["b0.center", "b0.end"]
+    assert any("normalized to 'b0.center'" in w for w in result.warnings)
+    assert_seamless_invariants(result.intent)  # composes (was: unknown lane)
+
+
 def test_unknown_host_layer_rejected():
     intent = mvp_intent()
     intent["layers"][2]["placement"]["host_layer"] = "does_not_exist"
     with pytest.raises(IntentInvalid):
         validate_intent(intent)
+
+
+def test_path_following_host_must_be_stripe():
+    # Only a stripe exposes lanes(); an LLM that hosts path_following on the background
+    # would otherwise crash in compose (AttributeError: 'Background' has no 'lanes') -> 500.
+    intent = mvp_intent()
+    intent["layers"][2]["placement"]["host_layer"] = "ground"  # a background layer
+    with pytest.raises(IntentInvalid) as exc:
+        validate_intent(intent)
+    assert "must be a stripe" in str(exc.value)
 
 
 @pytest.mark.parametrize("field", ["host_layer", "lane", "spacing_mm"])
@@ -141,18 +209,27 @@ def test_period_not_dividing_tile_rejected():
         validate_intent(intent, repair=False)
 
 
-def test_color_count_over_max_rejected_for_screen():
+def test_color_count_over_max_rejected_for_yarn_dyed():
     intent = mvp_intent()
-    intent["production"] = {"method": "screen", "max_colors": 2}  # 3 colors > 2
+    intent["production"] = {"method": "yarn_dyed", "max_colors": 2}  # 3 colors > 2
     with pytest.raises(IntentInvalid):
         validate_intent(intent)
 
 
-def test_color_count_not_enforced_for_digital():
+def test_color_count_not_enforced_for_print():
     intent = mvp_intent()
-    intent["production"] = {"method": "digital", "max_colors": 2}
-    # digital jobs are not color-limited
+    intent["production"] = {"method": "print", "max_colors": 2}
+    # print jobs are not color-limited
     assert validate_intent(intent).intent.production.max_colors == 2
+
+
+def test_legacy_method_digital_screen_coerced_to_print():
+    intent = mvp_intent()
+    # legacy print sub-methods map to "print" (backward compat) -> color count not enforced
+    intent["production"] = {"method": "digital", "max_colors": 2}
+    assert validate_intent(intent).intent.production.method == "print"
+    intent["production"] = {"method": "screen", "max_colors": 2}
+    assert validate_intent(intent).intent.production.method == "print"
 
 
 def test_duplicate_layer_id_rejected():

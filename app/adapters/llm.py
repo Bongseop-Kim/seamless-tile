@@ -17,12 +17,13 @@ import copy
 import json
 import math
 import re
+from pathlib import Path
 from typing import Protocol
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
 from app.core.config import get_settings
 from app.motifs import facets
-from app.motifs.registry import MOTIFS, normalize_motif_svg, register_motif
+from app.motifs.registry import normalize_motif_svg, register_motif
 from app.render.sanitize import SanitizeError
 from app.validate.intent import IntentInvalid, validate_intent
 
@@ -75,7 +76,7 @@ _EXAMPLE_INTENT = {
     "intent_version": 1,
     "canvas": {"tile_mm": 48, "dpi": 300},
     "seed": 0,
-    "production": {"method": "digital", "max_colors": 12},
+    "production": {"method": "print", "max_colors": 12},
     "palette": {
         "slots": [
             {"id": "ground", "hex": "#10243a"},
@@ -114,57 +115,86 @@ _EXAMPLE_INTENT = {
 }
 
 
-# A second example design whose GROUND is a typed object_repeat texture (a single-color
-# motif on a fine lattice, baked into the ground via background.params), with a stripe
-# overlaid -- shows the model the shape of a textured-ground design. The ground texture is
-# a property of the background, NOT a separate motif layer.
-_EXAMPLE_INTENT_TEXTURED = {
-    "intent_version": 1,
-    "canvas": {"tile_mm": 48, "dpi": 300},
-    "seed": 0,
-    "production": {"method": "digital", "max_colors": 12},
-    "palette": {
-        "slots": [
-            {"id": "ground", "hex": "#10243a"},
-            {"id": "ground_tone", "hex": "#16314f"},
-            {"id": "accent", "hex": "#ef8a7a"},
-        ]
-    },
-    "colorways": [
-        {
-            "id": "default",
-            "name": "default",
-            "mapping": {"ground": "#10243a", "ground_tone": "#16314f", "accent": "#ef8a7a"},
-        }
-    ],
-    "layers": [
-        {
-            "id": "ground",
-            "type": "background",
-            "z_order": 0,
-            "params": {
-                "color": "ground",
-                "kind": "object_repeat",
-                "motif_id": "circle",
-                "cell_mm": 8,
-                "texture_color": "ground_tone",
-            },
-        },
-        {
-            "id": "stripe_base",
-            "type": "stripe",
-            "z_order": 1,
-            "params": {
-                "angle": -45.0,
-                "period_mm": 33.9411,
-                "bands": [
-                    {"offset_mm": 0, "width_mm": 14.0, "color": "accent"},
-                    {"offset_mm": 18.0, "width_mm": 5.0, "color": "accent"},
-                ],
-            },
-        },
-    ],
-}
+# Structural fields kept when distilling a gallery intent into a best-practice example.
+# Everything else (palette/colorways/production/seed, and per-layer color refs) is dropped:
+# the examples teach COMPOSITION (band rhythm, placement, sizing), not color or motif art.
+_SKELETON_PARAM_KEYS = ("angle", "period_mm", "size_mm")
+
+
+def _structural_skeleton(intent: dict) -> dict:
+    """Distill a resolved gallery intent into a color/motif-free structural example.
+
+    Keeps canvas + each layer's type/z_order/placement and the geometry params (angle,
+    period_mm, bands offset/width, size_mm). Drops palette/colorways/production/seed and
+    every color reference. Replaces a motif layer's real ``motif_id`` with the layer id
+    (the placeholder convention the model is told to follow) so examples never teach it to
+    invent registry ids. Pure: returns a fresh dict, never mutates the input."""
+    skel: dict = {}
+    if isinstance(intent.get("canvas"), dict):
+        skel["canvas"] = dict(intent["canvas"])
+    layers_out: list[dict] = []
+    for layer in intent.get("layers", []) or []:
+        if not isinstance(layer, dict):
+            continue
+        lid = layer.get("id")
+        lout: dict = {"id": lid, "type": layer.get("type")}
+        if "z_order" in layer:
+            lout["z_order"] = layer["z_order"]
+        params = layer.get("params")
+        if isinstance(params, dict):
+            pout: dict = {}
+            if "motif_id" in params:  # placeholder = layer id (drops the real registry id)
+                pout["motif_id"] = lid
+            for k in _SKELETON_PARAM_KEYS:
+                if k in params:
+                    pout[k] = params[k]
+            bands = params.get("bands")
+            if isinstance(bands, list):
+                pout["bands"] = [
+                    {bk: b[bk] for bk in ("offset_mm", "width_mm") if bk in b}
+                    for b in bands
+                    if isinstance(b, dict)
+                ]
+            if pout:
+                lout["params"] = pout
+        if isinstance(layer.get("placement"), dict):
+            lout["placement"] = copy.deepcopy(layer["placement"])
+        layers_out.append(lout)
+    skel["layers"] = layers_out
+    return skel
+
+
+def _load_gallery_skeletons() -> list[dict]:
+    """Load gallery/*.json and distill each into a structural skeleton (sorted by filename
+    for prompt determinism). Best-effort: skips unreadable/invalid files; returns [] if the
+    directory is absent so the app never hard-depends on the gallery."""
+    gallery_dir = Path(__file__).resolve().parents[2] / "gallery"
+    skeletons: list[dict] = []
+    for path in sorted(gallery_dir.glob("*.json")):
+        try:
+            intent = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(intent, dict):
+            skeletons.append(_structural_skeleton(intent))
+    return skeletons
+
+
+# Computed once at import (sorted, deterministic); reused across every prompt build.
+_GALLERY_SKELETONS = _load_gallery_skeletons()
+
+
+def _load_color_guide() -> str:
+    """Load the repo-root color_guide.md (palette/color-count rules) as prompt text.
+    Best-effort: returns '' if absent so the app never hard-depends on it."""
+    path = Path(__file__).resolve().parents[2] / "color_guide.md"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+_COLOR_GUIDE = _load_color_guide()
 
 
 def _build_prompt(
@@ -175,7 +205,6 @@ def _build_prompt(
     errors: list[str] | None,
 ) -> str:
     target_canvas = canvas or {"tile_mm": DEFAULT_TILE_MM, "dpi": DEFAULT_DPI}
-    builtin_ids = ", ".join(sorted(MOTIFS))
     scope_vocab = ", ".join(sorted(facets.SCOPE_VOCAB))
     example = {
         "designs": [
@@ -193,7 +222,6 @@ def _build_prompt(
                     }
                 ],
             },
-            {"intent": _EXAMPLE_INTENT_TEXTURED, "motif_specs": []},
         ]
     }
     lines = [
@@ -201,10 +229,9 @@ def _build_prompt(
         "SVG engine. The engine handles all geometry, repetition and seamlessness.",
         'Output ONLY one JSON object with a "designs" array. You MUST return 2 to 4 '
         "GENUINELY DIFFERENT designs (not near-duplicates): vary the motif, layout and "
-        "structure — band rhythm, placement, and the ground kind (solid vs object_repeat "
-        "texture) — NOT just the color. For example, for a stripe request: one stripe on a "
-        "solid ground; one stripe over an object_repeat textured ground; one with a "
-        "different band rhythm. "
+        "structure — band rhythm and placement — NOT just the color. For example, for a "
+        "stripe request: one stripe on a solid ground; one with a different band rhythm; "
+        "one with a different motif. "
         'Each entry has two keys "intent" and "motif_specs". No SVG, no coordinates, no '
         "markdown, no prose.",
         "",
@@ -217,8 +244,6 @@ def _build_prompt(
         "- For EACH motif layer in intent.layers, set params.motif_id to that layer's "
         "id (a placeholder the resolver replaces) and add a matching motif_specs entry "
         "whose layer_id equals the layer id. Do NOT invent registry ids.",
-        f"- You MAY instead reference a built-in motif directly (motif_id one of: "
-        f"{builtin_ids}); omit its motif_specs entry if you do.",
         "- Each motif_specs entry needs: subject (free text, required — any object, "
         "shape, or abstract idea), scope "
         f"(REQUIRED, one of: {scope_vocab}) — the motif's granularity: 'whole' for the "
@@ -231,14 +256,11 @@ def _build_prompt(
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
         "- Respect the user's pattern class. For simple polka dots on a solid "
-        "background, use a background layer plus a built-in circle motif on lattice "
-        "placement; do NOT add stripe host layers.",
-        "- Ground kind: a background layer's params.kind is 'solid' (default; just "
-        "params.color) or 'object_repeat' for an all-over tonal texture. For object_repeat "
-        "set params: color (base ground slot), motif_id (one of circle/diamond/square/"
-        "twill/herringbone), cell_mm (must divide tile_mm), and texture_color (a separate "
-        "tone-on-tone slot, close to the ground color). Do NOT build a ground from a "
-        "separate motif layer — the texture is a property of the background.",
+        "background, use a background layer plus a motif layer on lattice placement with "
+        'a matching motif_specs entry (subject e.g. "dot"/"circle"); do NOT add stripe '
+        "host layers.",
+        "- A background layer is a flat solid fill: params has only `color` (a palette "
+        "slot id). It carries no texture or motif of its own.",
         "- Placement specs are mandatory: type 'lattice' needs a lattice object with "
         "cell_w_mm and cell_h_mm; type 'scatter' needs a scatter object; type "
         "'path_following' needs host_layer+lane or path plus spacing_mm.",
@@ -252,6 +274,31 @@ def _build_prompt(
         "the user explicitly asks for uniform/even stripes.",
         f"- target canvas: {json.dumps(target_canvas)}.",
     ]
+    # Best-practice block is large and identical across requests: keep it in the common
+    # prefix (before the variable palette/description tail) so Gemini implicit caching can
+    # hit it. See https://ai.google.dev/gemini-api/docs — "put large/common content first".
+    if _GALLERY_SKELETONS:
+        lines += [
+            "",
+            "Best-practice compositions (study these): emulate the stripe angles "
+            "and band rhythm (uneven offset/width ratios), and the motif placement, sizing "
+            "and layer composition. These are STRUCTURE ONLY — colors and motif art are "
+            "stripped/placeholder; choose your own palette and motif_specs to fit the "
+            "description. Keep the output shape of the example above (designs/intent/"
+            "motif_specs).",
+            json.dumps(_GALLERY_SKELETONS, ensure_ascii=False, indent=2),
+        ]
+    lines += [
+        "",
+        "FABRICATION FIRST: before choosing colors, decide from the description whether "
+        "it is yarn-dyed (woven — stripes/checks/gingham/chambray) or print, and set "
+        'production.method to "yarn_dyed" or "print" accordingly. Yarn-dyed is color-'
+        "limited: keep production.max_colors and each colorway to 2-8 colors.",
+        "COLORS: if the description names specific colors, use those. Otherwise pick from "
+        "the recommended palette in the color guide below.",
+    ]
+    if _COLOR_GUIDE:
+        lines += ["", "Color guide:", _COLOR_GUIDE]
     if palette:
         lines.append(f"- preferred palette hint: {json.dumps(palette)}.")
     lines += ["", f"Description: {user_prompt}"]
@@ -339,32 +386,6 @@ def _validate_spec_facets(specs: list[dict]) -> list[str]:
         except ValueError as exc:
             errors.append(f"motif_specs[{i}]: {exc}")
     return errors
-
-
-def _drop_redundant_builtin_specs(intent_raw: dict, specs: list[dict]) -> list[dict]:
-    layers = {
-        layer.get("id"): layer
-        for layer in intent_raw.get("layers", [])
-        if isinstance(layer, dict)
-    }
-    out: list[dict] = []
-    for spec in specs:
-        layer = layers.get(spec.get("layer_id"))
-        motif_id = (
-            layer.get("params", {}).get("motif_id")
-            if isinstance(layer, dict)
-            else None
-        )
-        subject = spec.get("subject")
-        if (
-            isinstance(motif_id, str)
-            and motif_id in MOTIFS
-            and isinstance(subject, str)
-            and subject.strip().casefold() == motif_id.casefold()
-        ):
-            continue
-        out.append(spec)
-    return out
 
 
 _STRIPE_AXIS_TOL_DEG = 8.0
@@ -464,7 +485,6 @@ def build_intents(
         for idx, (intent_raw, specs) in enumerate(_split_designs(raw)):
             intent_raw.setdefault("intent_version", 1)
             _normalize_stripes(intent_raw, get_settings())
-            specs = _drop_redundant_builtin_specs(intent_raw, specs)
             facet_errors = _validate_spec_facets(specs)
             if facet_errors:
                 design_errors += [f"design[{idx}]: {e}" for e in facet_errors]

@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import math
 
-from app.engine.intent import Intent, SymmetrySpec
+from app.engine.intent import Intent
 from app.engine.placement import Instance
-from app.engine.units import divides, fmt, snap_angle, stripe_tiles
+from app.engine.units import divides, snap_angle, stripe_tiles
 from app.motifs.registry import MotifDef
 
 _EPS = 1e-9
@@ -113,24 +113,13 @@ def assert_seamless_invariants(intent: Intent) -> None:
 
     Re-asserts the commensurability already enforced by ``validate_intent``
     (``period|tile`` for stripes, ``spacing|tile`` for path placements, lattice cell
-    divisibility, sateen coprimality, object_repeat ground cell divisibility) and that
-    each stripe's snapped angle has an integer rational closure ``(p, q)``. Raises
-    ``AssertionError`` on violation. Does NOT enforce ``spacing|L`` (see module docstring).
+    divisibility, sateen coprimality) and that each stripe's snapped angle has an integer
+    rational closure ``(p, q)``. Raises ``AssertionError`` on violation. Does NOT enforce
+    ``spacing|L`` (see module docstring).
     """
     tile = intent.canvas.tile_mm
     for layer in intent.layers:
-        if layer.type == "background":
-            # object_repeat ground bakes a texture lattice into the ground fragment;
-            # its cell must divide the tile so the lattice tiles seamlessly (cell <= tile
-            # then bounds the motif size, mirroring the motif-layer guard).
-            if layer.params.kind == "object_repeat" and not divides(
-                tile, layer.params.cell_mm
-            ):
-                raise AssertionError(
-                    f"layer {layer.id!r}: object_repeat cell_mm {layer.params.cell_mm} "
-                    f"does not divide tile_mm {tile}"
-                )
-        elif layer.type == "stripe":
+        if layer.type == "stripe":
             period = layer.params.period_mm
             snapped = snap_angle(layer.params.angle)
             if not stripe_tiles(tile, period, snapped.p, snapped.q):
@@ -178,51 +167,3 @@ def assert_seamless_invariants(intent: Intent) -> None:
                             f"with sateen_n {spec.sateen_n}"
                         )
 
-
-def _reflect_group(content: str, tx: float, ty: float, sx: int, sy: int) -> str:
-    """Wrap ``content`` in a reflected/translated group (a single <g>, no geometry copy).
-
-    The same ``<use>`` elements are re-referenced inside the group, so the
-    enumerate-free invariant holds; the ``<pattern>`` clips overflow.
-    """
-    return (
-        f'<g transform="translate({fmt(tx)} {fmt(ty)}) scale({sx} {sy})">'
-        f"{content}</g>"
-    )
-
-
-def super_tile(
-    content: str, tile_mm: float, symmetry: SymmetrySpec
-) -> tuple[str, float, float]:
-    """Bake a tile-level mirror/glide symmetry into a super-tile.
-
-    Returns ``(super_content, width_mm, height_mm)``. The base tile occupies
-    ``[0, tile)^2``; reflected copies fill the rest of the (doubled) super-tile, which
-    then block-tiles seamlessly. Mirror seam continuity is by construction: the base is
-    already torus-seamless, and a reflection meeting the base at the internal axis is
-    continuous, while the super-tile's outer edges (reflection-invariant boundary
-    columns/rows) match under block tiling.
-    """
-    t = tile_mm
-    kind = symmetry.kind
-    if kind == "mirror_h":
-        return content + _reflect_group(content, 2 * t, 0.0, -1, 1), 2 * t, t
-    if kind == "mirror_v":
-        return content + _reflect_group(content, 0.0, 2 * t, 1, -1), t, 2 * t
-    if kind == "mirror_2x2":
-        h = _reflect_group(content, 2 * t, 0.0, -1, 1)
-        v = _reflect_group(content, 0.0, 2 * t, 1, -1)
-        hv = _reflect_group(content, 2 * t, 2 * t, -1, -1)
-        return content + h + v + hv, 2 * t, 2 * t
-    if kind in ("glide_h", "glide_v"):
-        shift = symmetry.shift_mm if symmetry.shift_mm is not None else t / 2.0
-        if kind == "glide_h":
-            # Reflected half is shifted along y; emit twice (shift, shift-tile) so the
-            # pattern box is fully covered (a single shifted group would leave a gap).
-            g1 = _reflect_group(content, 2 * t, shift, -1, 1)
-            g2 = _reflect_group(content, 2 * t, shift - t, -1, 1)
-            return content + g1 + g2, 2 * t, t
-        g1 = _reflect_group(content, shift, 2 * t, 1, -1)
-        g2 = _reflect_group(content, shift - t, 2 * t, 1, -1)
-        return content + g1 + g2, t, 2 * t
-    raise ValueError(f"unsupported symmetry kind: {kind!r}")

@@ -6,7 +6,7 @@ pydantic. Cross-field semantic validation and repair live in ``app.validate.inte
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Canvas(BaseModel):
@@ -19,8 +19,16 @@ class Canvas(BaseModel):
 class Production(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    method: Literal["digital", "screen"] = "digital"
+    # Top-level fabrication axis: yarn-dyed (woven) vs print. Color-count limits and
+    # palette guidance differ by this. Legacy "digital"/"screen" (print sub-methods) map
+    # to "print" for backward compat.
+    method: Literal["yarn_dyed", "print"] = "print"
     max_colors: int = Field(default=12, gt=0)
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _coerce_legacy_method(cls, v: object) -> object:
+        return "print" if v in ("digital", "screen") else v
 
 
 class ColorSlotSpec(BaseModel):
@@ -138,29 +146,7 @@ class Placement(BaseModel):
 class BackgroundParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    color: str  # base ground color slot id
-    # Ground kind. "solid" is a flat fill (legacy shape: just `color`). "object_repeat"
-    # is a self-contained, seamless tonal ground -- a single-color texture motif on a
-    # fine lattice, baked into the ground fragment (NOT a separate stacked layer). The
-    # three object_repeat fields are required iff kind == "object_repeat".
-    kind: Literal["solid", "object_repeat"] = "solid"
-    motif_id: str | None = None
-    cell_mm: float | None = Field(default=None, gt=0)
-    texture_color: str | None = None  # tone-on-tone texture slot id
-
-    @model_validator(mode="after")
-    def _kind_fields(self) -> "BackgroundParams":
-        repeat_fields = (self.motif_id, self.cell_mm, self.texture_color)
-        if self.kind == "object_repeat":
-            if any(f is None for f in repeat_fields):
-                raise ValueError(
-                    "object_repeat ground requires motif_id, cell_mm, texture_color"
-                )
-        elif any(f is not None for f in repeat_fields):
-            raise ValueError(
-                "solid ground must not set motif_id/cell_mm/texture_color"
-            )
-        return self  # color slot id
+    color: str  # base ground color slot id (flat fill)
 
 
 class Band(BaseModel):
@@ -239,20 +225,6 @@ Layer = Annotated[
 ]
 
 
-class SymmetrySpec(BaseModel):
-    """Tile-level arrangement symmetry, baked into a super-tile by the SeamlessEngine.
-
-    SVG ``<pattern>`` cannot reflect natively, so mirror/glide are realized by baking
-    reflected copies of the whole tile into a 2x1 / 1x2 / 2x2 super-tile that then
-    block-tiles. ``glide_*`` adds a ``shift_mm`` (default tile/2) along the seam axis.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["mirror_h", "mirror_v", "mirror_2x2", "glide_h", "glide_v"]
-    shift_mm: float | None = Field(default=None, gt=0)
-
-
 class Intent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -263,4 +235,3 @@ class Intent(BaseModel):
     palette: PaletteSpec
     colorways: list[ColorwaySpec] = Field(min_length=1, max_length=32)
     layers: list[Layer] = Field(min_length=1, max_length=64)
-    symmetry: SymmetrySpec | None = None

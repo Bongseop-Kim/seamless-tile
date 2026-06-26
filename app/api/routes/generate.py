@@ -72,7 +72,7 @@ _INTENT_DIRECT_EXAMPLE = {
         "intent_version": 1,
         "canvas": {"tile_mm": 48, "dpi": 300},
         "seed": 184231,
-        "production": {"method": "digital", "max_colors": 12},
+        "production": {"method": "print", "max_colors": 12},
         "palette": {
             "slots": [
                 {"id": "ground", "hex": "#10243a", "name": "navy"},
@@ -177,7 +177,7 @@ async def generate_candidate(
     input_type = "intent"
 
     # Cache short-circuit BEFORE any adapter/engine/render work. The repro seal moves with
-    # the curated pool, so it is part of the key (pool change -> auto-invalidation); it is a
+    # the reusable motif pool, so it is part of the key (pool change -> auto-invalidation); it is a
     # pure function of the pool, memoized per (store, epoch), so calling it on a hit is cheap.
     settings = get_settings()
     loop = asyncio.get_event_loop()
@@ -219,18 +219,20 @@ async def generate_candidate(
         ]
     elif request.reference_image is not None:
         input_type = "reference_image"
-        adapted = _run_adapter(
-            lambda: image_build_intent(request.reference_image, canvas=request.canvas)
+        adapted = await asyncio.to_thread(
+            _run_adapter,
+            lambda: image_build_intent(request.reference_image, canvas=request.canvas),
         )
         source_fidelity = adapted.source_fidelity
         warnings += adapted.warnings
         designs = [(adapted.intent, adapted.motif_specs)]
     elif request.prompt is not None:
         input_type = "prompt"
-        adapted_list = _run_adapter(
+        adapted_list = await asyncio.to_thread(
+            _run_adapter,
             lambda: llm_build_intents(
                 request.prompt, canvas=request.canvas, palette=request.palette
-            )
+            ),
         )
         source_fidelity = adapted_list[0].source_fidelity
         for adapted in adapted_list:
@@ -283,7 +285,6 @@ async def generate_candidate(
             colorway=request.colorway,
             source_fidelity=source_fidelity,
             registry_version=reg_version,
-            vary_ground=(input_type == "prompt"),
         )
     except IntentInvalid as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from None

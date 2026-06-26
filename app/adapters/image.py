@@ -7,8 +7,8 @@ reproduction (ARCHITECTURE.md "Reference Image 처리 정책"). Two parts:
   (no scikit-learn). 8-16 dominant colors -> palette slots + a default colorway.
 - **VLM structure hints** and **vectorization** are injected seams (Protocols),
   mocked in tests. The vectorize fit/unfit rule (path_count <= N AND color_count <= M)
-  decides ``source_fidelity``; unfit textures fall back to palette + a library motif
-  and are flagged. Actual raster-hybrid baking is session 8.
+  decides ``source_fidelity``; unfit textures fall back to palette only and are flagged.
+  Actual raster-hybrid baking is session 8.
 
 Transport is a base64 / data-URI string in the JSON body. Upload validation runs on
 this path (session 8): an encoded-size guard, then format allowlist, pixel/decode-bomb
@@ -49,9 +49,6 @@ MAX_IMAGE_PIXELS = 24_000_000
 # Vectorization fit thresholds (ARCHITECTURE.md: clean path under a count, bounded colors).
 VECTORIZE_MAX_PATHS = 1500
 VECTORIZE_MAX_COLORS = 32
-
-_FALLBACK_MOTIF = "circle"  # always present in the registry
-
 
 @dataclass(frozen=True)
 class VectorResult:
@@ -234,7 +231,7 @@ def _assemble_intent(slots: list[dict], *, motif_id: str | None, tile_mm: float,
         "intent_version": 1,
         "canvas": {"tile_mm": tile_mm, "dpi": dpi},
         "seed": 0,
-        "production": {"method": "digital", "max_colors": max(12, len(slots))},
+        "production": {"method": "print", "max_colors": max(12, len(slots))},
         "palette": {"slots": slots},
         "colorways": [{"id": "default", "name": "default", "mapping": mapping}],
         "layers": layers,
@@ -285,7 +282,8 @@ def build_intent(
     warnings: list[str] = []
 
     # VLM structure hint (style/motif). Optional & mocked; only registry motifs are honored.
-    motif_id: str | None = _FALLBACK_MOTIF
+    # No usable hint -> motif_id stays None and the motif layer is dropped (palette only).
+    motif_id: str | None = None
     if vlm is not None:
         try:
             hints = vlm.describe(data)
@@ -296,6 +294,8 @@ def build_intent(
         # would raise TypeError on the dict membership test and escape as a 500.
         if isinstance(cand, str) and cand in MOTIFS:
             motif_id = cand
+    if motif_id is None:
+        warnings.append("motif inference unavailable/ignored; using palette only")
 
     # Vectorization fit/unfit -> source_fidelity (vectorizer is mocked in tests).
     source_fidelity = "vector"
@@ -308,8 +308,8 @@ def build_intent(
         if source_fidelity != "vector":
             warnings.append(
                 "reference texture is unfit for clean vectorization "
-                f"(paths={vres.path_count}, colors={vres.color_count}); using palette + "
-                "library motif fallback (raster baking deferred to session 8)"
+                f"(paths={vres.path_count}, colors={vres.color_count}); using palette "
+                "only (raster baking deferred to session 8)"
             )
 
     tile_mm = float((canvas or {}).get("tile_mm", DEFAULT_TILE_MM))

@@ -12,10 +12,10 @@ that Placement/Composition consume without knowing the inner geometry:
   bounding-box extent in mm) and the anchor lands exactly on the lane point.
 - Color is normalized to a slot reference via ``fill="currentColor"``; the bound
   output color is set as ``color=`` on the ``<use>`` at composition time, so
-  colorway swaps work. The MVP ``circle``/``bee`` are single-color.
+  colorway swaps work. Single-color motifs keep the legacy ``currentColor`` convention.
 
-Built-in motifs are registered here. Recraft-generated motifs (session 8) will be
-registered through the same contract at authoring time.
+No motifs ship built-in; every motif is generated (LLM/Recraft) and registered through
+this contract at authoring time.
 """
 
 from __future__ import annotations
@@ -131,97 +131,11 @@ def _symbol(motif_id: str, geometry: str) -> str:
     return f'<symbol id="motif-{motif_id}" overflow="visible">{geometry}</symbol>'
 
 
-_CIRCLE = MotifDef(
-    id="circle",
-    symbol=_symbol("circle", '<circle cx="0" cy="0" r="0.5" fill="currentColor"/>'),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-# A simple, single-color bee silhouette within the unit box: a vertical body
-# ellipse flanked by two wing ellipses. All fills are currentColor.
-_BEE = MotifDef(
-    id="bee",
-    symbol=_symbol(
-        "bee",
-        '<ellipse cx="0" cy="0" rx="0.22" ry="0.42" fill="currentColor"/>'
-        '<ellipse cx="-0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>'
-        '<ellipse cx="0.3" cy="-0.1" rx="0.18" ry="0.28" fill="currentColor"/>',
-    ),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-# Geometric ground-texture motifs (foulard/neat) and woven-texture approximations
-# (twill/herringbone). All single-color (currentColor); unit bbox centered at origin.
-# twill: a corner-to-corner diagonal stroke -> on a cell==size lattice the strokes meet
-# at cell edges and read as continuous diagonal twill lines. herringbone: a chevron that
-# packs into V rows. dot/diamond/square are spaced; twill/herringbone tile edge-to-edge.
-_DIAMOND = MotifDef(
-    id="diamond",
-    symbol=_symbol("diamond", '<polygon points="0,-0.5 0.5,0 0,0.5 -0.5,0" fill="currentColor"/>'),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-_SQUARE = MotifDef(
-    id="square",
-    symbol=_symbol("square", '<rect x="-0.5" y="-0.5" width="1" height="1" fill="currentColor"/>'),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-_TWILL = MotifDef(
-    id="twill",
-    symbol=_symbol(
-        "twill",
-        '<path d="M-0.5 0.5 L0.5 -0.5" stroke="currentColor" stroke-width="0.35" '
-        'fill="none"/>',
-    ),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-_HERRINGBONE = MotifDef(
-    id="herringbone",
-    symbol=_symbol(
-        "herringbone",
-        '<polyline points="-0.5,0.5 0,-0.5 0.5,0.5" stroke="currentColor" '
-        'stroke-width="0.3" fill="none"/>',
-    ),
-    bbox_mm=_UNIT_BBOX,
-    anchor=_ORIGIN,
-)
-
-MOTIFS: dict[str, MotifDef] = {
-    _CIRCLE.id: _CIRCLE,
-    _BEE.id: _BEE,
-    _DIAMOND.id: _DIAMOND,
-    _SQUARE.id: _SQUARE,
-    _TWILL.id: _TWILL,
-    _HERRINGBONE.id: _HERRINGBONE,
-}
+MOTIFS: dict[str, MotifDef] = {}
 
 
-# Ground-texture motif vocabulary (built-ins), shared by the renderer (object_repeat
-# ground) and the candidate variant generator. Discrete shapes are spaced; the line
-# weaves (twill/herringbone) tile edge-to-edge so they fill their cell.
-TEXTURE_MOTIFS: tuple[str, ...] = ("circle", "diamond", "square", "twill", "herringbone")
-TEXTURE_LINE_MOTIFS: frozenset[str] = frozenset({"twill", "herringbone"})
-
-
-def ground_motif_size(cell_mm: float, motif_id: str) -> float:
-    """Rendered motif extent for a dense seamless ground-texture cell.
-
-    Line weaves span the cell edge-to-edge (size == cell) so adjacent cells connect into
-    continuous lines; discrete shapes fill 0.7 of the cell so they read as spaced dots/
-    diamonds. ``cell_mm`` divides the tile (validated), so size <= cell <= tile.
-    """
-    return cell_mm if motif_id in TEXTURE_LINE_MOTIFS else cell_mm * 0.7
-
-
-# The ids shipped in-process (captured before any store/test registers more), so callers
-# (e.g. test cleanup) can distinguish built-ins from dynamically registered motifs.
+# No motifs ship built-in (kept as an empty set so consumers — e.g. test cleanup and the
+# delete_motif guard — can still distinguish built-ins from dynamically registered motifs).
 BUILTIN_MOTIF_IDS: frozenset[str] = frozenset(MOTIFS)
 
 
@@ -255,7 +169,6 @@ def register_motif(
     description: str | None = None,
     tags: list[str] | None = None,
     source: str = "recraft",
-    status: str = "auto",
     color_slots: list[str] | None = None,
     embedding: list[float] | None = None,
 ) -> str:
@@ -289,13 +202,11 @@ def register_motif(
         description=description,
         tags=tags or [],
         source=source,
-        status=status,
         color_slots=color_slots or list(motif.color_slots),
         embedding=embedding,
     )
     MOTIFS[motif.id] = motif
-    if status == "curated":
-        _bump_curated_pool_epoch()
+    _bump_registry_pool_epoch()
     return motif.id
 
 
@@ -358,46 +269,28 @@ def hydrate_from_store(store: "MotifStore") -> int:
     return len(records)
 
 
-def promote_motif(motif_id: str) -> None:
-    """Promote a persisted motif from 'auto' to 'curated' (spec §8 Tier2).
-
-    Only curated variants enter the seed-sampling pool (spec §7.4), so this is what
-    activates a motif for variant sampling. The in-memory ``MOTIFS`` dict holds only
-    geometry (no status), so nothing in-process needs to change — the variant pool
-    query reads the status from the store on the next request.
-
-    Curation is an explicit admin action, so unlike authoring write-through a missing
-    store (``MotifStoreNotConfigured``) or a DB failure (``MotifStoreError``)
-    propagates rather than being swallowed.
-    """
-    from app.motifs.store import _resolve_store
-
-    _resolve_store().set_status(motif_id, "curated")
-    _bump_curated_pool_epoch()
-
-
-def reject_motif(motif_id: str) -> None:
-    """Reject a motif, propagating removal across DB, in-memory and caches (spec §6.4).
+def delete_motif(motif_id: str) -> None:
+    """Delete a motif, propagating removal across DB, in-memory and caches (spec §6.4).
 
     Keeps the three layers consistent: the store row is deleted, the in-memory
     ``MOTIFS`` entry is evicted, and the adapter caches that map a spec/prompt to a
     motif id are flushed, so a deleted motif can never be re-served from a warm cache.
-    A full flush is deliberate — curation is a rare manual action, so dropping warm
-    caches is cheaper and safer than maintaining per-id reverse indices. The intent and
-    embedding caches hold no concrete motif id, so they are left intact. The flush is
-    process-local (the caches are module-level globals): a separately running server
-    keeps its own caches and must be restarted after a reject.
+    A full flush is deliberate — admin deletion is rare, so dropping warm caches is
+    cheaper and safer than maintaining per-id reverse indices. The intent and embedding
+    caches hold no concrete motif id, so they are left intact. The flush is process-local
+    (the caches are module-level globals): a separately running server keeps its own
+    caches and must be restarted after a delete.
 
-    Built-in motifs are code constants, not catalog rows, and cannot be rejected.
+    Built-in motifs are code constants, not catalog rows, and cannot be deleted.
     """
     if motif_id in BUILTIN_MOTIF_IDS:
-        raise ValueError(f"cannot reject built-in motif {motif_id!r}")
+        raise ValueError(f"cannot delete built-in motif {motif_id!r}")
     from app.motifs.store import _resolve_store
 
     _resolve_store().delete(motif_id)
     MOTIFS.pop(motif_id, None)
     _flush_motif_id_caches()
-    _bump_curated_pool_epoch()  # the deleted row may have been curated
+    _bump_registry_pool_epoch()
 
 
 def _flush_motif_id_caches() -> None:
@@ -410,23 +303,22 @@ def _flush_motif_id_caches() -> None:
     recraft.clear_recraft_motif_cache()
 
 
-# Monotonic counter bumped whenever the curated sampling pool changes (promote / reject /
-# curated-register). Lets `adapters.registry_fingerprint.registry_version_for` memoize its
-# per-request pool fingerprint and invalidate on curation instead of querying the store on
-# every generate request. Process-local, the same scope as the cache flush in `reject_motif`
-# (a separately running server keeps its own counter; mutations are expected to go through
-# this module's promote/reject API).
-_curated_pool_epoch = 0
+# Monotonic counter bumped whenever the reusable motif pool changes. Lets
+# `adapters.registry_fingerprint.registry_version_for` memoize its per-request pool
+# fingerprint instead of querying the store on every generate request. Process-local,
+# the same scope as the cache flush in `delete_motif` (a separately running server keeps
+# its own counter; mutations are expected to go through this module's register/delete API).
+_registry_pool_epoch = 0
 
 
-def curated_pool_epoch() -> int:
-    """Current curated-pool epoch (bumped on every curated-pool mutation)."""
-    return _curated_pool_epoch
+def registry_pool_epoch() -> int:
+    """Current reusable-pool epoch (bumped on every pool mutation)."""
+    return _registry_pool_epoch
 
 
-def _bump_curated_pool_epoch() -> None:
-    global _curated_pool_epoch
-    _curated_pool_epoch += 1
+def _bump_registry_pool_epoch() -> None:
+    global _registry_pool_epoch
+    _registry_pool_epoch += 1
 
 
 def _parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:

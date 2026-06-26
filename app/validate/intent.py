@@ -44,10 +44,7 @@ def _fmt_err(err: dict) -> str:
 
 def _layer_slot_refs(layer) -> list[str]:
     if layer.type == "background":
-        refs = [layer.params.color]
-        if layer.params.texture_color is not None:
-            refs.append(layer.params.texture_color)
-        return refs
+        return [layer.params.color]
     if layer.type == "stripe":
         return [b.color for b in layer.params.bands]
     if layer.type == "motif":
@@ -121,39 +118,6 @@ def _lattice_errors(layer, placement, tile: float) -> list[str]:
                     f"(needs (tile/cell)*drop_fraction integer for drop_axis "
                     f"{spec.drop_axis!r})"
                 )
-    return errs
-
-
-def _ground_repeat_errors(layer, tile: float) -> list[str]:
-    """Validate an ``object_repeat`` background: its texture lattice must tile (cell
-    divides tile) and stay within the instance cap, and a *registered* motif must be
-    single-color (tone-on-tone grounds are one color). An unregistered motif_id is left
-    to compose (mirrors the motif-layer check, so a stale catalog can't 422 spuriously).
-    """
-    p = layer.params
-    errs: list[str] = []
-    cell = p.cell_mm
-    n = round(tile / cell)
-    if n * n > get_settings().max_placement_instances:
-        errs.append(
-            f"layer {layer.id!r}: object_repeat ground would place {n * n} instances "
-            f"(> max_placement_instances {get_settings().max_placement_instances})"
-        )
-    if not divides(tile, cell):
-        errs.append(
-            f"layer {layer.id!r}: object_repeat cell_mm {cell} does not divide "
-            f"tile_mm {tile}"
-        )
-    try:
-        motif = get_motif(p.motif_id)
-    except ValueError:
-        motif = None
-    if motif is not None and set(motif.color_slots) != {"s0"}:
-        errs.append(
-            f"layer {layer.id!r}: object_repeat ground motif {motif.id!r} is multi-color "
-            f"(color_slots {sorted(motif.color_slots)}); ground texture must be "
-            f"single-color"
-        )
     return errs
 
 
@@ -331,9 +295,37 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
         if snapped_any:
             intent = intent.model_copy(update={"layers": snapped_layers})
 
-    # 4. per-colorway resolved color count vs production.max_colors (screen printing
-    #    is color-limited; digital is not — ARCHITECTURE.md 색·colorway 모델).
-    if intent.production.method == "screen":
+    # 3c. Normalize bare path_following lanes (`start`/`center`/`end`) to band 0 when the
+    #     host stripe has >1 band. The stripe primitive only registers bare lane aliases
+    #     for single-band stripes (multi-band lanes are namespaced `b0.center`...), so an
+    #     LLM that emits the bare keyword against a multi-band stripe would otherwise fail
+    #     deep in compose (unknown lane) and drop every candidate -> opaque 500. Band 0 is
+    #     the deterministic default anchor.
+    if repair:
+        by_id = {la.id: la for la in intent.layers}
+        repaired_layers = list(intent.layers)
+        fixed_any = False
+        for i, la in enumerate(repaired_layers):
+            pl = getattr(la, "placement", None)
+            if pl is None or pl.type != "path_following" or pl.lane not in ("start", "center", "end"):
+                continue
+            host = by_id.get(pl.host_layer)
+            if host is not None and host.type == "stripe" and len(host.params.bands) > 1:
+                new_lane = f"b0.{pl.lane}"
+                warnings.append(
+                    f"layer {la.id!r}: bare lane {pl.lane!r} on multi-band stripe "
+                    f"{host.id!r} normalized to {new_lane!r} (band 0)"
+                )
+                repaired_layers[i] = la.model_copy(
+                    update={"placement": pl.model_copy(update={"lane": new_lane})}
+                )
+                fixed_any = True
+        if fixed_any:
+            intent = intent.model_copy(update={"layers": repaired_layers})
+
+    # 4. per-colorway resolved color count vs production.max_colors (yarn-dyed is
+    #    color-limited by the loom's color yarns; print is not — ARCHITECTURE.md 색·colorway 모델).
+    if intent.production.method == "yarn_dyed":
         for cw in palette.colorways:
             n = len(palette.distinct_colors(cw.id))
             if n > intent.production.max_colors:
@@ -402,9 +394,6 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                     f"layer {layer.id!r}: motif size_mm {layer.params.size_mm} exceeds "
                     f"tile_mm {tile} (boundary clones would self-overlap)"
                 )
-
-        if layer.type == "background" and layer.params.kind == "object_repeat":
-            errors.extend(_ground_repeat_errors(layer, tile))
 
         if layer.type == "stripe":
             snapped = snap_angle(layer.params.angle)
@@ -478,6 +467,22 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"layer {layer.id!r}: host_layer {placement.host_layer!r} "
                         f"does not exist"
                     )
+                else:
+                    # Only a stripe exposes the lanes() contract a host-based
+                    # path_following resolves against. An LLM that hosts on a background
+                    # (or another motif) would otherwise crash deep in compose with
+                    # AttributeError ('Background' object has no attribute 'lanes') -> 500.
+                    host = layers_by_id.get(placement.host_layer)
+                    if (
+                        placement.type == "path_following"
+                        and host is not None
+                        and host.type != "stripe"
+                    ):
+                        errors.append(
+                            f"layer {layer.id!r}: path_following host_layer "
+                            f"{placement.host_layer!r} must be a stripe, not "
+                            f"{host.type!r}"
+                        )
             if (
                 placement.path is not None
                 and placement.path.kind == "wave"
@@ -496,12 +501,6 @@ def validate_intent(raw, *, repair: bool = True) -> ValidationResult:
                         f"{placement.path.wavelength} does not divide the lane closure "
                         f"length {closure} (tile*hypot({snapped.p}, {snapped.q}))"
                     )
-
-    sym = intent.symmetry
-    if sym is not None and sym.shift_mm is not None and not divides(tile, sym.shift_mm):
-        errors.append(
-            f"symmetry shift_mm {sym.shift_mm} does not divide tile_mm {tile}"
-        )
 
     if errors:
         raise IntentInvalid(errors)

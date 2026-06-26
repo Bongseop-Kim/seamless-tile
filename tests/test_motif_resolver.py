@@ -78,12 +78,12 @@ class _FakeStore:
             key=lambda r: r.id,
         )
 
-    def find_by_variant_group(self, variant_group, *, status="curated"):
+    def find_by_variant_group(self, variant_group):
         return sorted(
             (
                 r
                 for r in self.rows
-                if r.variant_group == variant_group and r.status == status
+                if r.variant_group == variant_group
             ),
             key=lambda r: r.id,
         )
@@ -300,7 +300,7 @@ def test_route_prompt_miss_generates_and_composes(monkeypatch):
         if layer["type"] == "motif"
     }
     assert any(m.startswith("recraft-") for m in motif_ids)  # generated motif present
-    assert "bee" in motif_ids  # unspecced built-in layer preserved
+    assert "bee" in motif_ids  # unspecced motif layer (fixture id) left untouched
 
 
 def test_route_prompt_same_seed_is_deterministic(monkeypatch):
@@ -428,14 +428,14 @@ def test_resolver_miss_persists_query_embedding(monkeypatch):
     assert stored is not None and stored.embedding == query
 
 
-def test_resolver_hit_samples_from_curated_pool(monkeypatch):
-    # Two curated variants in one group; seed varies which variant the hit resolves to.
+def test_resolver_hit_samples_from_reusable_pool(monkeypatch):
+    # Two reusable variants in one group; seed varies which variant the hit resolves to.
     _set_tau(monkeypatch, 0.6)
     grp = "grp1"
     r1 = _record("recraft-aaa", "pig", "partial", view="side",
-                 variant_group=grp, status="curated", embedding=[1.0, 0.0])
+                 variant_group=grp, embedding=[1.0, 0.0])
     r2 = _record("recraft-bbb", "pig", "partial", view="side",
-                 variant_group=grp, status="curated", embedding=[1.0, 0.0])
+                 variant_group=grp, embedding=[1.0, 0.0])
     store = _FakeStore(r1, r2)
     chosen = {
         resolve_motifs(
@@ -463,7 +463,7 @@ def test_resolver_same_inputs_deterministic(monkeypatch):
 def test_resolver_variant_pool_query_error_falls_back_to_match():
     # A flaky pool query must not break the request: fall back to the matched motif.
     class _PoolBoomStore(_FakeStore):
-        def find_by_variant_group(self, variant_group, *, status="curated"):
+        def find_by_variant_group(self, variant_group):
             raise MotifStoreError("variant-group query down")
 
     rec = _record("recraft-aaa", "pig", "partial", view="front", variant_group="g1")

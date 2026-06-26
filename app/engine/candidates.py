@@ -2,8 +2,8 @@
 
 The single-candidate pipeline lives in :mod:`app.engine.generate`. This module
 sits one level up and turns a single base intent into a ranked, de-duplicated set
-of candidates by branching along three deterministic axes — layout (placement +
-symmetry), colorway, and seed — so the same request with the same seed always
+of candidates by branching along three deterministic axes — layout (placement),
+colorway, and seed — so the same request with the same seed always
 yields the same candidate set (``request_id`` aside, which is request metadata).
 
 Kept in the engine layer (not the API route) so the determinism contract stays
@@ -12,20 +12,17 @@ inside the engine boundary; the route is a thin adapter over ``generate_candidat
 
 from __future__ import annotations
 
-import copy
 import hashlib
-import json
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
-from app.core.config import REGISTRY_VERSION, get_settings
+from app.core.config import REGISTRY_VERSION
 from app.engine.composition import compose
 from app.engine.determinism import ReproMeta, layout_id_for
 from app.engine.generate import Candidate
 from app.engine.intent import Band, Intent
-from app.engine.palette import Palette, derive_tonal_hex, is_hex_color
+from app.engine.palette import Palette
 from app.engine.seamless import assert_seamless_invariants
-from app.motifs.registry import TEXTURE_LINE_MOTIFS, TEXTURE_MOTIFS
 from app.validate.intent import IntentInvalid, validate_intent
 
 DEFAULT_CANDIDATE_COUNT = 4
@@ -53,10 +50,6 @@ _STRIPE_RHYTHMS_MULTI: tuple[tuple[str, tuple[float, ...], float], ...] = (
     ("ratio_5_11", (5.0, 11.0), 0.4),  # uneven two-band, cycle existing colors
     ("asym_6_1_3", (6.0, 1.0, 3.0), 0.4),  # uneven three-band, cycle existing colors
 )
-
-# Reserved palette slot for the derived tone-on-tone object_repeat ground color.
-_RESERVED_TONE_SLOT = "bg_texture_tone"
-
 
 @dataclass(frozen=True)
 class RankedCandidate:
@@ -236,7 +229,6 @@ def generate_candidate_set(
     colorway: str | None = None,
     source_fidelity: str = SOURCE_FIDELITY_VECTOR,
     registry_version: str = REGISTRY_VERSION,
-    vary_ground: bool = False,
 ) -> CandidateSet:
     """Diversify and merge MULTIPLE base intents ("designs") into one ranked set.
 
@@ -246,24 +238,10 @@ def generate_candidate_set(
     reproduces :func:`generate_candidates` exactly (svg + ids). Invalid designs are
     dropped with a warning; if every design is invalid the last error is raised (the
     route maps it to 422, same as the single-base path).
-
-    ``vary_ground`` (prompt path) adds a ground-kind-toggled sibling design per base — a
-    solid ground gains an ``object_repeat`` tonal-texture sibling, an object_repeat ground
-    gains a plain-solid sibling — so the round-robin surfaces both with/without ground
-    texture (~50:50). Off for the intent-direct/image paths (the supplied intent is
-    authoritative).
     """
     count = max(1, min(int(candidate_count), MAX_CANDIDATE_COUNT))
 
     designs = list(base_raws)
-    if vary_ground:
-        expanded: list = []
-        for raw in designs:
-            expanded.append(raw)
-            sibling = _ground_kind_sibling(raw)
-            if sibling is not None:
-                expanded.append(sibling)
-        designs = expanded
 
     warnings: list[str] = []
     per_design: list[list[RankedCandidate]] = []
@@ -361,132 +339,6 @@ def generate_candidate_set(
         warnings=warnings,
         available_strategy_count=available,
     )
-
-
-def _ground_kind_sibling(raw: dict) -> dict | None:
-    """The ground-kind-toggled sibling DESIGN (added on the prompt path so round-robin
-    selection then surfaces both ~50:50):
-
-    - a solid ground  -> an ``object_repeat`` (tone-on-tone texture) ground,
-    - an object_repeat -> a plain solid ground (its base ``color`` slot kept; the now-unused
-      tone slot is left in the palette, harmless -- an unreferenced slot is valid).
-
-    Returns a FRESH dict (never mutates ``raw``) or ``None``. The caller re-validates it
-    and drops it if invalid.
-    """
-    if not isinstance(raw, dict) or not isinstance(raw.get("layers"), list):
-        return None
-    backgrounds = [
-        l for l in raw["layers"] if isinstance(l, dict) and l.get("type") == "background"
-    ]
-    if not backgrounds:
-        return None
-    ground = min(backgrounds, key=lambda l: l.get("z_order", 0))
-    params = ground.get("params") or {}
-    if params.get("kind") != "object_repeat":
-        return _ground_to_object_repeat(raw, ground)
-    if params.get("color") is None:
-        return None
-    sibling = copy.deepcopy(raw)
-    for layer in sibling["layers"]:
-        if isinstance(layer, dict) and layer.get("id") == ground.get("id"):
-            layer["params"] = {"color": params["color"]}
-    return sibling
-
-
-def _ground_to_object_repeat(raw: dict, ground: dict) -> dict | None:
-    """Sibling whose solid ground becomes an ``object_repeat`` tone-on-tone texture: a
-    deterministically chosen built-in motif on a fine lattice (cell derived from
-    ``texture_cell_mm``), colored a shade DERIVED from the ground (a new
-    ``bg_texture_tone`` slot mapped in every colorway). Returns ``None`` if it can't apply
-    (non-hex ground color, or screen-print color budget exceeded). Never mutates ``raw``.
-    """
-    try:
-        slots = raw["palette"]["slots"]
-        colorways = raw["colorways"]
-        tile = float(raw["canvas"]["tile_mm"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    if (
-        not isinstance(slots, list)
-        or not isinstance(colorways, list)
-        or not slots
-        or not colorways
-    ):
-        return None
-    ground_slot = (ground.get("params") or {}).get("color")
-    settings = get_settings()
-
-    # Per-colorway tonal shade derived from that colorway's ground hex. Bail if any ground
-    # color is a non-hex spot color (can't derive) or screen printing would overflow.
-    tone_by_cw: dict[str, str] = {}
-    validated_colorways: list[tuple[str, dict]] = []
-    for cw in colorways:
-        if not isinstance(cw, dict):
-            return None
-        cw_id = cw.get("id")
-        mapping = cw.get("mapping", {})
-        if not isinstance(cw_id, str) or not isinstance(mapping, dict):
-            return None
-        ground_hex = mapping.get(ground_slot)
-        if not isinstance(ground_hex, str) or not is_hex_color(ground_hex):
-            return None
-        tone_by_cw[cw_id] = derive_tonal_hex(ground_hex, settings.texture_tone_shift)
-        validated_colorways.append((cw_id, mapping))
-    production = raw.get("production", {})
-    if not isinstance(production, dict):
-        return None
-    if production.get("method") == "screen":
-        try:
-            max_colors = int(production.get("max_colors", 12))
-        except (TypeError, ValueError):
-            return None
-        for cw_id, mapping in validated_colorways:
-            distinct = set(mapping.values()) | {tone_by_cw[cw_id]}
-            if len(distinct) > max_colors:
-                return None
-
-    # Motif pool: line weaves (twill/herringbone) read as continuous fabric only as a
-    # FULL-FIELD ground -- an overlaid stripe would slice them into noise. So when the
-    # design carries a stripe, restrict the ground to discrete motifs (dots/diamonds that
-    # peek cleanly between bars); a stripe-free design may use the whole vocabulary.
-    has_stripe = any(
-        isinstance(l, dict) and l.get("type") == "stripe" for l in raw["layers"]
-    )
-    pool = (
-        [m for m in TEXTURE_MOTIFS if m not in TEXTURE_LINE_MOTIFS]
-        if has_stripe
-        else list(TEXTURE_MOTIFS)
-    )
-    # Deterministic motif pick (stable across processes -- no builtin hash()).
-    canonical = json.dumps(raw, sort_keys=True, separators=(",", ":"))
-    idx = int(hashlib.sha256(canonical.encode("utf-8")).hexdigest(), 16) % len(pool)
-    motif_id = pool[idx]
-    cells = max(1, round(tile / settings.texture_cell_mm))
-    cell = tile / cells
-
-    gid = ground.get("id")
-    sibling = copy.deepcopy(raw)
-    sibling["palette"]["slots"].append(
-        {"id": _RESERVED_TONE_SLOT, "hex": tone_by_cw[validated_colorways[0][0]]}
-    )
-    for cw, (cw_id, _mapping) in zip(
-        sibling["colorways"], validated_colorways, strict=True
-    ):
-        mapping = cw.get("mapping") if isinstance(cw, dict) else None
-        if not isinstance(mapping, dict):
-            return None
-        mapping[_RESERVED_TONE_SLOT] = tone_by_cw[cw_id]
-    for layer in sibling["layers"]:
-        if isinstance(layer, dict) and layer.get("id") == gid:
-            layer["params"] = {
-                "color": ground_slot,
-                "kind": "object_repeat",
-                "motif_id": motif_id,
-                "cell_mm": _q(cell),
-                "texture_color": _RESERVED_TONE_SLOT,
-            }
-    return sibling
 
 
 def _layout_variants(base: Intent) -> Iterator[Intent]:

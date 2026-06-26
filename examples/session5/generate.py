@@ -1,7 +1,7 @@
 """Render the session-5 feature showcases in this directory.
 
 Each showcase is written three ways:
-  <name>-tile.svg   single pattern tile (mirror is a 96mm super-tile)
+  <name>-tile.svg   single pattern tile
   <name>-tiled.svg  4x4 repeat, to eyeball seam continuity in a browser
   <name>-tiled.png  rasterized 4x4 repeat (needs rsvg-convert; skipped if absent)
 
@@ -42,8 +42,8 @@ COLORWAYS = [
 ]
 
 
-def base(layers, symmetry=None, seed=7, tile=48):
-    intent = {
+def base(layers, seed=7, tile=48):
+    return {
         "intent_version": 1,
         "canvas": {"tile_mm": tile, "dpi": 300},
         "seed": seed,
@@ -52,9 +52,6 @@ def base(layers, symmetry=None, seed=7, tile=48):
         "colorways": COLORWAYS,
         "layers": layers,
     }
-    if symmetry:
-        intent["symmetry"] = symmetry
-    return intent
 
 
 def bg():
@@ -102,13 +99,6 @@ SHOWCASES = {
                "path": {"kind": "wave", "angle": 0, "wavelength": 24, "amplitude": 8}},
               "bees", 2),
     ]),
-    "05-mirror-2x2-bees": base([
-        bg(),
-        motif("bee", "gold", 7.0,
-              {"type": "lattice", "lattice": {"cell_w_mm": 24, "cell_h_mm": 24,
-                                              "drop_fraction": 0.5, "drop_axis": "column"}},
-              "bees", 1),
-    ], symmetry={"kind": "mirror_2x2"}),
     "06-point-set-anchors": base([
         bg(),
         motif("circle", "accent", 5.0,
