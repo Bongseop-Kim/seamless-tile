@@ -1,3 +1,5 @@
+import pytest
+
 from app.validate.seamless import edge_seam, seamless_diff
 
 
@@ -39,3 +41,8 @@ def test_edge_seam_detects_mismatched_edges():
         row[-1] = (255, 255, 255, 255)
     seam_x, _ = edge_seam(tile)
     assert seam_x > 100
+
+
+def test_seam_checks_reject_ragged_rows():
+    with pytest.raises(ValueError, match="rectangular"):
+        edge_seam([[(0, 0, 0, 0)], [(0, 0, 0, 0), (0, 0, 0, 0)]])

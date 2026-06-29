@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
             ("GEMINI_API_KEY", settings.gemini_api_key),
             ("OPENAI_API_KEY", settings.openai_api_key),
         )
-        if not value
+        if not (value or "").strip()
     ]
     if missing:
         raise RuntimeError(f"missing required model configuration: {', '.join(missing)}")

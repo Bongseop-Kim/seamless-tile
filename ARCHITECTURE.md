@@ -187,7 +187,7 @@ Motif는 단순 mark부터 detailed multicolor shape까지 포함하는 재사�
 ```text
 motif spec
   -> exact/facet/embedding lookup in motif store
-  -> miss generates via LLM or Recraft
+  -> miss generates via Recraft
   -> sanitize + normalize_motif_svg + structural gates
   -> content-hash motif_id
   -> register in memory

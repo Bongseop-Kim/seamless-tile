@@ -15,7 +15,19 @@ def _rows(tile_rgba) -> Rows:
         data_source = getattr(tile_rgba, "get_flattened_data", tile_rgba.getdata)
         data = list(data_source())
         return [data[y * width : (y + 1) * width] for y in range(height)]
-    return [[tuple(int(c) for c in pixel) for pixel in row] for row in tile_rgba]
+    rows = []
+    width = None
+    try:
+        for row in tile_rgba:
+            normalized = [tuple(int(c) for c in pixel) for pixel in row]
+            if width is None:
+                width = len(normalized)
+            elif len(normalized) != width:
+                raise ValueError("tile_rgba rows must be rectangular")
+            rows.append(normalized)
+    except TypeError as exc:
+        raise ValueError("tile_rgba must be a rectangular 2D array") from exc
+    return rows
 
 
 def _mean_abs(pairs) -> float:

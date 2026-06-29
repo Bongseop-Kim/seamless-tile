@@ -58,8 +58,8 @@ def test_settings_validates_resource_ceilings():
 def test_startup_requires_model_keys(monkeypatch):
     from app.core.config import get_settings
 
-    monkeypatch.setenv("GEMINI_API_KEY", "")
-    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "   ")
+    monkeypatch.setenv("OPENAI_API_KEY", "\t")
     get_settings.cache_clear()
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY.*OPENAI_API_KEY"):
         with TestClient(create_app()):
@@ -74,6 +74,10 @@ def test_startup_accepts_required_model_keys(monkeypatch):
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr("app.main.client_from_settings", lambda settings: object())
+    monkeypatch.setattr(
+        "app.main.embedding_client_from_settings", lambda settings: object()
+    )
     get_settings.cache_clear()
     try:
         with TestClient(create_app()) as client:
