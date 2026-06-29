@@ -1,8 +1,7 @@
-"""Offline end-to-end: a Recraft-style motif -> seamless tile via the example helper.
+"""Offline end-to-end: a Recraft-style motif -> seamless tile.
 
-Exercises the same path examples/recraft_to_tile.py runs (build_tile_intent -> engine
-generate), but registers the motif from a fixed multicolor SVG instead of calling the
-network — so it stays in the deterministic test suite.
+Registers the motif from a fixed multicolor SVG instead of calling the network,
+so it stays in the deterministic test suite.
 """
 
 import xml.etree.ElementTree as ET
@@ -12,7 +11,6 @@ import pytest
 from app.adapters.recraft import _flatten_unsuitable
 from app.engine.generate import generate
 from app.motifs.registry import MOTIFS, normalize_motif_svg, register_motif
-from examples.recraft_to_tile import build_tile_intent
 
 NS = "{http://www.w3.org/2000/svg}"
 
@@ -44,12 +42,62 @@ def _register_motif() -> str:
     return register_motif(motif, source="recraft")
 
 
+def _build_tile_intent(
+    motif_id: str,
+    *,
+    tile_mm: float = 48.0,
+    cell_mm: float = 24.0,
+    size_mm: float = 18.0,
+    bg_hex: str = "#f5efe3",
+) -> dict:
+    return {
+        "intent_version": 1,
+        "canvas": {"tile_mm": tile_mm, "dpi": 300},
+        "seed": 7,
+        "production": {"method": "digital", "max_colors": 12},
+        "palette": {
+            "slots": [
+                {"id": "bg", "hex": bg_hex},
+                {"id": "p0", "hex": "#ef9aa6"},
+                {"id": "p1", "hex": "#2e2a2a"},
+            ],
+        },
+        "colorways": [{
+            "id": "default",
+            "name": "default",
+            "mapping": {"bg": bg_hex, "p0": "#ef9aa6", "p1": "#2e2a2a"},
+        }],
+        "layers": [
+            {"id": "bg", "type": "background", "z_order": 0, "params": {"color": "bg"}},
+            {
+                "id": "motif",
+                "type": "motif",
+                "z_order": 1,
+                "params": {
+                    "motif_id": motif_id,
+                    "size_mm": size_mm,
+                    "colors": {"s0": "p0", "s1": "p1"},
+                },
+                "placement": {
+                    "type": "lattice",
+                    "lattice": {
+                        "cell_w_mm": cell_mm,
+                        "cell_h_mm": cell_mm,
+                        "drop_fraction": 0.5,
+                        "drop_axis": "row",
+                    },
+                },
+            },
+        ],
+    }
+
+
 def test_recraft_motif_composes_into_seamless_tile():
     motif_id = _register_motif()
     # background stripped -> only the two object colors (pink body, dark wheels) remain.
     assert MOTIFS[motif_id].color_slots == ("s0", "s1")
 
-    intent = build_tile_intent(motif_id, tile_mm=48.0, cell_mm=24.0, size_mm=18.0)
+    intent = _build_tile_intent(motif_id, tile_mm=48.0, cell_mm=24.0, size_mm=18.0)
     svg = generate(intent, seed=7).svg
 
     root = ET.fromstring(svg)
@@ -62,7 +110,7 @@ def test_recraft_motif_composes_into_seamless_tile():
 
 def test_tile_is_byte_deterministic():
     motif_id = _register_motif()
-    intent = build_tile_intent(motif_id)
+    intent = _build_tile_intent(motif_id)
     assert generate(intent, seed=7).svg == generate(intent, seed=7).svg
 
 
@@ -71,7 +119,7 @@ def test_background_color_fills_tile_once_not_baked_per_motif():
     # appears exactly once — as the single background-layer rect — rather than baked into
     # the motif and repainted at every lattice instance.
     motif_id = _register_motif()
-    intent = build_tile_intent(motif_id, bg_hex="#f5efe3")
+    intent = _build_tile_intent(motif_id, bg_hex="#f5efe3")
     svg = generate(intent, seed=7).svg
     root = ET.fromstring(svg)
     full_bg = [
