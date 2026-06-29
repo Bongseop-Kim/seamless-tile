@@ -5,10 +5,6 @@
     "dpi": 300
   },
   "seed": 20240,
-  "production": {
-    "method": "print",
-    "max_colors": 12
-  },
   "palette": {
     "slots": [
       {
