@@ -5,10 +5,11 @@ reproduction (ARCHITECTURE.md "Reference Image 처리 정책"). Two parts:
 
 - **Palette extraction** is done for real, dependency-free, via Pillow median-cut
   (no scikit-learn). 8-16 dominant colors -> palette slots + a default colorway.
-- **VLM structure hints** and **vectorization** are injected seams (Protocols),
-  mocked in tests. The vectorize fit/unfit rule (path_count <= N AND color_count <= M)
-  decides ``source_fidelity``; unfit textures fall back to palette only and are flagged.
-  Actual raster-hybrid baking is session 8.
+- **VLM structure hints** and **vectorization** are planned injected seams (Protocols).
+  They are not wired to real clients in the FastAPI route yet; tests pin the intended
+  contract while the reference-image product flow is still being planned.
+  The vectorize fit/unfit rule (path_count <= N AND color_count <= M) decides
+  ``source_fidelity``; unfit textures fall back to palette only and are flagged.
 
 Transport is a base64 / data-URI string in the JSON body. Upload validation runs on
 this path (session 8): an encoded-size guard, then format allowlist, pixel/decode-bomb

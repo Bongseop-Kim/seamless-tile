@@ -49,9 +49,8 @@ class Settings(BaseSettings):
     # env: STRIPE_DIAGONAL_REPEATS
     stripe_diagonal_repeats: int = Field(2, ge=2)
 
-    # Chat LLM (session 10, D12). When gemini_api_key is set, app.main installs a
-    # GeminiClient as the default LLM client at boot; unset => no default (tests inject
-    # fakes).
+    # Chat LLM (session 10, D12). app.main requires gemini_api_key and installs a
+    # GeminiClient as the default LLM client at boot. Unit tests inject fakes directly.
     gemini_api_key: str | None = None  # env: GEMINI_API_KEY
     gemini_model: str = "gemini-2.5-flash-lite"  # chat model id passed to GeminiClient (P0)
     # Sampling temperature for intent generation. >0 lets the model emit genuinely
@@ -59,9 +58,9 @@ class Settings(BaseSettings):
     # intent in its cache, so the contract does not depend on temperature).
     gemini_temperature: float = Field(0.7, ge=0.0, le=2.0)  # env: GEMINI_TEMPERATURE
 
-    # Embedding model (session 11, D12). When openai_api_key is set, app.main installs an
-    # OpenAIEmbeddingClient as the default; unset => motif resolver skips the soft-
-    # similarity stage and falls back to the S10 exact/hard-filter behavior (graceful).
+    # Embedding model (session 11, D12). app.main requires openai_api_key and installs an
+    # OpenAIEmbeddingClient as the default. Unit tests can still call the resolver with no
+    # client to exercise exact/hard-filter behavior.
     # motif_similarity_tau is the cosine threshold for "reuse vs generate"; it is a
     # reuse-first start value (spec §6.1/D13) pending empirical calibration (spec §12).
     openai_api_key: str | None = None  # env: OPENAI_API_KEY

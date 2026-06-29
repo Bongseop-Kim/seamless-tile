@@ -17,8 +17,7 @@ to the S10 lowest-id hard-filter reuse.
 from __future__ import annotations
 
 import copy
-
-import numpy as np
+import math
 
 from app.adapters.base import AdapterClientError
 from app.adapters.embedding import embed_query
@@ -71,12 +70,13 @@ def _exact_match(spec: dict, candidates: list) -> str | None:
     return None
 
 
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
-    na = float(np.linalg.norm(a))
-    nb = float(np.linalg.norm(b))
+def _cosine(a: list[float], b: list[float]) -> float:
+    na = math.sqrt(sum(float(x) * float(x) for x in a))
+    nb = math.sqrt(sum(float(x) * float(x) for x in b))
     if na == 0.0 or nb == 0.0:
         return 0.0
-    return float(np.dot(a, b) / (na * nb))
+    dot = sum(float(x) * float(y) for x, y in zip(a, b))
+    return dot / (na * nb)
 
 
 def _best_by_similarity(candidates: list, query_vec: list[float] | None):
@@ -89,13 +89,12 @@ def _best_by_similarity(candidates: list, query_vec: list[float] | None):
     """
     if query_vec is None:
         return None
-    q = np.asarray(query_vec, dtype=float)
     best = None  # (rec, sim)
     for rec in sorted(candidates, key=lambda r: r.id):
         emb = rec.embedding
         if not emb or len(emb) != len(query_vec):  # dimension guard (model/legacy skew)
             continue
-        sim = _cosine(q, np.asarray(emb, dtype=float))
+        sim = _cosine(query_vec, emb)
         if best is None or sim > best[1]:
             best = (rec, sim)
     return best

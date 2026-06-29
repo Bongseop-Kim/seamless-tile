@@ -51,23 +51,31 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("motif store unconfigured; in-memory registry only")
 
-    # Install the chat LLM (Gemini) as the default client when a key is configured;
-    # unset => no default (the prompt path then needs a per-call injected client).
-    llm_client = client_from_settings(settings)
-    set_default_client(llm_client)
-    logger.info(
-        "LLM client %s",
-        "configured (Gemini)" if llm_client is not None else "unconfigured (inject per-call)",
-    )
+    # Install required model clients. This service's product path depends on both
+    # prompt interpretation and descriptor embeddings, so missing keys are a startup
+    # configuration error rather than a degraded runtime mode.
+    missing = [
+        name
+        for name, value in (
+            ("GEMINI_API_KEY", settings.gemini_api_key),
+            ("OPENAI_API_KEY", settings.openai_api_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"missing required model configuration: {', '.join(missing)}")
 
-    # Install the embedding client (OpenAI) when a key is configured; unset => the motif
-    # resolver skips the soft-similarity stage and falls back to S10 behavior.
+    llm_client = client_from_settings(settings)
+    if llm_client is None:
+        raise RuntimeError("GEMINI_API_KEY is required to configure the LLM client")
+    set_default_client(llm_client)
+    logger.info("LLM client configured (Gemini)")
+
     embedding_client = embedding_client_from_settings(settings)
+    if embedding_client is None:
+        raise RuntimeError("OPENAI_API_KEY is required to configure the embedding client")
     set_default_embedding_client(embedding_client)
-    logger.info(
-        "embedding client %s",
-        "configured (OpenAI)" if embedding_client is not None else "unconfigured (skip soft match)",
-    )
+    logger.info("embedding client configured (OpenAI)")
 
     # Install the Recraft vector client when a key is configured; unset => detailed/
     # multicolor misses (D11 routing) surface a 502 (no generator).

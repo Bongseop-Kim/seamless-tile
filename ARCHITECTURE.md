@@ -330,8 +330,10 @@ norm(scope))`로 결정론적이다(`app/motifs/facets.py:variant_group_key`, `V
 ## 어댑터 경계
 
 LLM·임베딩·생성기·참조 이미지·저장소는 코어 바깥 어댑터로 격리한다. 공통 seam은 **주입 Protocol +
-지연 SDK import + opt-in 네트워크 + freeze 캐시**다 — 클라이언트는 `app/main.py` lifespan이 키가 있을 때만
-설치하고, 미설정이면 graceful degrade한다. SDK/네트워크 실패는 `AdapterClientError`로 정규화(→ 502).
+opt-in 네트워크 + freeze 캐시**다. 제품 경로상 LLM과 임베딩은 필수라 `app/main.py` lifespan이
+`GEMINI_API_KEY`/`OPENAI_API_KEY` 없으면 부팅을 실패시킨다. Recraft와 Supabase store는 선택 구성으로,
+미설정 시 각각 상세 motif miss 502 / in-memory registry로 동작한다. SDK/네트워크 실패는
+`AdapterClientError`로 정규화(→ 502).
 
 | 어댑터 | 역할 | 모델/주의 |
 |---|---|---|
@@ -386,7 +388,8 @@ LLM·임베딩·생성기·참조 이미지·저장소는 코어 바깥 어댑�
 - 참조 이미지는 **의미(스타일·모티프·색) 추출**에만 쓴다. 픽셀 충실 재현은 비목표다.
 - 색은 **Pillow median-cut**으로 2~16색 팔레트를 추출해 색 슬롯에 매핑한다(K-means/scikit-learn 미사용,
   의존성 free, 결정론적; `app/adapters/image.py:extract_palette`).
-- 모티프는 VLM으로 구조 추출하고, 벡터화 적합 판정을 거친다 — `judge_vectorization`이 path·color 수
+- 모티프 구조 추출과 벡터화는 아직 기획 중인 주입 seam이다. 현재 코드는 테스트로 의도 계약을 박제한다.
+  실제 연결 시 VLM으로 구조 추출하고, 벡터화 적합 판정을 거친다 — `judge_vectorization`이 path·color 수
   임계(`VECTORIZE_MAX_PATHS=1500`, `VECTORIZE_MAX_COLORS=32`)로 적합(`vector`)/부적합(`raster_hybrid`)을
   가른다(픽셀이 아니라 카운트만 본다).
 - 부적합 텍스처는 현재 팔레트 + 라이브러리 모티프 폴백 + 경고로 처리하고, raster-hybrid 베이킹은 향후 과제다.

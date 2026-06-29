@@ -1,25 +1,47 @@
 """Seamless boundary check: roll a rasterised tile by half and measure the
 discontinuity at the wrap edge. 0 means a perfect, invisible seam."""
 
-import numpy as np
+from collections.abc import Sequence
 
 
-def seamless_diff(tile_rgba: np.ndarray) -> tuple[float, float]:
+Pixel = Sequence[int]
+Rows = list[list[Pixel]]
+
+
+def _rows(tile_rgba) -> Rows:
+    """Normalize a PIL image or nested RGBA pixel rows to list-backed rows."""
+    if hasattr(tile_rgba, "getdata") and hasattr(tile_rgba, "size"):
+        width, height = tile_rgba.size
+        data_source = getattr(tile_rgba, "get_flattened_data", tile_rgba.getdata)
+        data = list(data_source())
+        return [data[y * width : (y + 1) * width] for y in range(height)]
+    return [[tuple(int(c) for c in pixel) for pixel in row] for row in tile_rgba]
+
+
+def _mean_abs(pairs) -> float:
+    total = 0
+    count = 0
+    for a, b in pairs:
+        for ca, cb in zip(a, b):
+            total += abs(int(ca) - int(cb))
+            count += 1
+    return float(total / count) if count else 0.0
+
+
+def seamless_diff(tile_rgba) -> tuple[float, float]:
     """Documented offset-inspect heuristic: roll the tile by half and compare.
 
     Kept as specified in the architecture doc. For a strict tileability check
     (does the left edge actually meet the right edge) use ``edge_seam``.
     """
-    arr = np.asarray(tile_rgba).astype(np.int16)
-    h, w = arr.shape[:2]
-    rolled_x = np.roll(arr, w // 2, axis=1)
-    rolled_y = np.roll(arr, h // 2, axis=0)
-    seam_x = float(np.abs(arr[:, 0] - rolled_x[:, 0]).mean())
-    seam_y = float(np.abs(arr[0, :] - rolled_y[0, :]).mean())
+    arr = _rows(tile_rgba)
+    h, w = len(arr), len(arr[0])
+    seam_x = _mean_abs((row[0], row[(0 - w // 2) % w]) for row in arr)
+    seam_y = _mean_abs((arr[0][x], arr[(0 - h // 2) % h][x]) for x in range(w))
     return seam_x, seam_y
 
 
-def edge_seam(tile_rgba: np.ndarray) -> tuple[float, float]:
+def edge_seam(tile_rgba) -> tuple[float, float]:
     """Mean per-channel difference between opposite edges of one tile.
 
     When the tile repeats, column -1 abuts the next tile's column 0 (and row -1
@@ -27,9 +49,9 @@ def edge_seam(tile_rgba: np.ndarray) -> tuple[float, float]:
     patterns can legitimately differ here, so verify those by construction
     instead.
     """
-    arr = np.asarray(tile_rgba).astype(np.int16)
-    seam_x = float(np.abs(arr[:, 0] - arr[:, -1]).mean())
-    seam_y = float(np.abs(arr[0, :] - arr[-1, :]).mean())
+    arr = _rows(tile_rgba)
+    seam_x = _mean_abs((row[0], row[-1]) for row in arr)
+    seam_y = _mean_abs(zip(arr[0], arr[-1]))
     return seam_x, seam_y
 
 
@@ -38,9 +60,7 @@ def edge_seam(tile_rgba: np.ndarray) -> tuple[float, float]:
 TILING_SEAM_TOL = 1.0
 
 
-def tiling_seam(
-    tiled_rgba: np.ndarray, tile_px: int, margin: int = 4
-) -> tuple[float, float]:
+def tiling_seam(tiled_rgba, tile_px: int, margin: int = 4) -> tuple[float, float]:
     """Excess discontinuity at an internal tile seam over the interior baseline.
 
     Given an N-tile raster (the ``<pattern>`` rendered across multiple tiles), this
@@ -59,10 +79,10 @@ def tiling_seam(
     seam whose magnitude is <= the interior baseline is masked — which is why the
     by-construction invariants, not this metric, are the load-bearing guarantee.
     """
-    arr = np.asarray(tiled_rgba).astype(np.int16)
-    if arr.ndim < 2:
+    arr = _rows(tiled_rgba)
+    if not arr or not arr[0]:
         raise ValueError("tiled_rgba must be at least a 2D array")
-    h, w = arr.shape[:2]
+    h, w = len(arr), len(arr[0])
     if margin < 0:
         raise ValueError("margin must be non-negative")
     if tile_px <= 0:
@@ -75,10 +95,10 @@ def tiling_seam(
         )
 
     def col_disc(c: int) -> float:
-        return float(np.abs(arr[:, c] - arr[:, c - 1]).mean())
+        return _mean_abs((row[c], row[c - 1]) for row in arr)
 
     def row_disc(r: int) -> float:
-        return float(np.abs(arr[r, :] - arr[r - 1, :]).mean())
+        return _mean_abs(zip(arr[r], arr[r - 1]))
 
     seam_x = col_disc(tile_px)
     seam_y = row_disc(tile_px)

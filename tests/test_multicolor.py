@@ -10,7 +10,6 @@ test so global state never leaks into other suites.
 import io
 import xml.etree.ElementTree as ET
 
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -386,9 +385,13 @@ def test_single_color_motif_composes_via_color():
 # --- renderer pixel gate (method (b) end-to-end) ------------------------------
 
 
-def _close(arr: np.ndarray, rgb: tuple[int, int, int], tol: int = 28) -> int:
-    diff = np.abs(arr[..., :3].astype(int) - np.array(rgb)) <= tol
-    return int(np.all(diff, axis=-1).sum())
+def _close(image: Image.Image, rgb: tuple[int, int, int], tol: int = 28) -> int:
+    count = 0
+    data_source = getattr(image, "get_flattened_data", image.getdata)
+    for pixel in data_source():
+        if all(abs(int(pixel[i]) - rgb[i]) <= tol for i in range(3)):
+            count += 1
+    return count
 
 
 def test_multicolor_renders_each_slot_color_in_pixels():
@@ -404,10 +407,10 @@ def test_multicolor_renders_each_slot_color_in_pixels():
     result = validate_intent(raw)
     svg = compose(result.intent, result.palette, "default")
     png, _ = rasterize(svg, "png", 200, 48.0, binary=binary)
-    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
 
-    assert _close(arr, (0, 204, 0)) > 50  # slot s0 -> green present
-    assert _close(arr, (204, 0, 204)) > 50  # slot s1 -> magenta present (distinct color!)
+    assert _close(image, (0, 204, 0)) > 50  # slot s0 -> green present
+    assert _close(image, (204, 0, 204)) > 50  # slot s1 -> magenta present
     # Authoring colors were tokenized away: no red/blue should survive.
-    assert _close(arr, (255, 0, 0)) == 0
-    assert _close(arr, (0, 0, 255)) == 0
+    assert _close(image, (255, 0, 0)) == 0
+    assert _close(image, (0, 0, 255)) == 0

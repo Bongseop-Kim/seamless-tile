@@ -1,9 +1,9 @@
 """LLM adapter: ``prompt -> intent`` JSON.
 
-The LLM client is an injected seam (a ``Protocol``), NOT a hard dependency: no SDK
-is added to ``requirements.txt``. Tests inject a fake client; real network calls are
-opt-in (configure a default client via :func:`set_default_client`). The adapter only
-produces intent JSON — never raw SVG or coordinates.
+The LLM client is an injected seam (a ``Protocol``). This module has no concrete SDK
+coupling; the production Gemini implementation lives in :mod:`app.adapters.gemini`.
+Tests inject a fake client. The adapter only produces intent JSON — never raw SVG or
+coordinates.
 
 On stage-0 validation failure the adapter does ONE constrained re-prompt (feeding the
 errors back), then gives up with ``IntentInvalid`` (the route maps that to 422). This

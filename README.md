@@ -47,11 +47,16 @@ SVG 생성 자체는 렌더러 없이도 가능하다. PNG/TIFF export 검증에
 ## 실행
 
 ```bash
+export GEMINI_API_KEY=...
+export OPENAI_API_KEY=...
+
 .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
 - 문서: `http://localhost:8000/docs`
 - 헬스: `http://localhost:8000/api/v1/health`
+- 필수: `GEMINI_API_KEY`, `OPENAI_API_KEY`
+- 선택: `RECRAFT_API_KEY`(상세 motif 생성), `SUPABASE_DB_URL`(motif 영속화)
 
 ## 목표 데이터 흐름
 

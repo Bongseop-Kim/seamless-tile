@@ -5,7 +5,6 @@ import io
 import xml.etree.ElementTree as ET
 
 from defusedxml import ElementTree as DefusedET
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -207,8 +206,8 @@ def test_allover_lattice_tiles_without_seam():
     svg = generate(allover_lattice_intent()).svg
     tiled = _tiled_svg(svg, 2)
     png, _ = rasterize(tiled, "png", 300, 2 * TILE, binary=binary)
-    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
     tile_px = round(TILE / 25.4 * 300)
-    excess_x, excess_y = tiling_seam(arr, tile_px)
+    excess_x, excess_y = tiling_seam(image, tile_px)
     assert excess_x <= TILING_SEAM_TOL
     assert excess_y <= TILING_SEAM_TOL

@@ -91,7 +91,6 @@ def _render_structure_gate(motif: MotifDef, *, edge_seam_tol: float) -> None:
     """
     import io
 
-    import numpy as np
     from PIL import Image
 
     from app.render.raster import RasterError, find_renderer, rasterize
@@ -118,8 +117,8 @@ def _render_structure_gate(motif: MotifDef, *, edge_seam_tol: float) -> None:
     except RasterError as exc:
         raise ValueError(f"motif failed to render: {exc}") from exc
 
-    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
-    seam_x, seam_y = edge_seam(arr)
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
+    seam_x, seam_y = edge_seam(image)
     if max(seam_x, seam_y) > edge_seam_tol:
         raise ValueError(
             f"motif geometry overflows its declared bbox "

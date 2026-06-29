@@ -2,9 +2,8 @@
 
 The embedding model is a SEPARATE model from the chat LLM (D12): OpenAI
 ``text-embedding-3-small``. Like the other adapters, the client is an injected seam
-(a ``Protocol``) and the SDK is imported lazily — no ``openai`` dependency is forced
-on import or on the test suite. Real network calls are opt-in: :func:`app.main.lifespan`
-installs a default client only when ``OPENAI_API_KEY`` is configured.
+(a ``Protocol``). The OpenAI SDK is a required dependency for this service; real network
+calls still happen only when :func:`embed_query` is invoked.
 
 This adapter lives OUTSIDE the engine's determinism boundary. The motif resolver uses
 the returned vector only to decide *which* concrete ``motif_id`` to reuse/generate; the
@@ -12,15 +11,18 @@ chosen id is then frozen into the resolved-intent snapshot (the actual reproduct
 unit, spec §7.3/D17). The in-process cache here is a cost optimization, not the
 determinism guarantee.
 
-When no client is configured, :func:`embed_query` returns ``None`` (the resolver then
-skips the soft-similarity stage and falls back to S10 behavior). SDK/network failures
-are normalized to :class:`~app.adapters.base.AdapterClientError`.
+The app requires ``OPENAI_API_KEY`` at startup. For direct unit tests or explicitly
+injected resolver calls, no client still means :func:`embed_query` returns ``None`` and
+the resolver skips the soft-similarity stage. SDK/network failures are normalized to
+:class:`~app.adapters.base.AdapterClientError`.
 """
 
 from __future__ import annotations
 
 from collections import OrderedDict
 from typing import Protocol
+
+from openai import OpenAI
 
 from app.adapters.base import AdapterClientError, cache_key
 
@@ -48,10 +50,6 @@ class OpenAIEmbeddingClient:
         if not api_key:
             raise EmbeddingError("OpenAIEmbeddingClient requires a non-empty api_key")
         self.model = model
-        try:
-            from openai import OpenAI
-        except ImportError as exc:  # dependency not installed
-            raise EmbeddingError(f"openai is not installed: {exc}") from exc
         self._client = OpenAI(api_key=api_key)
 
     def embed(self, text: str) -> list[float]:
@@ -122,7 +120,11 @@ def embed_query(
 
 
 def client_from_settings(settings) -> OpenAIEmbeddingClient | None:
-    """Build an :class:`OpenAIEmbeddingClient` iff ``openai_api_key`` is set, else ``None``."""
+    """Build an :class:`OpenAIEmbeddingClient` from settings.
+
+    ``app.main`` treats a missing key as startup misconfiguration before calling this;
+    returning ``None`` keeps low-level tests and direct adapter use simple.
+    """
     api_key = getattr(settings, "openai_api_key", None)
     if not api_key:
         return None
