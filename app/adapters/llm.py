@@ -23,8 +23,6 @@ from typing import Protocol
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
 from app.core.config import get_settings
 from app.motifs import facets
-from app.motifs.registry import normalize_motif_svg, register_motif
-from app.render.sanitize import SanitizeError
 from app.validate.intent import IntentInvalid, validate_intent
 
 DEFAULT_TILE_MM = 48.0
@@ -218,7 +216,6 @@ def _build_prompt(
                         "view": "front",
                         "style": "flat",
                         "description": "small solid dot",
-                        "complexity": "simple",
                     }
                 ],
             },
@@ -249,9 +246,6 @@ def _build_prompt(
         f"(REQUIRED, one of: {scope_vocab}) — the motif's granularity: 'whole' for the "
         "full subject, 'partial' for a sub-region/detail — optional view/expression/"
         "style, and a short English description used for retrieval.",
-        '- Optionally add "complexity": "detailed" for painterly / multi-color motifs '
-        '(routed to the Recraft generator), or "simple" for single-color geometric '
-        "motifs (the default; routed to the LLM).",
         "- layer params colors reference palette slot ids, never raw hex.",
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
@@ -537,110 +531,3 @@ def build_intent(
     return build_intents(
         prompt, canvas=canvas, palette=palette, client=client, use_cache=use_cache
     )[0]
-
-
-# --- miss-path motif generation (single-color SVG; D8 simple=LLM) ------------
-
-# Process-local freeze cache for generated motif SVGs: same spec -> same SVG -> same
-# content-hash motif_id (the determinism contract; spec §9.4).
-_motif_svg_cache: dict[str, str] = {}
-
-
-def clear_motif_svg_cache() -> None:
-    _motif_svg_cache.clear()
-
-
-_SVG_RE = re.compile(r"<svg\b.*?</svg>", re.DOTALL | re.IGNORECASE)
-
-
-def _extract_svg(text: str) -> str:
-    """Pull the ``<svg>...</svg>`` body out of a completion (tolerate stray fences/prose)."""
-    if not isinstance(text, str):
-        return ""
-    match = _SVG_RE.search(text)
-    return match.group(0) if match else text.strip()
-
-
-def _build_svg_prompt(spec: dict, *, errors: list[str] | None = None) -> str:
-    lines = [
-        "Draw ONE small motif as a single inline SVG. Output ONLY the SVG markup — "
-        "no markdown, no prose, no <?xml?> prolog.",
-        "Hard rules (a sanitizer rejects any violation):",
-        "- The root <svg> MUST have a viewBox; use only <svg>, <g>, <path> elements.",
-        "- Vector paths only. NO <image>, <text>, <filter>, gradients, clipPath, "
-        "<style>, scripts, or external href.",
-        '- Single color: set fill="currentColor" on shapes (the engine binds the real '
-        "color). No raw hex fills.",
-        "- Center the geometry in the viewBox; keep it simple and recognizable.",
-        "",
-        f"subject: {spec.get('subject')}",
-        f"scope: {spec.get('scope')}",
-    ]
-    for k in ("view", "expression", "style", "description"):
-        if spec.get(k):
-            lines.append(f"{k}: {spec.get(k)}")
-    if errors:
-        lines += ["", "Your previous SVG was rejected. Fix exactly these:"]
-        lines += [f"- {e}" for e in errors]
-    return "\n".join(lines)
-
-
-def generate_motif_svg(
-    spec: dict,
-    *,
-    client: LLMClient | None = None,
-    embedding: list[float] | None = None,
-    use_cache: bool = True,
-) -> str:
-    """Generate, sanitize, and register a single-color motif SVG for a spec (miss path).
-
-    Deterministic: the same spec freezes to the same SVG, so the content-hash
-    ``motif_id`` is stable. Tier-1 gate (spec §6.4/§8): ``sanitize`` + structural
-    heuristics (drawable, non-degenerate, bbox aspect ratio, and — when a renderer is
-    installed — render-error / bbox-overflow seam). On a failure the model is
-    re-prompted once; a second failure (or no client) raises :class:`AdapterClientError`
-    (the route maps that to 502). Persistence is the best-effort write-through inside
-    :func:`register_motif` (never raises here).
-
-    ``embedding`` (S11) is the descriptor vector the resolver already computed for the
-    miss; it is persisted with the motif so later requests can soft-match it.
-    """
-    key = cache_key({"k": "motif_svg", "spec": facets.canonical_spec(spec)})
-    if use_cache and key in _motif_svg_cache:
-        return _motif_svg_cache[key]
-
-    llm = _resolve_client(client)
-    settings = get_settings()
-
-    errors: list[str] | None = None
-    for _ in range(2):  # initial attempt + one Tier-1 regeneration
-        svg = _extract_svg(llm.complete(_build_svg_prompt(spec, errors=errors)))
-        try:
-            motif = normalize_motif_svg(
-                svg,
-                max_aspect_ratio=settings.motif_max_aspect_ratio,
-                edge_seam_tol=settings.motif_edge_seam_tol,
-                render_check=settings.motif_render_check,
-            )
-        except (SanitizeError, ValueError) as exc:
-            errors = [str(exc)]
-            continue
-        motif_id = register_motif(
-            motif,
-            subject=facets.normalize_facet(spec.get("subject")) or None,
-            scope=facets.normalize_facet(spec.get("scope")) or None,
-            view=spec.get("view"),
-            expression=spec.get("expression"),
-            style=spec.get("style"),
-            description=spec.get("description"),
-            source="llm",
-            color_slots=["s0"],
-            embedding=embedding,
-        )
-        if use_cache:
-            _motif_svg_cache[key] = motif_id
-        return motif_id
-
-    raise AdapterClientError(
-        f"LLM motif SVG generation failed the sanitize/structure gate after retry: {errors}"
-    )

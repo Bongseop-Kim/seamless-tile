@@ -467,8 +467,8 @@ def generate_via_recraft(
 ) -> str:
     """Generate a multicolor motif via Recraft for a miss spec (detailed path, D8/D11).
 
-    Mirrors :func:`app.adapters.llm.generate_motif_svg`: the same canonical spec freezes
-    to the same motif id. The suitability gate (:func:`_flatten_unsuitable` + color cap)
+    The same canonical spec freezes to the same motif id, so a miss generates exactly
+    once. The suitability gate (:func:`_flatten_unsuitable` + color cap)
     runs each attempt; on a gate/sanitize failure the model is re-prompted once, and a
     second failure (or no client) raises :class:`RecraftError` (the route maps it to 502;
     spec §6.4). ``embedding`` is the descriptor vector the resolver computed for the miss,

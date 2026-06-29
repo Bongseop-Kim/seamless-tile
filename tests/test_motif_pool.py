@@ -2,7 +2,6 @@
 
 import pytest
 
-import app.adapters.llm as llm_adapter
 import app.adapters.recraft as recraft_adapter
 from app.engine import determinism
 from app.motifs import store as store_mod
@@ -58,7 +57,6 @@ def _clean():
 
     def _purge():
         store_mod.clear_default_store()
-        llm_adapter.clear_motif_svg_cache()
         recraft_adapter.clear_motif_cache()
         recraft_adapter.clear_recraft_motif_cache()
         for key in [k for k in MOTIFS if k not in BUILTIN_MOTIF_IDS]:
@@ -94,7 +92,6 @@ def test_delete_removes_from_store_memory_and_caches():
     fake = _FakeStore()
     mid = _register(fake, '<circle cx="50" cy="50" r="40" fill="#abc"/>')
     assert mid in MOTIFS and mid in fake.rows
-    llm_adapter._motif_svg_cache["k"] = mid
     recraft_adapter._motif_cache["k"] = mid
     recraft_adapter._motif_svg_cache["k"] = mid
 
@@ -102,7 +99,6 @@ def test_delete_removes_from_store_memory_and_caches():
 
     assert mid not in fake.rows
     assert mid not in MOTIFS
-    assert llm_adapter._motif_svg_cache == {}
     assert recraft_adapter._motif_cache == {}
     assert recraft_adapter._motif_svg_cache == {}
 

@@ -296,9 +296,8 @@ def delete_motif(motif_id: str) -> None:
 def _flush_motif_id_caches() -> None:
     """Flush adapter caches whose values are motif ids (spec §6.4 cache invalidation)."""
     # Lazy import: the adapters import this module, so a top-level import is a cycle.
-    from app.adapters import llm, recraft
+    from app.adapters import recraft
 
-    llm.clear_motif_svg_cache()
     recraft.clear_motif_cache()
     recraft.clear_recraft_motif_cache()
 

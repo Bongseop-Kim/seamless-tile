@@ -22,7 +22,6 @@ import numpy as np
 
 from app.adapters.base import AdapterClientError
 from app.adapters.embedding import embed_query
-from app.adapters.llm import generate_motif_svg
 from app.adapters.recraft import generate_via_recraft
 from app.core.config import get_settings
 from app.engine import determinism
@@ -31,22 +30,6 @@ from app.motifs.store import MotifStoreError, get_default_store
 
 # Facets that define an "exact descriptor" (subject + scope + light free facets, P0).
 _EXACT_FACETS = ("subject", "scope", "view", "expression", "style")
-
-# Valid explicit generation-source overrides on a motif spec (D11).
-_SOURCE_OVERRIDES = {"llm", "recraft"}
-
-
-def _route_source(spec: dict) -> str:
-    """Pick the miss-path generator (D11): explicit ``source`` override wins; otherwise
-    ``complexity == "detailed"`` routes to Recraft, everything else (incl. missing /
-    unknown ``complexity``) to the LLM. Multicolor specs signal via ``complexity``."""
-    override = spec.get("source")
-    if isinstance(override, str) and override.lower() in _SOURCE_OVERRIDES:
-        return override.lower()
-    complexity = spec.get("complexity")
-    if isinstance(complexity, str) and complexity.lower() == "detailed":
-        return "recraft"
-    return "llm"
 
 
 def _tau() -> float:
@@ -136,7 +119,7 @@ def _select_variant(store, variant_group, seed: int, fallback_id: str) -> str:
 
 
 def _resolve_one(
-    spec: dict, *, store, llm_client, recraft_client, embedding_client, seed: int
+    spec: dict, *, store, recraft_client, embedding_client, seed: int
 ) -> str:
     # Normalize the controlled facet so the DB filter, the exact-match comparison, and
     # the generated motif's stored facets all agree (NFC + strip + casefold). `scope` is
@@ -171,13 +154,10 @@ def _resolve_one(
             if sim >= _tau():  # τ or above → reuse (hit)
                 return _select_variant(store, rec.variant_group, seed, rec.id)
             # below τ → miss (generate); fall through.
-    # Miss (or missing facets / no store) → generate, persisting the query embedding so
-    # future requests can soft-match. Source routing (D8/D11): detailed/multicolor specs
-    # go to Recraft (multicolor, suitability-gated), everything else to the LLM (single
-    # color). May raise AdapterClientError (→ 502) if no sanitizable SVG / Recraft unset.
-    if _route_source(spec) == "recraft":
-        return generate_via_recraft(spec, client=recraft_client, embedding=query_vec)
-    return generate_motif_svg(spec, client=llm_client, embedding=query_vec)
+    # Miss (or missing facets / no store) → generate via Recraft, persisting the query
+    # embedding so future requests can soft-match. May raise AdapterClientError (→ 502)
+    # if the generated SVG is unsanitizable or no Recraft client is configured.
+    return generate_via_recraft(spec, client=recraft_client, embedding=query_vec)
 
 
 def resolve_motifs(
@@ -185,7 +165,6 @@ def resolve_motifs(
     motif_specs: list[dict],
     *,
     store=None,
-    llm_client=None,
     recraft_client=None,
     embedding_client=None,
     seed: int = 0,
@@ -233,7 +212,6 @@ def resolve_motifs(
             motif_id = _resolve_one(
                 spec,
                 store=store,
-                llm_client=llm_client,
                 recraft_client=recraft_client,
                 embedding_client=embedding_client,
                 seed=seed,
