@@ -19,6 +19,7 @@ Caching is two-layered and both layers preserve determinism:
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import xml.etree.ElementTree as ET
 from typing import Protocol
@@ -57,9 +58,11 @@ _BG_AREA_RATIO = 0.9
 
 
 class RecraftClient(Protocol):
-    """Minimal motif-generation seam: a prompt in, a raw SVG string out."""
+    """Minimal motif seam: a prompt in (generate) or an image in (vectorize), SVG out."""
 
     def generate(self, prompt: str) -> str: ...
+
+    def vectorize(self, image_bytes: bytes) -> str: ...
 
 
 class RecraftError(AdapterClientError):
@@ -98,6 +101,9 @@ def get_default_recraft_client() -> RecraftClient | None:
 # output is driven by a *_vector model id on the STANDARD generations endpoint; `style`
 # is omitted for vector models (the model determines SVG). data[0].url is an .svg file.
 _API_PATH = "/images/generations"
+# Vectorize is a separate endpoint: multipart raster upload -> SVG (data shape differs
+# from generations: the SVG URL is at response["image"]["url"], not data[0].url).
+_VECTORIZE_PATH = "/images/vectorize"
 DEFAULT_VECTOR_MODEL = "recraftv4_1_vector"  # Recraft V4.1 Vector
 DEFAULT_VECTOR_STYLE = ""  # omit style by default; the vector model produces SVG
 DEFAULT_SIZE = "1024x1024"
@@ -174,6 +180,36 @@ class RecraftHTTPClient:
             raise RecraftError(f"Recraft request failed: {exc}") from exc
         if not svg or "<svg" not in svg.lower():
             raise RecraftError("Recraft returned a non-SVG payload")
+        return svg
+
+    def vectorize(self, image_bytes: bytes) -> str:
+        """Convert a raster image to SVG via ``POST /images/vectorize`` (multipart).
+
+        Returns the raw SVG text (fetched from ``response["image"]["url"]``). All failures
+        normalize to :class:`RecraftError` (the route maps that to 502, but the resolver
+        catches it on the vectorize path and drops the motif with a warning instead)."""
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        try:
+            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+                resp = client.post(
+                    f"{self._base_url}{_VECTORIZE_PATH}",
+                    files={"file": ("image.png", image_bytes, "image/png")},
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                url = resp.json()["image"]["url"]
+                file_resp = client.get(url)
+                file_resp.raise_for_status()
+                svg = file_resp.text
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise RecraftError(
+                f"Recraft vectorize HTTP {exc.response.status_code}: {body}"
+            ) from exc
+        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+            raise RecraftError(f"Recraft vectorize request failed: {exc}") from exc
+        if not svg or "<svg" not in svg.lower():
+            raise RecraftError("Recraft vectorize returned a non-SVG payload")
         return svg
 
 
@@ -519,3 +555,79 @@ def generate_via_recraft(
     raise RecraftError(
         f"Recraft motif failed the suitability/sanitize gate after retry: {errors}"
     )
+
+
+# Per-image freeze cache: sha256(image bytes) -> motif_id. Keyed on the IMAGE (not the
+# spec text): the same uploaded image always vectorizes to the same motif, and identical
+# uploads across designs/specs dedup to a single call. Determinism (§9.4) + cost (P2 #8).
+_vectorize_cache: dict[str, str] = {}
+
+
+def clear_vectorize_cache() -> None:
+    _vectorize_cache.clear()
+
+
+def vectorize_via_recraft(
+    image_bytes: bytes,
+    spec: dict,
+    *,
+    client: RecraftClient | None = None,
+    embedding: list[float] | None = None,
+) -> str:
+    """Vectorize an uploaded image into a motif and register it like any other.
+
+    Persistence is IDENTICAL to :func:`generate_via_recraft` (shared store, content-hash
+    id, ``embedding`` persisted for soft-match) — an uploaded motif image is treated the
+    same as a prompt-generated one; copyright is the requester's responsibility.
+
+    The vectorized SVG runs the SAME suitability gate as generated motifs. If it cannot be
+    flattened/normalized (raster ``<image>``, too many colors, etc.) or is outside
+    Recraft's vectorize limits, this raises :class:`RecraftError` — there is no re-prompt
+    (the image is fixed) and the resolver drops the layer with a warning (no substitution).
+    Frozen by image content hash, so the same bytes always map to the same ``motif_id``.
+    """
+    key = cache_key({"k": "recraft_vec", "img": hashlib.sha256(image_bytes).hexdigest()})
+    if key in _vectorize_cache:
+        return _vectorize_cache[key]
+
+    # Local import avoids any import-time coupling between the two adapter modules.
+    from app.adapters.image import vectorize_limit_error
+
+    limit_reason = vectorize_limit_error(image_bytes)
+    if limit_reason is not None:
+        raise RecraftError(f"image unfit for vectorization: {limit_reason}")
+
+    generator = _resolve_client(client)
+    try:
+        raw = generator.vectorize(image_bytes)
+    except RecraftError:
+        raise
+    except Exception as exc:  # any client failure is upstream (502-class)
+        raise RecraftError(f"Recraft vectorize failed: {exc}") from exc
+
+    settings = get_settings()
+    try:
+        motif = normalize_motif_svg(
+            _flatten_unsuitable(raw),
+            max_color_slots=settings.recraft_max_color_slots,
+            max_aspect_ratio=settings.motif_max_aspect_ratio,
+            edge_seam_tol=settings.motif_edge_seam_tol,
+            render_check=settings.motif_render_check,
+        )
+    except (sanitize.SanitizeError, ValueError) as exc:
+        raise RecraftError(f"vectorized image failed the suitability gate: {exc}") from exc
+
+    motif_id = register_motif(
+        motif,
+        subject=facets.normalize_facet(spec.get("subject")) or None,
+        scope=facets.normalize_facet(spec.get("scope")) or None,
+        view=spec.get("view"),
+        expression=spec.get("expression"),
+        style=spec.get("style"),
+        description=spec.get("description"),
+        source="recraft_vectorize",
+        color_slots=list(motif.color_slots),
+        embedding=embedding,
+    )
+    _vectorize_cache[key] = motif_id
+    return motif_id

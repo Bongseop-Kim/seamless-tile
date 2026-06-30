@@ -24,7 +24,7 @@ import math
 
 from app.adapters.base import AdapterClientError
 from app.adapters.embedding import embed_query
-from app.adapters.recraft import generate_via_recraft
+from app.adapters.recraft import generate_via_recraft, vectorize_via_recraft
 from app.core.config import get_settings
 from app.core.observability import log_metrics
 from app.engine import determinism
@@ -226,6 +226,7 @@ def resolve_motifs(
     recraft_client=None,
     embedding_client=None,
     seed: int = 0,
+    images: list[bytes] | None = None,
     warnings: list[str] | None = None,
 ) -> dict:
     """Return a copy of ``intent`` with each motif layer's ``params.motif_id`` resolved.
@@ -266,17 +267,37 @@ def resolve_motifs(
             continue
         lid = layer.get("id")
         attempted.add(lid)
+        src_idx = spec.get("source_image_index")
         try:
-            motif_id = _resolve_one(
-                spec,
-                store=store,
-                recraft_client=recraft_client,
-                embedding_client=embedding_client,
-                seed=seed,
-            )
+            if src_idx is not None:
+                # Chat multimodal: this motif IS an uploaded image -> vectorize it.
+                if (
+                    isinstance(src_idx, bool)
+                    or not isinstance(src_idx, int)
+                    or not images
+                    or not (0 <= src_idx < len(images))
+                ):
+                    raise AdapterClientError(f"invalid source_image_index {src_idx!r}")
+                query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
+                motif_id = vectorize_via_recraft(
+                    images[src_idx], spec, client=recraft_client, embedding=query_vec
+                )
+                _log_path("vectorize", spec, selected_id=motif_id)
+            else:
+                motif_id = _resolve_one(
+                    spec,
+                    store=store,
+                    recraft_client=recraft_client,
+                    embedding_client=embedding_client,
+                    seed=seed,
+                )
         except AdapterClientError:
             failed.add(lid)
-            reasons[lid] = f"{spec.get('subject', '?')}/{spec.get('scope', '?')}"
+            reasons[lid] = (
+                f"uploaded image {src_idx} could not be vectorized as a motif"
+                if src_idx is not None
+                else f"{spec.get('subject', '?')}/{spec.get('scope', '?')}"
+            )
             continue
         layer.setdefault("params", {})["motif_id"] = motif_id
 

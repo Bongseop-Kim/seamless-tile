@@ -50,6 +50,13 @@ MAX_IMAGE_PIXELS = 24_000_000
 # Vectorization fit thresholds (ARCHITECTURE.md: clean path under a count, bounded colors).
 VECTORIZE_MAX_PATHS = 1500
 VECTORIZE_MAX_COLORS = 32
+# Recraft /images/vectorize input limits (tighter than the adapter caps above). The API
+# rejects images outside these, so the multi-image path screens a motif image against
+# them BEFORE the call and surfaces a clear reason instead of an opaque upstream 502.
+RECRAFT_VECTORIZE_MAX_BYTES = 5 * 1024 * 1024
+RECRAFT_VECTORIZE_MAX_DIM = 4096
+RECRAFT_VECTORIZE_MIN_DIM = 256
+RECRAFT_VECTORIZE_MAX_PIXELS = 16_000_000
 
 @dataclass(frozen=True)
 class VectorResult:
@@ -148,6 +155,42 @@ def _strip_metadata(data: bytes) -> bytes:
     buf = io.BytesIO()
     clean.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def decode_and_clean(image_b64: str) -> bytes:
+    """Decode → validate → metadata-strip a base64/data-URI image to clean PNG bytes.
+
+    The public entry the multi-image chat path uses before any image leaves the box (to
+    Gemini / Recraft): it runs the same encoded-size guard, format/pixel-bomb caps,
+    integrity check, and metadata strip the singular ``reference_image`` path does.
+    Raises :class:`IntentInvalid` (a 422 at the route) on any violation.
+    """
+    data = _decode_image(image_b64)
+    _validate_image(data)
+    return _strip_metadata(data)
+
+
+def vectorize_limit_error(data: bytes) -> str | None:
+    """Reason string if ``data`` is outside Recraft ``/images/vectorize`` limits, else None.
+
+    The adapter caps (8 MB / 8192px / 24 MP) are looser than Recraft's, so an image that
+    passes :func:`_validate_image` can still be rejected by vectorize. Screening here lets
+    the resolver drop the motif with a clear warning instead of surfacing a 502.
+    """
+    if len(data) > RECRAFT_VECTORIZE_MAX_BYTES:
+        return f"image exceeds {RECRAFT_VECTORIZE_MAX_BYTES} bytes for vectorization"
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            w, h = img.size
+    except Exception as exc:  # noqa: BLE001 - PIL grab-bag; treat as unusable input
+        return f"image could not be read: {exc}"
+    if min(w, h) < RECRAFT_VECTORIZE_MIN_DIM:
+        return f"image min side {min(w, h)}px is below the {RECRAFT_VECTORIZE_MIN_DIM}px minimum"
+    if max(w, h) > RECRAFT_VECTORIZE_MAX_DIM:
+        return f"image max side {max(w, h)}px exceeds the {RECRAFT_VECTORIZE_MAX_DIM}px maximum"
+    if w * h > RECRAFT_VECTORIZE_MAX_PIXELS:
+        return f"image {w}x{h}px exceeds the {RECRAFT_VECTORIZE_MAX_PIXELS}-pixel maximum"
+    return None
 
 
 def extract_palette(image_bytes: bytes, *, num_colors: int = DEFAULT_NUM_COLORS) -> list[dict]:

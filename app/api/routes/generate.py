@@ -23,6 +23,7 @@ from app.api.schemas.generate import (
 from app.adapters.base import AdapterClientError, cache_key
 from app.adapters.embedding import get_default_embedding_client
 from app.adapters.image import build_intent as image_build_intent
+from app.adapters.image import decode_and_clean as image_decode_and_clean
 from app.adapters.llm import build_intents as llm_build_intents
 from app.adapters.motif_resolver import resolve_motifs
 from app.adapters.recraft import get_default_recraft_client
@@ -39,7 +40,7 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 
 # Product-surface fields that are ignored when a raw `intent` is supplied directly
 # (the intent is then authoritative); they ARE honored on the prompt/image paths.
-_INTENT_DIRECT_IGNORED = ("prompt", "reference_image", "canvas", "palette")
+_INTENT_DIRECT_IGNORED = ("prompt", "reference_image", "images", "canvas", "palette")
 
 # Process-local LRU: cache_key(request + reg_version) -> (candidates_payload, warnings).
 # candidates_payload is [(id, png_url), ...]; request_id is intentionally NOT stored so a
@@ -175,6 +176,9 @@ async def generate_candidate(
     warnings: list[str] = []
     source_fidelity = SOURCE_FIDELITY_VECTOR
     input_type = "intent"
+    # Decoded, validated, metadata-stripped bytes for the multi-image chat path; passed
+    # to both the LLM (multimodal binding) and the resolver (vectorize). None elsewhere.
+    cleaned_images: list[bytes] | None = None
 
     # Cache short-circuit BEFORE any adapter/engine/render work. The repro seal moves with
     # the reusable motif pool, so it is part of the key (pool change -> auto-invalidation); it is a
@@ -217,6 +221,28 @@ async def generate_candidate(
             for name in _INTENT_DIRECT_IGNORED
             if getattr(request, name) is not None
         ]
+    elif request.images:
+        # Multi-image chat path: prompt + N images go to the multimodal LLM together; it
+        # binds each image to a role (style -> palette, motif -> vectorized). Decode +
+        # validate + strip every image ONCE here, before any bytes leave the box.
+        input_type = "reference_images"
+        cleaned_images = _run_adapter(
+            lambda: [image_decode_and_clean(s) for s in request.images]
+        )
+        adapted_list = await asyncio.to_thread(
+            _run_adapter,
+            lambda: llm_build_intents(
+                request.prompt or "",
+                canvas=request.canvas,
+                palette=request.palette,
+                images=cleaned_images,
+                use_cache=False,  # chat surface: re-ask -> fresh designs (see prompt path)
+            ),
+        )
+        source_fidelity = adapted_list[0].source_fidelity
+        for adapted in adapted_list:
+            warnings += adapted.warnings
+        designs = [(a.intent, a.motif_specs) for a in adapted_list]
     elif request.reference_image is not None:
         input_type = "reference_image"
         adapted = await asyncio.to_thread(
@@ -246,7 +272,7 @@ async def generate_candidate(
     else:
         raise HTTPException(
             status_code=422,
-            detail=["one of `intent`, `reference_image`, or `prompt` is required"],
+            detail=["one of `intent`, `images`, `reference_image`, or `prompt` is required"],
         )
 
     # S10 glue: resolve each design's motif specs to concrete motif_ids and inject them
@@ -274,6 +300,7 @@ async def generate_candidate(
                     embedding_client=get_default_embedding_client(),
                     recraft_client=get_default_recraft_client(),
                     seed=es,
+                    images=cleaned_images,
                     warnings=warnings,
                 )
             )

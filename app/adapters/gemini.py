@@ -43,7 +43,7 @@ class GeminiClient:
         self._temperature = temperature
         self._client = genai.Client(api_key=api_key)
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, images: list[bytes] | None = None) -> str:
         # JSON mode: the response is guaranteed syntactically-valid JSON (no markdown
         # fence / prose), which is all this seam ever emits (intent JSON). We do NOT pass
         # response_schema: the output is a deeply-nested union-heavy wrapper
@@ -53,10 +53,22 @@ class GeminiClient:
             temperature=self._temperature,
             response_mime_type="application/json",
         )
+        if images:
+            # Multimodal: image parts FIRST, in the provided order (the index the prompt
+            # binds roles to), then the instruction text. Images arrive metadata-stripped
+            # and re-encoded to PNG by the route, so the mime type is always image/png.
+            contents: object = [
+                types.Part.from_bytes(data=img, mime_type="image/png") for img in images
+            ]
+            contents.append(types.Part.from_text(text=prompt))
+        else:
+            # Text-only path unchanged: a plain string keeps the large common prefix
+            # eligible for Gemini implicit caching.
+            contents = prompt
         for attempt in range(_MAX_ATTEMPTS):
             try:
                 response = self._client.models.generate_content(
-                    model=self._model, contents=prompt, config=config
+                    model=self._model, contents=contents, config=config
                 )
                 break
             except errors.APIError as exc:
