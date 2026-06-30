@@ -106,6 +106,7 @@ class _FakeStore:
                 view=r.view,
                 expression=r.expression,
                 style=r.style,
+                description=r.description,
             )
             for r in sorted(
                 (r for r in self.rows if r.scope == scope), key=lambda r: r.id
@@ -407,7 +408,11 @@ def test_resolver_embedding_unconfigured_falls_back_to_lowest_id():
     assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
 
 
-def test_resolver_embedding_error_is_fail_soft(monkeypatch):
+def test_resolver_embedding_call_failure_propagates(monkeypatch):
+    # A real embedding-CALL failure (client present, upstream down) must NOT silently reuse
+    # an arbitrary motif — it propagates AdapterClientError so the route maps it to 502.
+    # (Distinct from *unconfigured* embedding, which embed_query returns None for; that path
+    # stays graceful — see test_resolver_embedding_unconfigured_falls_back_to_lowest_id.)
     _set_tau(monkeypatch, 0.6)
 
     class _BoomEmbed:
@@ -417,12 +422,11 @@ def test_resolver_embedding_error_is_fail_soft(monkeypatch):
             raise AdapterClientError("embed upstream down")
 
     rec = _record("recraft-aaa", "pig", "partial", view="side", embedding=[1.0, 0.0])
-    out = resolve_motifs(
-        _layer_intent(), [_spec(view="front")],
-        store=_FakeStore(rec), embedding_client=_BoomEmbed(),
-    )
-    # fail-soft: reuse (not a 502, not a regenerate)
-    assert out["layers"][0]["params"]["motif_id"] == "recraft-aaa"
+    with pytest.raises(AdapterClientError):
+        resolve_motifs(
+            _layer_intent(), [_spec(view="front")],
+            store=_FakeStore(rec), embedding_client=_BoomEmbed(),
+        )
 
 
 def test_resolver_dimension_mismatch_excluded_falls_back(monkeypatch):
@@ -470,6 +474,52 @@ def test_resolver_hit_samples_from_reusable_pool(monkeypatch):
         for s in range(20)
     }
     assert chosen == {"recraft-aaa", "recraft-bbb"}  # criterion 3 through the full resolver
+
+
+def test_resolver_part_collision_excluded_from_pool_vector(monkeypatch):
+    # Bug: a "giraffe leg" and a "giraffe face" share (subject, scope) -> one
+    # variant_group (intentional, for petal-style diversity). The part lives only in
+    # `description`, so the coarse pool used to let the leg be sampled for a face query.
+    # Spec description differs from both rows -> vector path; the embedding match picks
+    # the face and the pool must now drop the dissimilar leg for every seed.
+    _set_tau(monkeypatch, 0.6)
+    grp = "giraffe-partial"
+    leg = _record("recraft-aaa-leg", "giraffe", "partial", description="giraffe leg",
+                  variant_group=grp, embedding=[0.0, 1.0])  # lower id than the face
+    face = _record("recraft-bbb-face", "giraffe", "partial", description="giraffe face",
+                   variant_group=grp, embedding=[1.0, 0.0])
+    store = _FakeStore(leg, face)
+    chosen = {
+        resolve_motifs(
+            _layer_intent(),
+            [_spec(subject="giraffe", description="giraffe head")],  # != stored -> vector
+            store=store, embedding_client=_FixedEmbed([1.0, 0.0]), seed=s,
+        )["layers"][0]["params"]["motif_id"]
+        for s in range(20)
+    }
+    assert chosen == {"recraft-bbb-face"}  # leg (cos 0.0 < τ) never sampled
+
+
+def test_resolver_part_collision_excluded_from_pool_exact(monkeypatch):
+    # Same collision via the exact path: the spec's description exactly matches the face.
+    # `description` is now an exact-descriptor facet, so the exact anchor is the face (not
+    # the lower-id leg), and the τ-scoped pool still drops the leg.
+    _set_tau(monkeypatch, 0.6)
+    grp = "giraffe-partial"
+    leg = _record("recraft-aaa-leg", "giraffe", "partial", description="giraffe leg",
+                  variant_group=grp, embedding=[0.0, 1.0])  # lower id: old exact-match bug
+    face = _record("recraft-bbb-face", "giraffe", "partial", description="giraffe face",
+                   variant_group=grp, embedding=[1.0, 0.0])
+    store = _FakeStore(leg, face)
+    chosen = {
+        resolve_motifs(
+            _layer_intent(),
+            [_spec(subject="giraffe", description="giraffe face")],  # == face -> exact
+            store=store, embedding_client=_FixedEmbed([1.0, 0.0]), seed=s,
+        )["layers"][0]["params"]["motif_id"]
+        for s in range(20)
+    }
+    assert chosen == {"recraft-bbb-face"}
 
 
 def test_resolver_same_inputs_deterministic(monkeypatch):

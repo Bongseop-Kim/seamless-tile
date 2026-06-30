@@ -231,7 +231,12 @@ async def generate_candidate(
         adapted_list = await asyncio.to_thread(
             _run_adapter,
             lambda: llm_build_intents(
-                request.prompt, canvas=request.canvas, palette=request.palette
+                request.prompt,
+                canvas=request.canvas,
+                palette=request.palette,
+                # 채팅 표면: 같은 프롬프트를 다시 보내도 temp>0로 새로 작성해 다른 디자인을
+                # 내준다("다시 만들어줘"). 어댑터 캐시는 직접-호출/테스트/repro용으로 보존.
+                use_cache=False,
             ),
         )
         source_fidelity = adapted_list[0].source_fidelity

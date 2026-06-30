@@ -38,9 +38,9 @@ Prompt 분석에는 Gemini LLM을 사용합니다. 다만 LLM이 자유롭게 �
 
 - `gallery/`의 best-practice 예시는 개발자가 직접 검수한 결과물입니다.
 - Prompt builder는 이 gallery 구조를 참고해 좋은 패턴 작성 방식을 LLM에 주입합니다.
-- 이 단계의 목표는 byte 재현이 아니라 schema 수렴입니다. 동일 요청의 정확한 재현은 response cache와 결정론
-  엔진이 맡고(아래 섹션 참고), sampling temperature는 일부러 0보다 크게 두어 서로 다른 prompt가 다른 디자인을
-  탐색하게 합니다.
+- 이 단계의 목표는 byte 재현이 아니라 schema 수렴입니다. 채팅 표면에서는 같은 prompt를 다시 보내도
+  (sampling temperature>0로) 매번 새로 작성해 다른 디자인을 탐색합니다 — 같은 입력에 바이트 동일 응답을
+  주지 않습니다. 정확한 재현은 직접 `intent`를 넣는 경로와 결정론 엔진이 보장합니다(아래 섹션 참고).
 - 이 단계의 산출물은 SVG가 아니라 `canvas`, `palette`, `colorways`, `layers`, `placement`를 가진 intent입니다.
 
 즉, LLM은 “그림 생성기”가 아니라 “정해진 schema에 맞춰 textile pattern 의도를 작성하는 parser/author”로
@@ -108,9 +108,11 @@ Resolved Intent JSON
 `stable_hash(variant_group:seed) % len(pool)`로 고르는 variant가 달라지기 때문입니다.
 
 그래서 generate 시점에 reusable pool의 motif ID 목록을 fingerprint하고, `registry_version`에
-`+pool.<hex8>` suffix를 스탬프합니다. 결국 재현 seal은 `(prompt, seed, registry_version)`에 가깝고,
-pool이 바뀌면 version도 같이 움직입니다. "같은 입력이면 같은 SVG"라는 계약을 mutable DB state까지
-포함해 닫으려는 장치입니다.
+`+pool.<hex8>` suffix를 스탬프합니다. "같은 입력이면 같은 SVG" 계약은 **resolved intent→SVG** 구간에
+해당합니다 — `(intent, seed, colorway, registry_version)`이 같으면 바이트 동일 SVG이고, pool이 바뀌면
+version도 같이 움직여 mutable DB state까지 닫습니다. 반면 **prompt→intent** 구간은 채팅 표면에서 일부러
+재현하지 않습니다(매 turn LLM이 새로 작성). prompt 단위의 정확한 재현이 필요하면 직접 `intent` 경로를
+쓰거나 `GENERATE_CACHE_SIZE`를 켜십시오(repro/debug).
 
 ### 신뢰할 수 없는 SVG/이미지 입력 경계
 
@@ -142,14 +144,17 @@ seed는 같은 variant를 고릅니다. 이렇게 후보 다양성을 만들면�
 
 엔진 외곽에서 비용·안정성·재현성을 받치는 결정들입니다.
 
-- **Generate 응답 캐시 (in-process LRU)**: cache key는 단순 prompt가 아니라 `request body + reusable pool
-  fingerprint`입니다. 결정론 seal과 같은 키 공간을 쓰므로, 동일 요청은 adapter/엔진/렌더+업로드를 통째로
-  건너뛰고 직전 candidates와 preview URL을 그대로 반환합니다.
+- **Generate 응답 캐시 (in-process LRU, 기본 off)**: 채팅 표면에서 "같은 입력→바이트 동일"을 막기 위해
+  기본 비활성(`GENERATE_CACHE_SIZE=0`)입니다. 켜면 cache key는 단순 prompt가 아니라 `request body +
+  reusable pool fingerprint`이고, 동일 요청은 adapter/엔진/렌더+업로드를 통째로 건너뛰고 직전 candidates와
+  preview URL을 그대로 반환합니다 — 결정론/repro 디버깅용 opt-in입니다.
 - **Resource ceiling (DoS 가드)**: 단일 intent가 만들 수 있는 작업/출력에 상한을 둡니다 — placement instance
   수, 합성 SVG byte, raster DPI/tile_mm cap. 신뢰할 수 없는 입력이 자원을 무한히 끌어쓰지 못하게 막습니다.
 - **Graceful degradation**: 외부 의존성은 옵션입니다. `SUPABASE_DB_URL`이 없으면 motif persistence와
   generation logging은 in-memory/no-op으로, storage 미설정이면 `png_url`은 `null` + warning으로 떨어집니다.
-  로컬·테스트는 외부 credential 없이 그대로 동작합니다.
+  embedding이 **미설정**(키 없음)이면 soft-similarity 없이 graceful하게 동작합니다. 단 embedding **호출
+  실패**(OpenAI 다운)는 임의 motif 재사용으로 품질을 숨기지 않고 `502`로 끝냅니다. 로컬·테스트는 외부
+  credential 없이 그대로 동작합니다.
 - **Observability**: `X-Request-ID`가 헤더·응답 body·모든 로그 라인으로 end-to-end 전파되고, 요청당 stage
   latency와 candidate/seam 카운터를 담은 구조화 metrics 한 줄을 남깁니다. 외부 backend 없이 stdlib logging만
   사용합니다.

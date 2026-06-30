@@ -8,8 +8,11 @@ contract holds: the engine only ever sees an intent with concrete motif ids.
 
 Retrieval (spec §6.1, D18): **exact descriptor match** → **scope hard filter** →
 **embedding soft similarity (τ gate)** → **generate-on-miss**. Every hit routes through
-the variant_group's reusable sampling pool (§7.1); when that pool is empty, it falls
-back to the matched motif. The embedding stage is fail-soft: if no embedding client is
+the variant_group's reusable sampling pool (§7.1), **τ-scoped to the query embedding** so
+a sibling that only shares (subject, scope) — a different part living in ``description``,
+e.g. a "giraffe leg" in a "giraffe face" group — can't be sampled in place of the match;
+when the pool is empty it falls back to the matched motif. The embedding stage is
+fail-soft: if no embedding client is
 configured, or the call fails, or no candidate has a comparable embedding, it degrades
 to the S10 lowest-id hard-filter reuse.
 """
@@ -17,6 +20,7 @@ to the S10 lowest-id hard-filter reuse.
 from __future__ import annotations
 
 import copy
+import math
 
 from app.adapters.base import AdapterClientError
 from app.adapters.embedding import embed_query
@@ -27,13 +31,38 @@ from app.engine import determinism
 from app.motifs import facets
 from app.motifs.store import MotifStoreError, get_default_store
 
-# Facets that define an "exact descriptor" (subject + scope + light free facets, P0).
-_EXACT_FACETS = ("subject", "scope", "view", "expression", "style")
+# Facets that define an "exact descriptor" (spec §6.1, D18). `description` carries the
+# part/anatomy name (D10: "wing"/"leg"/... live here, not in `subject`), so it MUST be
+# compared — otherwise a stored "giraffe leg" descriptor exactly matches a "giraffe face"
+# query (both giraffe/partial with empty view/expression/style) and the wrong part is
+# picked as the reuse anchor before the embedding stage ever runs.
+_EXACT_FACETS = ("subject", "scope", "view", "expression", "style", "description")
 
 
 def _tau() -> float:
     """Cosine similarity threshold for "reuse vs generate" (spec §6.1/D13)."""
     return get_settings().motif_similarity_tau
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity; 0.0 when either vector has zero norm. Mirrors the store's
+    pgvector ``1 - (a <=> b)`` so the in-Python variant-pool filter agrees with the
+    DB-side ranking that selected the match."""
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return sum(x * y for x, y in zip(a, b)) / (na * nb)
+
+
+def _similar_enough(embedding, query_vec: list[float], tau: float) -> bool:
+    """Whether a variant-pool sibling may stand in for the match. A missing or
+    incompatibly-sized embedding is unjudgeable and kept (``True``); otherwise it must be
+    within ``tau`` of the query. Only a comparable-but-below-τ sibling is dropped, so the
+    filter can never empty a pool of genuinely-similar (or pre-embedding) variants."""
+    if not embedding or len(embedding) != len(query_vec):
+        return True
+    return _cosine(embedding, query_vec) >= tau
 
 
 def _descriptor_text(spec: dict) -> str:
@@ -88,18 +117,36 @@ def _log_path(
     )
 
 
-def _select_variant(store, variant_group, seed: int, fallback_id: str) -> str:
+def _select_variant(
+    store, variant_group, seed: int, fallback_id: str, query_vec=None
+) -> str:
     """Seed-sample one variant from the group's reusable pool (§7.1), else ``fallback_id``.
 
-    When it is empty, the matched motif itself is returned, so S11 hits resolve to the
-    matched id.
+    ``variant_group`` is keyed on (subject, scope), so a pool can hold genuinely
+    interchangeable variants (five- vs six-petal "flower"/"whole") AND, when the part
+    lives only in ``description``, semantically-different siblings ("giraffe face" vs
+    "giraffe leg", both giraffe/partial). When ``query_vec`` is given, the pool is
+    therefore restricted to members within τ of the query embedding — the anchor
+    ``fallback_id`` and members lacking a comparable embedding are always kept — so a
+    dissimilar sibling can't be sampled in place of the match. Without ``query_vec``
+    (embedding unavailable) the whole group is the pool, as before. Empty group →
+    ``fallback_id``.
     """
     if not variant_group:
         return fallback_id
     try:
-        pool = [rec.id for rec in store.find_by_variant_group(variant_group)]
+        members = store.find_by_variant_group(variant_group)
     except MotifStoreError:
-        pool = []
+        return fallback_id
+    if query_vec is None:
+        pool = [rec.id for rec in members]
+    else:
+        tau = _tau()
+        pool = [
+            rec.id
+            for rec in members
+            if rec.id == fallback_id or _similar_enough(rec.embedding, query_vec, tau)
+        ]
     if not pool:
         return fallback_id
     return determinism.select_variant(pool, variant_group, seed)
@@ -122,19 +169,24 @@ def _resolve_one(
             # idempotent via the content-hash id, so correctness is preserved.
             candidates = []
         if candidates:
+            # Embed up front: the query vector scopes EVERY hit's variant pool
+            # (_select_variant), so a sibling that merely shares (subject, scope) but is
+            # semantically different — a "giraffe leg" in a "giraffe face" group — can't
+            # be sampled in place of the match. embed_query returns None when embedding is
+            # *unconfigured* (no client/key → graceful, coarse pool); a real call FAILURE
+            # raises AdapterClientError, which we let propagate → 502 rather than silently
+            # reusing an arbitrary motif and hiding the outage.
+            query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
             # (0) Exact descriptor match wins (D18); route through the group's pool.
             exact = _exact_match(spec, candidates)
             if exact is not None:
                 rec = next(c for c in candidates if c.id == exact)
-                selected = _select_variant(store, rec.variant_group, seed, exact)
+                selected = _select_variant(
+                    store, rec.variant_group, seed, exact, query_vec
+                )
                 _log_path("exact", spec, selected_id=selected)
                 return selected
-            # (2) Soft similarity, ranked in Postgres. Fail-soft: embed/DB errors degrade
-            # like a flaky read.
-            try:
-                query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
-            except AdapterClientError:
-                query_vec = None
+            # (2) Soft similarity, ranked in Postgres.
             match = None
             if query_vec is not None:
                 try:
@@ -146,13 +198,15 @@ def _resolve_one(
                 # (reuse-first, lowest id), routed through the variant pool.
                 fallback = min(candidates, key=lambda c: c.id)
                 selected = _select_variant(
-                    store, fallback.variant_group, seed, fallback.id
+                    store, fallback.variant_group, seed, fallback.id, query_vec
                 )
                 _log_path("fallback", spec, selected_id=selected)
                 return selected
             best_sim = match.similarity
             if best_sim >= _tau():  # τ or above → reuse (hit)
-                selected = _select_variant(store, match.variant_group, seed, match.id)
+                selected = _select_variant(
+                    store, match.variant_group, seed, match.id, query_vec
+                )
                 _log_path("vector", spec, similarity=best_sim, selected_id=selected)
                 return selected
             # below τ → miss (generate); fall through.

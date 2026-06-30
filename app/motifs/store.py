@@ -72,7 +72,9 @@ class MotifMeta:
     """A search candidate without the symbol/embedding payload (spec §6.1, #4).
 
     The resolver's exact-match and lowest-id fallback only read facets + ids, so the
-    candidate scan never transfers the SVG symbol or the 1536-d embedding.
+    candidate scan never transfers the SVG symbol or the 1536-d embedding. ``description``
+    is a facet (it carries the part/anatomy name, D10) and is part of the exact-descriptor
+    comparison, so it travels with the meta row — still far cheaper than the payload.
     """
 
     id: str
@@ -82,6 +84,7 @@ class MotifMeta:
     view: str | None
     expression: str | None
     style: str | None
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -226,11 +229,11 @@ def _facet_where_clause(scope: str | None) -> tuple[str, tuple[str, ...]]:
 
 
 # Search candidates need only facets + ids (no symbol/embedding payload, #4).
-_META_SELECT = "id, variant_group, subject, scope, view, expression, style"
+_META_SELECT = "id, variant_group, subject, scope, view, expression, style, description"
 
 
 def _row_to_meta(row) -> MotifMeta:
-    id_, variant_group, subject, scope, view, expression, style = row
+    id_, variant_group, subject, scope, view, expression, style, description = row
     return MotifMeta(
         id=id_,
         variant_group=variant_group,
@@ -239,6 +242,7 @@ def _row_to_meta(row) -> MotifMeta:
         view=view,
         expression=expression,
         style=style,
+        description=description,
     )
 
 
