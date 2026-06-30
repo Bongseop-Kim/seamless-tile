@@ -30,7 +30,7 @@ class GenerateRequest(BaseModel):
     # Honored this session.
     colorway: str | None = None
     seed: int | None = None
-    candidate_count: int = Field(default=4, ge=1, le=8)
+    candidate_count: int = Field(default=1, ge=1, le=8)
 
 
 class CandidateResponse(BaseModel):
