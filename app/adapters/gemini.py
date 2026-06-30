@@ -44,7 +44,15 @@ class GeminiClient:
         self._client = genai.Client(api_key=api_key)
 
     def complete(self, prompt: str) -> str:
-        config = types.GenerateContentConfig(temperature=self._temperature)
+        # JSON mode: the response is guaranteed syntactically-valid JSON (no markdown
+        # fence / prose), which is all this seam ever emits (intent JSON). We do NOT pass
+        # response_schema: the output is a deeply-nested union-heavy wrapper
+        # ({"designs":[{"intent":..,"motif_specs":..}]}) that can trip Gemini's
+        # schema-subset with InvalidArgument 400; the prompt already describes the shape.
+        config = types.GenerateContentConfig(
+            temperature=self._temperature,
+            response_mime_type="application/json",
+        )
         for attempt in range(_MAX_ATTEMPTS):
             try:
                 response = self._client.models.generate_content(
