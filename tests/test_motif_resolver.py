@@ -22,7 +22,7 @@ import app.api.routes.generate as gen_route
 from app.main import app
 from app.motifs import store as store_mod
 from app.motifs.registry import MOTIFS, get_motif
-from app.motifs.store import MotifRecord, MotifStoreError
+from app.motifs.store import MotifMatch, MotifMeta, MotifRecord, MotifStoreError
 from app.validate.intent import IntentInvalid
 from tests.test_intent import mvp_intent
 
@@ -71,6 +71,16 @@ class _ScriptedRecraft:
         return self._svgs[min(len(self.calls) - 1, len(self._svgs) - 1)]
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    import math
+
+    na = math.sqrt(sum(float(x) * float(x) for x in a))
+    nb = math.sqrt(sum(float(x) * float(x) for x in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return sum(float(x) * float(y) for x, y in zip(a, b)) / (na * nb)
+
+
 class _FakeStore:
     def __init__(self, *records: MotifRecord) -> None:
         self.rows = list(records)
@@ -85,12 +95,39 @@ class _FakeStore:
     def all(self) -> list[MotifRecord]:
         return sorted(self.rows, key=lambda r: r.id)
 
-    def find_by_facets(self, scope) -> list[MotifRecord]:
+    def find_facets_meta(self, scope) -> list[MotifMeta]:
         self.facet_queries.append(scope)
-        return sorted(
-            (r for r in self.rows if r.scope == scope),
-            key=lambda r: r.id,
-        )
+        return [
+            MotifMeta(
+                id=r.id,
+                variant_group=r.variant_group,
+                subject=r.subject,
+                scope=r.scope,
+                view=r.view,
+                expression=r.expression,
+                style=r.style,
+            )
+            for r in sorted(
+                (r for r in self.rows if r.scope == scope), key=lambda r: r.id
+            )
+        ]
+
+    def find_best_by_embedding(self, scope, query_vec) -> MotifMatch | None:
+        # Reference Python cosine: the DB-side `<=>` query must agree with this (the
+        # live PG parity test asserts it). Same dim guard + lowest-id tie-break as the
+        # old resolver scan.
+        best = None  # (rec, sim)
+        for r in sorted((r for r in self.rows if r.scope == scope), key=lambda r: r.id):
+            emb = r.embedding
+            if not emb or len(emb) != len(query_vec):
+                continue
+            sim = _cosine(query_vec, emb)
+            if best is None or sim > best[1]:
+                best = (r, sim)
+        if best is None:
+            return None
+        rec, sim = best
+        return MotifMatch(id=rec.id, variant_group=rec.variant_group, similarity=sim)
 
     def find_by_variant_group(self, variant_group):
         return sorted(

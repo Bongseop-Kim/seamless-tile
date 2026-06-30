@@ -17,12 +17,12 @@ to the S10 lowest-id hard-filter reuse.
 from __future__ import annotations
 
 import copy
-import math
 
 from app.adapters.base import AdapterClientError
 from app.adapters.embedding import embed_query
 from app.adapters.recraft import generate_via_recraft
 from app.core.config import get_settings
+from app.core.observability import log_metrics
 from app.engine import determinism
 from app.motifs import facets
 from app.motifs.store import MotifStoreError, get_default_store
@@ -70,34 +70,22 @@ def _exact_match(spec: dict, candidates: list) -> str | None:
     return None
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    na = math.sqrt(sum(float(x) * float(x) for x in a))
-    nb = math.sqrt(sum(float(x) * float(x) for x in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    dot = sum(float(x) * float(y) for x, y in zip(a, b))
-    return dot / (na * nb)
+def _log_path(
+    path: str, spec: dict, *, similarity: float | None = None, selected_id: str = "-"
+) -> None:
+    """One structured line per resolution for τ calibration (#7, spec §12).
 
-
-def _best_by_similarity(candidates: list, query_vec: list[float] | None):
-    """The (record, cosine) with the highest similarity to ``query_vec``, else ``None``.
-
-    ``None`` means soft similarity is unavailable (no query vector, or no candidate has a
-    same-dimension embedding) — the caller then falls back to S10 behavior. Candidates
-    are scanned in id order with a strict ``>`` so ties keep the lowest id (matching the
-    exact/hard-filter convention; spec §9.7).
+    ``path`` is exact|vector|fallback|generate. ``similarity`` is the cosine of the best
+    candidate when known (vector hit, or a below-τ generate), else ``-``.
     """
-    if query_vec is None:
-        return None
-    best = None  # (rec, sim)
-    for rec in sorted(candidates, key=lambda r: r.id):
-        emb = rec.embedding
-        if not emb or len(emb) != len(query_vec):  # dimension guard (model/legacy skew)
-            continue
-        sim = _cosine(query_vec, emb)
-        if best is None or sim > best[1]:
-            best = (rec, sim)
-    return best
+    log_metrics(
+        "motif_resolve",
+        path=path,
+        scope=facets.normalize_facet(spec.get("scope")) or "-",
+        subject=(spec.get("subject") or "-"),
+        similarity=("-" if similarity is None else round(similarity, 4)),
+        selected_id=selected_id,
+    )
 
 
 def _select_variant(store, variant_group, seed: int, fallback_id: str) -> str:
@@ -125,9 +113,10 @@ def _resolve_one(
     # the only hard filter; `subject` (free text) discrimination is the embedding's job.
     scope = facets.normalize_facet(spec.get("scope"))
     query_vec: list[float] | None = None
+    best_sim: float | None = None  # carried into the generate log for τ calibration
     if scope and store is not None:
         try:
-            candidates = store.find_by_facets(scope)
+            candidates = store.find_facets_meta(scope)
         except MotifStoreError:
             # A flaky DB read is treated as a miss (graceful, spec §6.4): regeneration is
             # idempotent via the content-hash id, so correctness is preserved.
@@ -137,26 +126,42 @@ def _resolve_one(
             exact = _exact_match(spec, candidates)
             if exact is not None:
                 rec = next(c for c in candidates if c.id == exact)
-                return _select_variant(store, rec.variant_group, seed, exact)
-            # (2) Soft similarity. Fail-soft: embed errors degrade like a flaky read.
+                selected = _select_variant(store, rec.variant_group, seed, exact)
+                _log_path("exact", spec, selected_id=selected)
+                return selected
+            # (2) Soft similarity, ranked in Postgres. Fail-soft: embed/DB errors degrade
+            # like a flaky read.
             try:
                 query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
             except AdapterClientError:
                 query_vec = None
-            best = _best_by_similarity(candidates, query_vec)
-            if best is None:
+            match = None
+            if query_vec is not None:
+                try:
+                    match = store.find_best_by_embedding(scope, query_vec)
+                except MotifStoreError:
+                    match = None
+            if match is None:
                 # Embedding unavailable / no comparable candidate → S10 hard-filter reuse
                 # (reuse-first, lowest id), routed through the variant pool.
                 fallback = min(candidates, key=lambda c: c.id)
-                return _select_variant(store, fallback.variant_group, seed, fallback.id)
-            rec, sim = best
-            if sim >= _tau():  # τ or above → reuse (hit)
-                return _select_variant(store, rec.variant_group, seed, rec.id)
+                selected = _select_variant(
+                    store, fallback.variant_group, seed, fallback.id
+                )
+                _log_path("fallback", spec, selected_id=selected)
+                return selected
+            best_sim = match.similarity
+            if best_sim >= _tau():  # τ or above → reuse (hit)
+                selected = _select_variant(store, match.variant_group, seed, match.id)
+                _log_path("vector", spec, similarity=best_sim, selected_id=selected)
+                return selected
             # below τ → miss (generate); fall through.
     # Miss (or missing facets / no store) → generate via Recraft, persisting the query
     # embedding so future requests can soft-match. May raise AdapterClientError (→ 502)
     # if the generated SVG is unsanitizable or no Recraft client is configured.
-    return generate_via_recraft(spec, client=recraft_client, embedding=query_vec)
+    new_id = generate_via_recraft(spec, client=recraft_client, embedding=query_vec)
+    _log_path("generate", spec, similarity=best_sim, selected_id=new_id)
+    return new_id
 
 
 def resolve_motifs(

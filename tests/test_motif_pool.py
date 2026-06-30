@@ -35,12 +35,6 @@ class _FakeStore:
     def all(self):
         return sorted(self.rows.values(), key=lambda r: r.id)
 
-    def find_by_facets(self, scope):
-        return sorted(
-            (r for r in self.rows.values() if r.scope == scope),
-            key=lambda r: r.id,
-        )
-
     def find_by_variant_group(self, variant_group):
         return sorted(
             (r for r in self.rows.values() if r.variant_group == variant_group),

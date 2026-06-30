@@ -67,6 +67,32 @@ class MotifRecord:
         )
 
 
+@dataclass(frozen=True)
+class MotifMeta:
+    """A search candidate without the symbol/embedding payload (spec §6.1, #4).
+
+    The resolver's exact-match and lowest-id fallback only read facets + ids, so the
+    candidate scan never transfers the SVG symbol or the 1536-d embedding.
+    """
+
+    id: str
+    variant_group: str | None
+    subject: str | None
+    scope: str | None
+    view: str | None
+    expression: str | None
+    style: str | None
+
+
+@dataclass(frozen=True)
+class MotifMatch:
+    """The single best embedding-similarity hit (id + group + cosine similarity)."""
+
+    id: str
+    variant_group: str | None
+    similarity: float
+
+
 class MotifStore(Protocol):
     """CRUD seam. Tests inject an in-memory fake; psycopg is never imported by tests."""
 
@@ -87,12 +113,24 @@ class MotifStore(Protocol):
         fingerprint (avoids loading symbol/embedding payloads)."""
         ...
 
-    def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
-        """Rows whose controlled facet matches ``scope``, ordered by id.
+    def find_facets_meta(self, scope: str | None) -> list[MotifMeta]:
+        """Facet metadata (no symbol/embedding) for ``scope``, ordered by id.
 
-        Empty list == clean miss (NOT an exception), like :meth:`get`. Used by the
-        motif resolver's exact-match / hard filter (spec §6.1). ``scope`` is the only
-        controlled facet; ``subject`` discrimination is left to embedding similarity.
+        Empty list == clean miss (NOT an exception), like :meth:`get`. Feeds the motif
+        resolver's exact-match and lowest-id fallback (spec §6.1); ``scope`` is the only
+        controlled facet. Cosine ranking is pushed to :meth:`find_best_by_embedding`.
+        """
+        ...
+
+    def find_best_by_embedding(
+        self, scope: str, query_vec: list[float]
+    ) -> MotifMatch | None:
+        """The closest motif in ``scope`` by cosine similarity, or ``None``.
+
+        Ranks with pgvector's ``<=>`` (cosine distance) in Postgres instead of pulling
+        embeddings into Python (#3). ``None`` means no comparable row (all NULL or a
+        different dimension) — the resolver then falls back like the old soft-similarity
+        miss. The τ gate stays in the resolver, applied to ``similarity``.
         """
         ...
 
@@ -187,6 +225,23 @@ def _facet_where_clause(scope: str | None) -> tuple[str, tuple[str, ...]]:
     return "scope = %s", (scope,)
 
 
+# Search candidates need only facets + ids (no symbol/embedding payload, #4).
+_META_SELECT = "id, variant_group, subject, scope, view, expression, style"
+
+
+def _row_to_meta(row) -> MotifMeta:
+    id_, variant_group, subject, scope, view, expression, style = row
+    return MotifMeta(
+        id=id_,
+        variant_group=variant_group,
+        subject=subject,
+        scope=scope,
+        view=view,
+        expression=expression,
+        style=style,
+    )
+
+
 class PostgresMotifStore:
     """Sync psycopg 3 store. One connection per operation (see module docstring)."""
 
@@ -260,16 +315,44 @@ class PostgresMotifStore:
             rows = cur.fetchall()
         return [r[0] for r in rows]
 
-    def find_by_facets(self, scope: str | None) -> list[MotifRecord]:
+    def find_facets_meta(self, scope: str | None) -> list[MotifMeta]:
         with self._cursor("facet query") as cur:
             where, params = _facet_where_clause(scope)
             cur.execute(
-                f"SELECT {_SELECT_LIST} FROM motifs "
-                f"WHERE {where} ORDER BY id",
+                f"SELECT {_META_SELECT} FROM motifs WHERE {where} ORDER BY id",
                 params,
             )
             rows = cur.fetchall()
-        return [_row_to_record(r) for r in rows]
+        return [_row_to_meta(r) for r in rows]
+
+    def find_best_by_embedding(
+        self, scope: str, query_vec: list[float]
+    ) -> MotifMatch | None:
+        with self._cursor("embedding query") as cur:
+            # `<=>` is cosine distance; similarity = 1 - distance. ORDER BY distance,
+            # id keeps the lowest-id tie-break of the old Python scan. The vector_dims
+            # filter mirrors the resolver's len(emb) != len(query) guard — a no-op once
+            # the column is fixed-dim (monorepo #2). `extensions.`-qualified so it
+            # resolves regardless of search_path.
+            cur.execute(
+                "SELECT id, variant_group, "
+                "  1 - (embedding <=> %(q)s::extensions.vector) AS similarity "
+                "FROM motifs "
+                "WHERE scope = %(scope)s "
+                "  AND embedding IS NOT NULL "
+                "  AND extensions.vector_dims(embedding) = %(dim)s "
+                "ORDER BY embedding <=> %(q)s::extensions.vector ASC, id ASC "
+                "LIMIT 1",
+                {
+                    "q": _vector_to_text(query_vec),
+                    "scope": scope,
+                    "dim": len(query_vec),
+                },
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return MotifMatch(id=row[0], variant_group=row[1], similarity=float(row[2]))
 
     def find_by_variant_group(self, variant_group: str) -> list[MotifRecord]:
         with self._cursor("variant-group query") as cur:
