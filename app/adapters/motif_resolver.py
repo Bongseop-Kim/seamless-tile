@@ -28,7 +28,7 @@ from app.adapters.recraft import generate_via_recraft, vectorize_via_recraft
 from app.core.config import get_settings
 from app.core.observability import log_metrics
 from app.engine import determinism
-from app.motifs import facets
+from app.motifs import facets, glyph_builder
 from app.motifs.store import MotifStoreError, get_default_store
 
 # Facets that define an "exact descriptor" (spec §6.1, D18). `description` carries the
@@ -218,6 +218,45 @@ def _resolve_one(
     return new_id
 
 
+def _resolve_text_layer(spec: dict, layer: dict, resolved: dict, sink: list[str]) -> str:
+    lid = layer.get("id")
+    params = layer.setdefault("params", {})
+    slots = {
+        s.get("id")
+        for s in ((resolved.get("palette") or {}).get("slots") or [])
+        if isinstance(s, dict) and isinstance(s.get("id"), str)
+    }
+    default_color = params.get("color")
+    if not isinstance(default_color, str) or default_color not in slots:
+        colors = params.get("colors") if isinstance(params.get("colors"), dict) else {}
+        default_color = next((c for c in colors.values() if c in slots), None)
+    if default_color is None:
+        default_color = next(iter(sorted(slots)), None)
+    if default_color is None:
+        raise AdapterClientError("text motif requires at least one palette slot")
+
+    try:
+        text_motif = glyph_builder.build_text_motif(
+            spec.get("text"),
+            spec.get("segments"),
+            default_color=default_color,
+            valid_color_slots=slots,
+        )
+    except ValueError as exc:
+        raise AdapterClientError(str(exc)) from exc
+
+    for w in text_motif.warnings:
+        sink.append(f"text layer {lid!r}: {w}")
+    params["motif_id"] = text_motif.motif_id
+    if text_motif.colors:
+        params.pop("color", None)
+        params["colors"] = text_motif.colors
+    else:
+        params.pop("colors", None)
+        params["color"] = text_motif.color
+    return text_motif.motif_id
+
+
 def resolve_motifs(
     intent: dict,
     motif_specs: list[dict],
@@ -268,8 +307,11 @@ def resolve_motifs(
         lid = layer.get("id")
         attempted.add(lid)
         src_idx = spec.get("source_image_index")
+        is_text = bool(spec.get("text"))
         try:
-            if src_idx is not None:
+            if is_text:
+                motif_id = _resolve_text_layer(spec, layer, resolved, sink)
+            elif src_idx is not None:
                 # Chat multimodal: this motif IS an uploaded image -> vectorize it.
                 if (
                     isinstance(src_idx, bool)
@@ -294,7 +336,9 @@ def resolve_motifs(
         except AdapterClientError:
             failed.add(lid)
             reasons[lid] = (
-                f"uploaded image {src_idx} could not be vectorized as a motif"
+                "text could not be rendered as a motif"
+                if is_text
+                else f"uploaded image {src_idx} could not be vectorized as a motif"
                 if src_idx is not None
                 else f"{spec.get('subject', '?')}/{spec.get('scope', '?')}"
             )

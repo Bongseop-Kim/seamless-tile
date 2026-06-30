@@ -248,6 +248,10 @@ def _build_prompt(
         f"(REQUIRED, one of: {scope_vocab}) — the motif's granularity: 'whole' for the "
         "full subject, 'partial' for a sub-region/detail — optional view/expression/"
         "style, and a short English description used for retrieval.",
+        "- TEXT AS MOTIF: for literal letters/words, emit one normal motif layer plus a "
+        'motif_specs entry with "text": "<exact string>". Optional "segments" are text runs '
+        'with "scale" and palette-slot "color". Use source_image_index only for uploaded '
+        "lettering whose exact drawn style must be vectorized.",
         "- layer params colors reference palette slot ids, never raw hex.",
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
@@ -384,6 +388,42 @@ def _validate_spec_facets(specs: list[dict], image_count: int = 0) -> list[str]:
         layer_id = spec.get("layer_id")
         if not isinstance(layer_id, str) or not layer_id:
             errors.append(f"motif_specs[{i}] missing string 'layer_id'")
+        if spec.get("text") is not None:
+            # Text-as-motif spec: a literal string (+ optional styled segments). It is
+            # handled by the deterministic glyph pipeline, never embedding/Recraft, so it
+            # has no retrieval subject/scope — auto-fill them to keep the facet plumbing
+            # valid and skip the subject/scope/image checks below.
+            text = spec.get("text")
+            if not isinstance(text, str) or not text.strip():
+                errors.append(f"motif_specs[{i}] 'text' must be a non-empty string")
+            segs = spec.get("segments")
+            if segs is not None and not isinstance(segs, list):
+                errors.append(f"motif_specs[{i}] 'segments' must be a list")
+            elif isinstance(segs, list):
+                for j, seg in enumerate(segs):
+                    if not isinstance(seg, dict):
+                        errors.append(f"motif_specs[{i}].segments[{j}] must be an object")
+                        continue
+                    st = seg.get("text")
+                    if not isinstance(st, str) or not st:
+                        errors.append(
+                            f"motif_specs[{i}].segments[{j}] missing non-empty 'text'"
+                        )
+                    sc = seg.get("scale")
+                    if sc is not None and (
+                        isinstance(sc, bool) or not isinstance(sc, (int, float)) or sc <= 0
+                    ):
+                        errors.append(
+                            f"motif_specs[{i}].segments[{j}] 'scale' must be a positive number"
+                        )
+                    col = seg.get("color")
+                    if col is not None and not isinstance(col, str):
+                        errors.append(
+                            f"motif_specs[{i}].segments[{j}] 'color' must be a string"
+                        )
+            spec.setdefault("subject", "text")
+            spec.setdefault("scope", "whole")
+            continue
         idx = spec.get("source_image_index")
         if idx is not None:
             # bool is an int subclass — reject it explicitly so True/False can't index.
