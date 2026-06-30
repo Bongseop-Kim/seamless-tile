@@ -54,7 +54,7 @@
 
 ## 공통 규약 (모든 세션 적용)
 
-- **스택**: Python 3.x, FastAPI, numpy, pillow. 외부 의존(LLM·Recraft·저장소)은 코어 밖 어댑터.
+- **스택**: Python 3.x, FastAPI, Pillow. 외부 의존(LLM·Recraft·저장소)은 코어 밖 어댑터.
 - **파일 경로**: 모든 경로는 `app/` 패키지 루트 기준이다 — `engine/intent.py` =
   `app/engine/intent.py`, `validate/seamless.py` = `app/validate/seamless.py`. 새 최상위
   패키지를 만들지 않는다.

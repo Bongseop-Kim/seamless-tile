@@ -1,8 +1,7 @@
-"""Offline end-to-end: a Recraft-style motif -> seamless tile via the example helper.
+"""Offline end-to-end: a Recraft-style motif -> seamless tile.
 
-Exercises the same path examples/recraft_to_tile.py runs (build_tile_intent -> engine
-generate), but registers the motif from a fixed multicolor SVG instead of calling the
-network — so it stays in the deterministic test suite.
+Registers the motif from a fixed multicolor SVG instead of calling the network,
+so it stays in the deterministic test suite.
 """
 
 import xml.etree.ElementTree as ET
@@ -12,7 +11,7 @@ import pytest
 from app.adapters.recraft import _flatten_unsuitable
 from app.engine.generate import generate
 from app.motifs.registry import MOTIFS, normalize_motif_svg, register_motif
-from examples.recraft_to_tile import build_tile_intent
+from scripts.recraft import build_tile_intent
 
 NS = "{http://www.w3.org/2000/svg}"
 

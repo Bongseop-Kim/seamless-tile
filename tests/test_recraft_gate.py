@@ -25,7 +25,7 @@ from app.validate.intent import validate_intent
 
 _CORPUS_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "recraft_samples")
 # Empirical floor for the synthetic corpus (spec §12 Y% baseline; tune against a live
-# Recraft sample via scripts/measure_recraft_passrate.py before production).
+# Recraft sample via `scripts/recraft.py passrate` before production).
 _PASS_THRESHOLD = 0.70
 
 

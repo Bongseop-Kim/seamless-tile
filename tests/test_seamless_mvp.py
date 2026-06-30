@@ -1,7 +1,6 @@
 import io
 import xml.etree.ElementTree as ET
 
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -67,7 +66,7 @@ def test_validate_rejects_non_tiling_diagonal():
 
 
 def test_tiling_seam_rejects_invalid_bounds():
-    arr = np.zeros((10, 10, 4), dtype=np.uint8)
+    arr = [[(0, 0, 0, 0) for _ in range(10)] for _ in range(10)]
     with pytest.raises(ValueError, match="margin"):
         tiling_seam(arr, tile_px=5, margin=-1)
     with pytest.raises(ValueError, match="tile_px"):
@@ -147,10 +146,9 @@ def test_mvp_tiles_without_seam():
     svg = generate(mvp_intent()).svg
     tiled = _tiled_svg(svg, 2)
     png, _ = rasterize(tiled, "png", 300, 2 * TILE, binary=binary)
-    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
     tile_px = round(TILE / 25.4 * 300)
-    excess_x, excess_y = tiling_seam(arr, tile_px)
+    excess_x, excess_y = tiling_seam(image, tile_px)
     assert excess_x <= TILING_SEAM_TOL
     assert excess_y <= TILING_SEAM_TOL
-
 

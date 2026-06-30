@@ -1,15 +1,16 @@
 """Gemini chat-LLM client (D12): a thin :class:`~app.adapters.llm.LLMClient`.
 
-Real network calls are opt-in — :func:`app.main.lifespan` installs this as the default
-LLM client only when ``GEMINI_API_KEY`` is configured. The ``google-genai`` SDK is
-imported lazily so this module (and the test suite) import without the dependency or a
-key present. All SDK/network failures are normalized to
+The ``google-genai`` SDK is a required dependency for this service. Real network calls
+still happen only when :meth:`GeminiClient.complete` is invoked. All SDK/network failures are normalized to
 :class:`~app.adapters.base.AdapterClientError` (the route maps that to 502).
 """
 
 from __future__ import annotations
 
 import time
+
+from google import genai
+from google.genai import errors, types
 
 from app.adapters.base import AdapterClientError
 
@@ -40,15 +41,9 @@ class GeminiClient:
             raise AdapterClientError("GeminiClient requires a non-empty api_key")
         self._model = model
         self._temperature = temperature
-        try:
-            from google import genai
-        except ImportError as exc:  # dependency not installed
-            raise AdapterClientError(f"google-genai is not installed: {exc}") from exc
         self._client = genai.Client(api_key=api_key)
 
     def complete(self, prompt: str) -> str:
-        from google.genai import errors, types
-
         config = types.GenerateContentConfig(temperature=self._temperature)
         for attempt in range(_MAX_ATTEMPTS):
             try:
@@ -73,7 +68,11 @@ class GeminiClient:
 
 
 def client_from_settings(settings) -> GeminiClient | None:
-    """Build a :class:`GeminiClient` iff ``gemini_api_key`` is set, else ``None``."""
+    """Build a :class:`GeminiClient` from settings.
+
+    ``app.main`` treats a missing key as startup misconfiguration before calling this;
+    returning ``None`` keeps low-level tests and direct adapter use simple.
+    """
     api_key = getattr(settings, "gemini_api_key", None)
     if not api_key:
         return None

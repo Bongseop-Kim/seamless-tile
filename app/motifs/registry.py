@@ -91,7 +91,6 @@ def _render_structure_gate(motif: MotifDef, *, edge_seam_tol: float) -> None:
     """
     import io
 
-    import numpy as np
     from PIL import Image
 
     from app.render.raster import RasterError, find_renderer, rasterize
@@ -118,8 +117,8 @@ def _render_structure_gate(motif: MotifDef, *, edge_seam_tol: float) -> None:
     except RasterError as exc:
         raise ValueError(f"motif failed to render: {exc}") from exc
 
-    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
-    seam_x, seam_y = edge_seam(arr)
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
+    seam_x, seam_y = edge_seam(image)
     if max(seam_x, seam_y) > edge_seam_tol:
         raise ValueError(
             f"motif geometry overflows its declared bbox "
@@ -296,9 +295,8 @@ def delete_motif(motif_id: str) -> None:
 def _flush_motif_id_caches() -> None:
     """Flush adapter caches whose values are motif ids (spec §6.4 cache invalidation)."""
     # Lazy import: the adapters import this module, so a top-level import is a cycle.
-    from app.adapters import llm, recraft
+    from app.adapters import recraft
 
-    llm.clear_motif_svg_cache()
     recraft.clear_motif_cache()
     recraft.clear_recraft_motif_cache()
 

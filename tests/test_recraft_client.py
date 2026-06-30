@@ -3,7 +3,7 @@
 No real network: a mock transport asserts the request shape (vector endpoint, bearer
 auth, vector model/style, response_format) and returns canned payloads, so the wiring is
 verified before any real Recraft credits are spent. The real call lives in
-scripts/recraft_smoke.py (manual, key-gated).
+`scripts/recraft.py smoke` (manual, key-gated).
 """
 
 import base64

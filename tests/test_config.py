@@ -1,7 +1,9 @@
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.main import create_app
 
 
 def test_settings_validates_motif_similarity_tau():
@@ -51,3 +53,36 @@ def test_settings_validates_resource_ceilings():
         Settings(_env_file=None, max_svg_bytes=0)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, preview_dpi=1201)
+
+
+def test_startup_requires_model_keys(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("GEMINI_API_KEY", "   ")
+    monkeypatch.setenv("OPENAI_API_KEY", "\t")
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError, match="GEMINI_API_KEY.*OPENAI_API_KEY"):
+        with TestClient(create_app()):
+            pass
+    get_settings.cache_clear()
+
+
+def test_startup_accepts_required_model_keys(monkeypatch):
+    from app.adapters.embedding import set_default_embedding_client
+    from app.adapters.llm import set_default_client
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr("app.main.client_from_settings", lambda settings: object())
+    monkeypatch.setattr(
+        "app.main.embedding_client_from_settings", lambda settings: object()
+    )
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app()) as client:
+            assert client.get("/api/v1/health").status_code == 200
+    finally:
+        set_default_client(None)
+        set_default_embedding_client(None)
+        get_settings.cache_clear()
