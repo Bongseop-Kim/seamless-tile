@@ -37,9 +37,10 @@ class Settings(BaseSettings):
     preview_dpi: int = Field(192, ge=1, le=1200)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
 
     # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
-    # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 0이면 비활성(lookup+store 생략) —
-    # 결정론 디버깅용. ponytail: 프로세스-로컬(워커별 독립); 멀티워커 hit-rate가 문제되면 공유 캐시로 승급.
-    generate_cache_size: int = Field(256, ge=0)  # env: GENERATE_CACHE_SIZE
+    # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 채팅 표면에서는 "같은 입력→바이트 동일"이
+    # 기본이면 안 되므로 기본 0(비활성: lookup+store 생략). nonzero는 결정론/repro 디버깅용 opt-in.
+    # ponytail: 프로세스-로컬(워커별 독립); 멀티워커 hit-rate가 문제되면 공유 캐시로 승급.
+    generate_cache_size: int = Field(0, ge=0)  # env: GENERATE_CACHE_SIZE (0=off 기본; nonzero=repro/debug)
     # Max fraction of a stripe period its bands may cover when an opaque background sits
     # beneath; the remainder is guaranteed to stay visible so the named ground color (and
     # any under-stripe texture) shows through. env: STRIPE_MAX_BAND_COVERAGE

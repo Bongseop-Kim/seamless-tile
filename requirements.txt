@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic-settings
 pillow
+fonttools
 defusedxml
 httpx
 openai

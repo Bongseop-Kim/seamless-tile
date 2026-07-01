@@ -101,7 +101,7 @@ Intent JSON
 
 ```text
 GenerateRequest
-  -> request/cache key = request body + registry pool fingerprint
+  -> request/cache key = request body + registry pool fingerprint (응답 캐시는 opt-in, 기본 off)
   -> 입력 해석:
        intent          -> 그대로 사용, prompt/image/canvas/palette는 무시 경고
        reference_image -> image adapter seam (현재 제품 경로 미완료)
@@ -200,7 +200,8 @@ motif spec
 - motif는 unit-box symbol, `bbox_mm`, `anchor`, `color_slots`로 정규화된다.
 - single-color motif는 `color`로, multicolor motif는 모든 local slot을 `colors`로 바인딩한다.
 - resolver reuse는 cache 성격이다: exact descriptor match, `scope` hard filter, embedding similarity, generate
-  순서로 진행한다.
+  순서로 진행한다. embedding **미설정**(키 없음)은 graceful(soft-similarity 생략)이지만, embedding **호출
+  실패**(OpenAI 다운)는 임의 motif 재사용 대신 `502`로 끝낸다.
 - variant 선택은 `variant_group`과 seed의 순수 함수다.
 
 ## Persistence와 소유권

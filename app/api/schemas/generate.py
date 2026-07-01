@@ -8,9 +8,9 @@ takes the intent-direct path and the engine diversifies it into ranked candidate
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class GenerateRequest(BaseModel):
@@ -21,8 +21,24 @@ class GenerateRequest(BaseModel):
     # base64 / data-URI image, size-bounded (cheap DoS guard; full upload validation is
     # session 8). ~12M chars ≈ 9 MB decoded.
     reference_image: str | None = Field(default=None, max_length=12_000_000)
+    # Multi-image chat path: each item is a base64/data-URI image (same as
+    # `reference_image`). The LLM (multimodal) binds each to a role — style (palette) or
+    # motif (vectorized) — from `prompt`. Per-item byte caps are enforced at decode; the
+    # validator below bounds count + total payload (cheap pre-decode DoS guard).
+    images: list[Annotated[str, Field(max_length=12_000_000)]] | None = Field(
+        default=None, max_length=8
+    )
     canvas: dict[str, Any] | None = None
     palette: dict[str, Any] | None = None
+
+    @field_validator("images")
+    @classmethod
+    def _cap_images_payload(cls, v: list[str] | None) -> list[str] | None:
+        if not v:
+            return v
+        if sum(map(len, v)) > 24_000_000:
+            raise ValueError("total images payload exceeds 24,000,000 chars")
+        return v
 
     # Session-6 stub-builder input: the base intent to diversify.
     intent: dict[str, Any] | None = None
@@ -30,7 +46,7 @@ class GenerateRequest(BaseModel):
     # Honored this session.
     colorway: str | None = None
     seed: int | None = None
-    candidate_count: int = Field(default=4, ge=1, le=8)
+    candidate_count: int = Field(default=1, ge=1, le=8)
 
 
 class CandidateResponse(BaseModel):

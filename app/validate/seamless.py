@@ -40,19 +40,6 @@ def _mean_abs(pairs) -> float:
     return float(total / count) if count else 0.0
 
 
-def seamless_diff(tile_rgba) -> tuple[float, float]:
-    """Documented offset-inspect heuristic: roll the tile by half and compare.
-
-    Kept as specified in the architecture doc. For a strict tileability check
-    (does the left edge actually meet the right edge) use ``edge_seam``.
-    """
-    arr = _rows(tile_rgba)
-    h, w = len(arr), len(arr[0])
-    seam_x = _mean_abs((row[0], row[(0 - w // 2) % w]) for row in arr)
-    seam_y = _mean_abs((arr[0][x], arr[(0 - h // 2) % h][x]) for x in range(w))
-    return seam_x, seam_y
-
-
 def edge_seam(tile_rgba) -> tuple[float, float]:
     """Mean per-channel difference between opposite edges of one tile.
 

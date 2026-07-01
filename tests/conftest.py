@@ -44,16 +44,37 @@ def _block_external_side_effects(request, monkeypatch):
 
     from app.core.config import get_settings
     from app.motifs.store import clear_default_store
+    from app.motifs.registry import MOTIFS
+    import app.adapters.llm as llm_adapter
+    import app.adapters.embedding as emb_adapter
+    import app.adapters.recraft as recraft_adapter
     import app.api.routes.generate as generate_route
 
-    get_settings.cache_clear()
-    clear_default_store()
-    generate_route.reset_response_cache()
+    def _reset_process_globals() -> None:
+        # Superset of the per-suite resets that used to be copy-pasted (and had drifted)
+        # across the motif/recraft/chat tests: memoization caches, default clients, the
+        # in-memory store, and test-authored ``recraft-`` motifs. A superset can only
+        # remove leakage; clearing caches and nulling default clients is inert for the
+        # engine suites that never touch them. (test_motif_pool keeps its own broader
+        # non-builtin eviction + circle/bee re-seed on top of this.)
+        get_settings.cache_clear()
+        clear_default_store()
+        generate_route.reset_response_cache()
+        llm_adapter.clear_intent_cache()
+        llm_adapter.set_default_client(None)
+        emb_adapter.clear_embedding_cache()
+        emb_adapter.set_default_embedding_client(None)
+        recraft_adapter.clear_motif_cache()
+        recraft_adapter.clear_recraft_motif_cache()
+        recraft_adapter.clear_vectorize_cache()
+        recraft_adapter.set_default_recraft_client(None)
+        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
+            del MOTIFS[key]
+
+    _reset_process_globals()
     monkeypatch.setattr(generate_route, "insert_generation_log", lambda row: None)
     monkeypatch.setattr(generate_route, "preview_configured", lambda: False)
 
     yield
 
-    clear_default_store()
-    generate_route.reset_response_cache()
-    get_settings.cache_clear()
+    _reset_process_globals()

@@ -12,7 +12,7 @@
   - **boundary clone**: bbox가 타일 경계를 넘는 instance를 ±`tile_w`/±`tile_h`(코너 포함 최대
     4사본) **동일 `<symbol>`의 `<use>`** 로 타일 콘텐츠에 추가(geometry 복제 금지).
 - **`validate/seamless.py` 보강** — by-construction 어서션 + `edge_seam` 회귀 가드(임계값 +
-  per-channel 허용오차). `seamless_diff`는 디버그 보조로 유지.
+  per-channel 허용오차).
 - **`engine/generate.py`** — `intent -> validate -> primitives -> placement -> composition ->
   seamless -> SVG candidate(+재현 메타)`. 검증 렌더러·DPI 핀(`render/raster.py` 사용).
 

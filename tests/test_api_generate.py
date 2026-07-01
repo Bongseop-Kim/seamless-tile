@@ -212,6 +212,11 @@ def test_identical_request_served_from_cache(fake_preview, monkeypatch):
     """A second identical request skips the engine/render entirely and replays the cached
     candidates + preview URLs, but still carries its own fresh request_id."""
     import app.api.routes.generate as route
+    from app.core.config import get_settings
+
+    # The response cache is opt-in now (default GENERATE_CACHE_SIZE=0 for the chat surface);
+    # this test exercises the repro/debug mode, so turn it on explicitly.
+    monkeypatch.setattr(get_settings(), "generate_cache_size", 256)
 
     n = {"c": 0}
     real = route.generate_candidate_set

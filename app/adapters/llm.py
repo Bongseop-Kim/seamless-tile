@@ -30,10 +30,11 @@ DEFAULT_DPI = 300
 
 
 class LLMClient(Protocol):
-    """Minimal text-completion seam. Kept tiny so a real SDK can back it later
-    without churning the signature (no streaming/tool-use leakage into the core)."""
+    """Minimal completion seam. Kept tiny so a real SDK can back it later without
+    churning the signature (no streaming/tool-use leakage into the core). ``images``
+    (optional, raw bytes) enables the multimodal chat path; text-only callers omit it."""
 
-    def complete(self, prompt: str) -> str: ...
+    def complete(self, prompt: str, *, images: list[bytes] | None = None) -> str: ...
 
 
 class LLMNotConfigured(AdapterClientError):
@@ -201,6 +202,7 @@ def _build_prompt(
     canvas: dict | None,
     palette: dict | None,
     errors: list[str] | None,
+    image_count: int = 0,
 ) -> str:
     target_canvas = canvas or {"tile_mm": DEFAULT_TILE_MM, "dpi": DEFAULT_DPI}
     scope_vocab = ", ".join(sorted(facets.SCOPE_VOCAB))
@@ -246,6 +248,10 @@ def _build_prompt(
         f"(REQUIRED, one of: {scope_vocab}) — the motif's granularity: 'whole' for the "
         "full subject, 'partial' for a sub-region/detail — optional view/expression/"
         "style, and a short English description used for retrieval.",
+        "- TEXT AS MOTIF: for literal letters/words, emit one normal motif layer plus a "
+        'motif_specs entry with "text": "<exact string>". Optional "segments" are text runs '
+        'with "scale" and palette-slot "color". Use source_image_index only for uploaded '
+        "lettering whose exact drawn style must be vectorized.",
         "- layer params colors reference palette slot ids, never raw hex.",
         "- a colorway with id 'default' is required; its mapping covers every slot.",
         "- period_mm must divide tile_mm; motif placement spacing_mm must divide tile_mm.",
@@ -295,6 +301,24 @@ def _build_prompt(
         lines += ["", "Color guide:", _COLOR_GUIDE]
     if palette:
         lines.append(f"- preferred palette hint: {json.dumps(palette)}.")
+    if image_count > 0:
+        # Multimodal binding: the images are attached BEFORE this text, in order, so the
+        # model references them by 0-based index and binds each to a role from the
+        # description. STYLE image -> read its colors into the palette (no index needed);
+        # MOTIF image -> place it via source_image_index (the engine vectorizes it as-is).
+        lines += [
+            "",
+            f"You are given {image_count} reference image(s), index 0..{image_count - 1}, "
+            "attached in order BEFORE this text. Bind each to a role from the description:",
+            "- STYLE image (a finished design/swatch/fabric whose look to follow): READ "
+            "its colors and emit intent.palette slots + a 'default' colorway FROM that "
+            "image. At most one style image. Do NOT reference it via source_image_index.",
+            "- MOTIF image (a single mark/object/logo to use as a motif): add a motif "
+            'layer + a motif_specs entry with "source_image_index": <that image\'s index> '
+            "(an integer). Still fill subject/scope/description (used for retrieval and as "
+            "a fallback). The engine vectorizes that image as-is; 0..N motif images.",
+            "- Only set source_image_index to an index that was actually provided.",
+        ]
     lines += ["", f"Description: {user_prompt}"]
     if errors:
         lines += ["", "Your previous attempt FAILED stage-0 validation. Fix exactly these:"]
@@ -353,15 +377,69 @@ def _split_designs(raw: dict) -> list[tuple[dict, list[dict]]]:
     return [_split_intent_and_specs(raw)]
 
 
-def _validate_spec_facets(specs: list[dict]) -> list[str]:
+def _validate_spec_facets(specs: list[dict], image_count: int = 0) -> list[str]:
     """Validate motif-spec facets against the controlled vocab (M2). ``scope`` is
-    controlled (``facets.SCOPE_VOCAB``); ``subject`` is free text but required. Returns
-    a list of error strings (empty == valid) fed back into the one re-prompt."""
+    controlled (``facets.SCOPE_VOCAB``); ``subject`` is free text but required. When
+    ``image_count`` images were provided, an optional ``source_image_index`` must be an
+    int in ``[0, image_count)`` (never trust a model integer as an index). Returns a list
+    of error strings (empty == valid) fed back into the one re-prompt."""
     errors: list[str] = []
     for i, spec in enumerate(specs):
         layer_id = spec.get("layer_id")
         if not isinstance(layer_id, str) or not layer_id:
             errors.append(f"motif_specs[{i}] missing string 'layer_id'")
+        if "text" in spec:
+            # Text-as-motif spec: a literal string (+ optional styled segments). It is
+            # handled by the deterministic glyph pipeline, never embedding/Recraft, so it
+            # has no retrieval subject/scope/image binding — auto-fill subject/scope to
+            # keep the facet plumbing valid and skip the retrieval checks below.
+            if spec.get("source_image_index") is not None:
+                errors.append(
+                    f"motif_specs[{i}] text motif must not include source_image_index"
+                )
+            text = spec.get("text")
+            if not isinstance(text, str) or not text.strip():
+                errors.append(f"motif_specs[{i}] 'text' must be a non-empty string")
+            segs = spec.get("segments")
+            if segs is not None and not isinstance(segs, list):
+                errors.append(f"motif_specs[{i}] 'segments' must be a list")
+            elif isinstance(segs, list):
+                for j, seg in enumerate(segs):
+                    if not isinstance(seg, dict):
+                        errors.append(f"motif_specs[{i}].segments[{j}] must be an object")
+                        continue
+                    st = seg.get("text")
+                    if not isinstance(st, str) or not st:
+                        errors.append(
+                            f"motif_specs[{i}].segments[{j}] missing non-empty 'text'"
+                        )
+                    sc = seg.get("scale")
+                    if sc is not None and (
+                        isinstance(sc, bool) or not isinstance(sc, (int, float)) or sc <= 0
+                    ):
+                        errors.append(
+                            f"motif_specs[{i}].segments[{j}] 'scale' must be a positive number"
+                        )
+                    col = seg.get("color")
+                    if col is not None and not isinstance(col, str):
+                        errors.append(
+                            f"motif_specs[{i}].segments[{j}] 'color' must be a string"
+                        )
+            spec.setdefault("subject", "text")
+            spec.setdefault("scope", "whole")
+            continue
+        idx = spec.get("source_image_index")
+        if idx is not None:
+            # bool is an int subclass — reject it explicitly so True/False can't index.
+            if image_count <= 0:
+                errors.append(
+                    f"motif_specs[{i}] has source_image_index but no images were provided"
+                )
+            elif isinstance(idx, bool) or not isinstance(idx, int) or not (0 <= idx < image_count):
+                errors.append(
+                    f"motif_specs[{i}] source_image_index must be an integer in "
+                    f"[0, {image_count})"
+                )
         subject = spec.get("subject")
         if not isinstance(subject, str) or not subject.strip():
             errors.append(f"motif_specs[{i}] missing non-empty 'subject'")
@@ -432,6 +510,7 @@ def build_intents(
     canvas: dict | None = None,
     palette: dict | None = None,
     client: LLMClient | None = None,
+    images: list[bytes] | None = None,
     use_cache: bool = True,
 ) -> list[AdapterResult]:
     """Turn a text prompt into a list of validated, frozen design intents (+ motif specs).
@@ -443,8 +522,10 @@ def build_intents(
     valid (initial attempt + one constrained re-prompt), after which :class:`IntentInvalid`
     is raised (the route maps that to 422). Only the finalized list is cached/frozen.
     """
+    image_count = len(images or [])
+    use_intent_cache = use_cache and not images
     key = cache_key({"k": "llm", "prompt": prompt, "canvas": canvas, "palette": palette})
-    if use_cache and key in _intent_cache:
+    if use_intent_cache and key in _intent_cache:
         # Hand back independent copies so a mutating caller can't corrupt the freeze.
         return [
             AdapterResult(
@@ -461,7 +542,16 @@ def build_intents(
     errors: list[str] | None = None
     last_exc: IntentInvalid | None = None
     for _ in range(2):  # initial attempt + one constrained re-prompt
-        text = llm.complete(_build_prompt(prompt, canvas=canvas, palette=palette, errors=errors))
+        text = llm.complete(
+            _build_prompt(
+                prompt,
+                canvas=canvas,
+                palette=palette,
+                errors=errors,
+                image_count=image_count,
+            ),
+            images=images,
+        )
         try:
             raw = json.loads(_strip_code_fence(text))
         except (json.JSONDecodeError, TypeError) as exc:
@@ -479,7 +569,7 @@ def build_intents(
         for idx, (intent_raw, specs) in enumerate(_split_designs(raw)):
             intent_raw.setdefault("intent_version", 1)
             _normalize_stripes(intent_raw, get_settings())
-            facet_errors = _validate_spec_facets(specs)
+            facet_errors = _validate_spec_facets(specs, image_count)
             if facet_errors:
                 design_errors += [f"design[{idx}]: {e}" for e in facet_errors]
                 continue
@@ -508,7 +598,7 @@ def build_intents(
             )
 
         if results:
-            if use_cache:
+            if use_intent_cache:
                 _intent_cache[key] = frozen_cache
             return results
         # No valid design -> feed the collected errors back into the one re-prompt.
@@ -525,9 +615,15 @@ def build_intent(
     canvas: dict | None = None,
     palette: dict | None = None,
     client: LLMClient | None = None,
+    images: list[bytes] | None = None,
     use_cache: bool = True,
 ) -> AdapterResult:
     """Back-compat single-design wrapper: returns the first design of :func:`build_intents`."""
     return build_intents(
-        prompt, canvas=canvas, palette=palette, client=client, use_cache=use_cache
+        prompt,
+        canvas=canvas,
+        palette=palette,
+        client=client,
+        images=images,
+        use_cache=use_cache,
     )[0]
