@@ -35,6 +35,9 @@ class FinalizeRequest(BaseModel):
     # Weave visibility: amplifies the texture's darkening (1.0 = raw photo, higher = more
     # pronounced). None => DEFAULT_TEXTURE_STRENGTH.
     texture_strength: float | None = Field(default=None, ge=0)
+    # yarn_dyed only: emboss color-slot boundaries so motifs read as raised woven threads.
+    # 1.0 = default bevel, 0 = flat. None => DEFAULT_RELIEF_STRENGTH. Ignored for print.
+    relief_strength: float | None = Field(default=None, ge=0)
 
 
 class FinalizeResponse(BaseModel):

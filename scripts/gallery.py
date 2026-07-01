@@ -119,6 +119,7 @@ def _render_fabric(intent: dict, cfg: dict, stem: str) -> str | None:
             material_map=cfg.get("material_map"),
             dpi=cfg.get("dpi"),
             texture_strength=cfg.get("texture_strength"),
+            relief_strength=cfg.get("relief_strength"),  # yarn_dyed: raised-thread emboss (None => default on)
         )
     except (FabricError, RasterError, ValueError) as exc:  # noqa: BLE001
         return f"fabric FAILED: {exc}"

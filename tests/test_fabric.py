@@ -20,7 +20,7 @@ from app.main import app
 from app.render.fabric import FabricError, render_fabric
 from app.render.raster import RasterError, find_renderer, rasterize
 from app.validate.intent import IntentInvalid, validate_intent
-from app.validate.seamless import edge_seam
+from app.validate.seamless import TILING_SEAM_TOL, edge_seam, tiling_seam
 
 client = TestClient(app)
 needs_renderer = pytest.mark.skipif(
@@ -120,7 +120,10 @@ def test_render_fabric_deterministic():
     "method,kwargs",
     [("print", {"weave": "twill-45"}),
      ("print", {"weave": "twill-0"}),
-     ("yarn_dyed", {"material_map": _YARN_MAP})],
+     # relief off: this case isolates whether per-region *weave* worsens the seam. The
+     # relief bevel is a hard edge that the edge_seam proxy can't judge — test_relief_keeps_seam
+     # verifies it with the robust tiling_seam metric instead.
+     ("yarn_dyed", {"material_map": _YARN_MAP, "relief_strength": 0})],
 )
 def test_seamless_maintained(method, kwargs):
     # The design's diagonal stripes have a small intrinsic edge_seam (AA); the texture must
@@ -165,6 +168,63 @@ def test_production_method_override():
         _intent("print"), production_method="yarn_dyed", material_map=_YARN_MAP
     )
     assert printed != woven
+
+
+# --- 4b. relief (yarn-dyed raised-thread emboss) ----------------------------
+
+@needs_renderer
+def test_relief_default_on_for_yarn_dyed_and_deterministic():
+    a = render_fabric(_intent("yarn_dyed"), material_map=_YARN_MAP)
+    b = render_fabric(_intent("yarn_dyed"), material_map=_YARN_MAP)
+    assert a == b  # deterministic
+    flat = render_fabric(_intent("yarn_dyed"), material_map=_YARN_MAP, relief_strength=0)
+    assert a != flat  # relief is on by default and actually changes the raster
+
+
+@needs_renderer
+def test_relief_off_for_print():
+    # print is flat ink; relief is a yarn-dyed concept and must be a no-op there.
+    base = render_fabric(_intent("print"), weave="twill-45")
+    assert render_fabric(_intent("print"), weave="twill-45", relief_strength=3.0) == base
+
+
+@needs_renderer
+def test_relief_keeps_seam():
+    # The relief bevel is a hard edge that crosses the seam, so edge_seam (single-tile
+    # proxy) legitimately flags it — see its docstring. The load-bearing check is
+    # tiling_seam: actually repeat the tile 2x2 and confirm the real internal seam has no
+    # discontinuity beyond the interior baseline (rims come from wrap-around offset).
+    fab = render_fabric(_intent("yarn_dyed"), material_map=_YARN_MAP, relief_strength=3.0)
+    tile = Image.open(io.BytesIO(fab)).convert("RGBA")
+    w, h = tile.size
+    big = Image.new("RGBA", (w * 2, h * 2))
+    for i in (0, 1):
+        for j in (0, 1):
+            big.paste(tile, (i * w, j * h))
+    excess_x, excess_y = tiling_seam(big, w)
+    assert excess_x <= TILING_SEAM_TOL
+    assert excess_y <= TILING_SEAM_TOL
+
+
+def test_relief_negative_raises():
+    with pytest.raises(FabricError):
+        render_fabric(_intent("yarn_dyed"), material_map=_YARN_MAP, relief_strength=-1.0)
+
+
+def test_motif_slots_extracts_only_motif_palette_slots():
+    # The twill-45 pin depends on this: motif slots come from motif layers' color/colors,
+    # never from stripe/background layers. Duck-typed so it needs no motif registry.
+    from types import SimpleNamespace as NS
+
+    from app.render.fabric import _motif_slots
+
+    intent = NS(layers=[
+        NS(type="background", params=NS(color="ground", colors=None)),
+        NS(type="stripe", params=NS(color="accent", colors=None)),
+        NS(type="motif", params=NS(color=None, colors={"s0": "ink", "s1": "leaf"})),
+        NS(type="motif", params=NS(color="plum", colors=None)),
+    ])
+    assert _motif_slots(intent) == {"ink", "leaf", "plum"}  # no ground/accent
 
 
 # --- 5. production-split guards & bad knobs -> FabricError (no renderer) -----

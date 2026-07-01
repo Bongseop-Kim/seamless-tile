@@ -21,7 +21,7 @@ import colorsys
 import io
 from pathlib import Path
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageOps
 
 from app.core.config import get_settings
 from app.engine.composition import compose
@@ -39,6 +39,15 @@ ASSETS_VERSION = "v2"
 # 1.0 = raw photo (subtle); higher = more pronounced weave.
 DEFAULT_TEXTURE_STRENGTH = 2.4
 
+# Relief (yarn-dyed only): embosses color-slot boundaries so woven regions read as raised
+# threads. 1.0 = default bevel; 0 = off. Rim width is physical (mm), so it's DPI-stable.
+DEFAULT_RELIEF_STRENGTH = 0.7
+_RELIEF_MM = 0.17  # ~raised-yarn width; boundary rim ≈ this wide regardless of dpi
+# Rim intensity floor as a fraction of full: the weave luminance modulates the rim between
+# this and 1.0, so the raised line breaks up unevenly (real weaving isn't uniform) instead
+# of a clean outline. Lower = bumpier/patchier.
+_RELIEF_RIM_MIN = 0.25
+
 
 def available_weaves() -> tuple[str, ...]:
     """Valid weave names = the tileable ``<name>.png`` files present in assets/fabric/.
@@ -51,6 +60,28 @@ def available_weaves() -> tuple[str, ...]:
 def _is_print_weave(weave: str) -> bool:
     # print = the design printed on ONE fabric, woven in a single twill direction.
     return weave.startswith("twill")
+
+# yarn-dyed global rule: motifs are woven in this one twill (mirrors print's uniform
+# twill). Motif color slots override the per-region material_map; stripe/background slots
+# keep their varied weaves. Skipped only if the asset is absent.
+MOTIF_WEAVE = "twill-45"
+
+
+def _motif_slots(intent) -> set[str]:
+    """Palette slot ids a motif's fills resolve to, across all motif layers.
+
+    MotifParams sets exactly one of ``color`` (single-color -> one slot) or ``colors``
+    (fill_slot -> palette_slot map). Non-motif layers are skipped, so their params are
+    never touched."""
+    slots: set[str] = set()
+    for layer in intent.layers:
+        if layer.type != "motif":
+            continue
+        if layer.params.color is not None:
+            slots.add(layer.params.color)
+        if layer.params.colors:
+            slots.update(layer.params.colors.values())
+    return slots
 
 _LABEL_COLORWAY_ID = "__fabric_label__"
 
@@ -145,6 +176,48 @@ def _mask_for(seg: Image.Image, index: int) -> Image.Image:
     return m.convert("L")
 
 
+def _apply_relief(
+    out: Image.Image, seg: Image.Image, weave: str, strength: float, *, dpi: int
+) -> Image.Image:
+    """Emboss color-slot boundaries so yarn-dyed regions read as raised woven threads.
+
+    Deterministic and seamless: the rim comes from wrap-around ``ImageChops.offset`` (a
+    circular shift), so it stays continuous across the tile seam — no blur (blur would not
+    wrap and would open the seam). Light is fixed top-left: each boundary's up-left side is
+    highlighted, its down-right side shadowed. Rim width tracks ``dpi`` (``_RELIEF_MM``) so
+    the raised look is DPI-stable.
+
+    The rim is *modulated by the (tileable, deterministic) weave luminance* so the raised
+    line varies along its length — real weaving isn't uniform, so a flat outline reads as
+    fake. The weave photo is already seamless, so the modulation is too.
+
+    ponytail: reuse the weave asset as the unevenness field instead of a bespoke seeded
+    noise generator — same look, no new code, and physically it's the actual thread grain.
+    """
+    d = max(1, round(_RELIEF_MM * dpi / 25.4))  # rim width in px, ~constant physical size
+    idx = Image.frombytes("L", seg.size, seg.tobytes())  # slot index per pixel (0..n-1)
+
+    def rim(dx: int, dy: int) -> Image.Image:
+        # nonzero where the (dx,dy) neighbor is a different slot; offset wraps -> seam-safe
+        return ImageChops.difference(idx, ImageChops.offset(idx, dx, dy)).point(
+            lambda v: 255 if v else 0
+        )
+
+    # Uneven thread height: full-contrast weave luminance mapped to [_RELIEF_RIM_MIN, 1].
+    # autocontrast normalizes any weave photo so the bumpiness is visible regardless of its
+    # native contrast. Per-pixel LUT + a tiled seamless source => still seamless.
+    tex = ImageOps.autocontrast(_tile_to(_load_texture(weave), out.size).convert("L"), cutoff=1)
+    mod = tex.point(lambda v: round(255 * (_RELIEF_RIM_MIN + (1 - _RELIEF_RIM_MIN) * v / 255)))
+
+    hi = ImageChops.multiply(rim(d, d), mod)     # up-left face, lit, roughened
+    lo = ImageChops.multiply(rim(-d, -d), mod)   # down-right face, shadowed, roughened
+    k = min(0.6, 0.26 * strength)  # gentler than a hard bevel; mod drops it further locally
+    lit = Image.blend(out, Image.new("RGB", out.size, (255, 255, 255)), k)
+    dark = Image.blend(out, Image.new("RGB", out.size, (0, 0, 0)), k)
+    out = Image.composite(lit, out, hi)
+    return Image.composite(dark, out, lo)
+
+
 def render_fabric(
     intent_raw,
     *,
@@ -154,6 +227,7 @@ def render_fabric(
     material_map: dict[str, str] | None = None,
     dpi: int | None = None,
     texture_strength: float | None = None,
+    relief_strength: float | None = None,
 ) -> bytes:
     """Approved intent -> textured "cloth" PNG bytes. Deterministic.
 
@@ -163,7 +237,11 @@ def render_fabric(
       (``twill-0``/``twill-45``) covers the whole tile; ``material_map`` is rejected.
     - **yarn_dyed**: woven from pre-dyed yarns -> ``material_map`` mixes weaves per color
       slot (``solid``/``twill-0``/``twill-45``/``herringbone``); unmapped slots fall back
-      to ``weave``.
+      to ``weave``. Motif color slots are always pinned to ``MOTIF_WEAVE`` (twill-45),
+      overriding ``material_map``, so a motif reads as one uniform fabric while
+      stripe/background slots keep their varied weaves. Color-slot boundaries are also
+      embossed (``relief_strength``) so motifs read as raised threads; ``0`` disables.
+      Relief/pin are ignored for print (flat ink).
 
     Raises ``IntentInvalid`` (bad intent -> 422), ``FabricError`` (bad knob -> 400), or
     ``RasterError`` (no/failed renderer -> 502).
@@ -190,13 +268,21 @@ def render_fabric(
                 "print applies a uniform weave; material_map is only for yarn_dyed"
             )
         material_map = None
-    elif material_map:  # yarn_dyed per-region
-        unknown_slots = sorted(set(material_map) - palette.slot_ids())
-        if unknown_slots:
-            raise FabricError(f"material_map references unknown slots: {unknown_slots}")
-        bad_weaves = sorted(set(material_map.values()) - set(weaves))
-        if bad_weaves:
-            raise FabricError(f"material_map uses unknown weaves: {bad_weaves}")
+    else:  # yarn_dyed
+        if material_map:  # per-region overrides
+            unknown_slots = sorted(set(material_map) - palette.slot_ids())
+            if unknown_slots:
+                raise FabricError(f"material_map references unknown slots: {unknown_slots}")
+            bad_weaves = sorted(set(material_map.values()) - set(weaves))
+            if bad_weaves:
+                raise FabricError(f"material_map uses unknown weaves: {bad_weaves}")
+        # Motifs are woven in one uniform twill: pin their slots last so they win over any
+        # per-region weave. Slots come from the validated intent (already valid palette
+        # ids). Skipped if the twill asset is missing.
+        if MOTIF_WEAVE in weaves:
+            motif_pins = {s: MOTIF_WEAVE for s in _motif_slots(intent)}
+            if motif_pins:
+                material_map = {**(material_map or {}), **motif_pins}
 
     dpi = dpi or settings.fabric_dpi
     if dpi > settings.max_dpi:
@@ -204,6 +290,10 @@ def render_fabric(
     strength = DEFAULT_TEXTURE_STRENGTH if texture_strength is None else texture_strength
     if strength < 0:
         raise FabricError(f"texture_strength must be >= 0; got {strength}")
+    relief = DEFAULT_RELIEF_STRENGTH if relief_strength is None else relief_strength
+    if relief < 0:
+        raise FabricError(f"relief_strength must be >= 0; got {relief}")
+    apply_relief = method == "yarn_dyed" and relief > 0  # raised threads: yarn-dyed only
     tile_mm = intent.canvas.tile_mm
 
     design_svg = compose(intent, palette, colorway_id)
@@ -211,13 +301,15 @@ def render_fabric(
     design = Image.open(io.BytesIO(design_png)).convert("RGB")
 
     out = _apply_weave(design, weave, strength)  # uniform base / fallback for unmapped slots
-    if material_map:
+    if material_map or apply_relief:
         seg, index_for = _segment(intent, palette, dpi=dpi, tile_mm=tile_mm)
         # Regions are disjoint (each pixel has one nearest label), so composite order is
         # irrelevant -> result is independent of material_map dict order (deterministic).
-        for slot, slot_weave in material_map.items():
+        for slot, slot_weave in (material_map or {}).items():
             mask = _mask_for(seg, index_for[slot])
             out = Image.composite(_apply_weave(design, slot_weave, strength), out, mask)
+        if apply_relief:  # emboss slot boundaries on top of the woven surface
+            out = _apply_relief(out, seg, weave, relief, dpi=dpi)
 
     buf = io.BytesIO()
     out.save(buf, "PNG", dpi=(dpi, dpi))

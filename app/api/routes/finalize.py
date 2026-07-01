@@ -60,6 +60,7 @@ async def finalize_candidate(
                 material_map=request.material_map,
                 dpi=request.dpi,
                 texture_strength=request.texture_strength,
+                relief_strength=request.relief_strength,
             ),
         )
     except IntentInvalid as exc:
