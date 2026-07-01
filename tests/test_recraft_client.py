@@ -17,27 +17,14 @@ from app.adapters.recraft import (
     RecraftError,
     RecraftHTTPClient,
     client_from_settings,
-    clear_recraft_motif_cache,
     generate_via_recraft,
 )
-from app.motifs.registry import MOTIFS, get_motif
+from app.motifs.registry import get_motif
 
 _SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
     '<path d="M0 0H10V10H0Z" fill="#aabbcc"/></svg>'
 )
-
-
-@pytest.fixture(autouse=True)
-def _clean():
-    def _purge():
-        clear_recraft_motif_cache()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
 
 
 def test_url_format_posts_generations_then_fetches_file():

@@ -53,20 +53,6 @@ class _BoomStore:
         raise RuntimeError("db down")
 
 
-@pytest.fixture(autouse=True)
-def _clean():
-    # set_default_store is process-wide: reset it (and test-authored motifs) around
-    # every test so persistence state never leaks into the determinism/recraft suites.
-    def _purge():
-        store_mod.clear_default_store()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
-
-
 def test_register_writes_through_to_store():
     fake = _FakeStore()
     set_default_store(fake)

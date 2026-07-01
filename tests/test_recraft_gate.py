@@ -30,46 +30,11 @@ _PASS_THRESHOLD = 0.70
 
 
 from tests._helpers import _svg
+from tests._fakes import _ScriptedRecraft
 
 
 def _spec(**extra) -> dict:
     return {"layer_id": "m", "subject": "pig", "scope": "partial", **extra}
-
-
-class _FakeRecraft:
-    def __init__(self, svg: str) -> None:
-        self._svg = svg
-        self.calls = 0
-
-    def generate(self, prompt: str) -> str:
-        self.calls += 1
-        return self._svg
-
-
-class _SeqRecraft:
-    """Returns canned SVGs in order (last repeats); counts calls to observe retries."""
-
-    def __init__(self, *svgs: str) -> None:
-        self._svgs = list(svgs)
-        self.calls = 0
-
-    def generate(self, prompt: str) -> str:
-        self.calls += 1
-        return self._svgs[min(self.calls - 1, len(self._svgs) - 1)]
-
-
-@pytest.fixture(autouse=True)
-def _clean():
-    def _purge():
-        recraft.clear_motif_cache()
-        recraft.clear_recraft_motif_cache()
-        recraft.set_default_recraft_client(None)
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
 
 
 # --- gate: flatten / reject -------------------------------------------------
@@ -159,33 +124,33 @@ def test_generate_via_recraft_registers_with_recraft_source():
         '<rect x="0" y="0" width="50" height="100" fill="#ff0000"/>'
         '<rect x="50" y="0" width="50" height="100" fill="#0000ff"/>'
     )
-    mid = generate_via_recraft(_spec(), client=_FakeRecraft(two), use_cache=False)
+    mid = generate_via_recraft(_spec(), client=_ScriptedRecraft(two), use_cache=False)
     motif = get_motif(mid)
     assert motif.color_slots == ("s0", "s1")  # multicolor slots preserved
 
 
 def test_generate_via_recraft_freezes_by_spec():
-    client = _FakeRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#abc"/>'))
+    client = _ScriptedRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#abc"/>'))
     a = generate_via_recraft(_spec(), client=client)
     b = generate_via_recraft(_spec(), client=client)  # same spec -> freeze cache hit
     assert a == b
-    assert client.calls == 1
+    assert len(client.calls) == 1
 
 
 def test_generate_via_recraft_retries_once_then_succeeds():
     bad = _svg('<image href="x.png"/>')  # gate rejects -> regenerate
     good = _svg('<rect x="10" y="10" width="80" height="80" fill="#abc"/>')
-    client = _SeqRecraft(bad, good)
+    client = _ScriptedRecraft(bad, good)
     mid = generate_via_recraft(_spec(), client=client, use_cache=False)
-    assert client.calls == 2
+    assert len(client.calls) == 2
     assert get_motif(mid).id == mid
 
 
 def test_generate_via_recraft_exhausted_raises_client_error():
-    client = _SeqRecraft(_svg('<image href="x.png"/>'), _svg('<image href="y.png"/>'))
+    client = _ScriptedRecraft(_svg('<image href="x.png"/>'), _svg('<image href="y.png"/>'))
     with pytest.raises(RecraftError):
         generate_via_recraft(_spec(), client=client, use_cache=False)
-    assert client.calls == 2  # exactly one retry, no more
+    assert len(client.calls) == 2  # exactly one retry, no more
 
 
 def test_generate_via_recraft_unconfigured_raises():
@@ -222,7 +187,7 @@ def test_recraft_multicolor_motif_composes_with_slot_binding():
         '<rect x="0" y="0" width="50" height="100" fill="#ff0000"/>'
         '<rect x="50" y="0" width="50" height="100" fill="#0000ff"/>'
     )
-    mid = generate_via_recraft(_spec(), client=_FakeRecraft(two), use_cache=False)
+    mid = generate_via_recraft(_spec(), client=_ScriptedRecraft(two), use_cache=False)
     raw = _multicolor_intent(mid, {"p0": "#00aa00", "p1": "#aa00aa"})
     result = validate_intent(raw)
     svg = compose(result.intent, result.palette, "default")

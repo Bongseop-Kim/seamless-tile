@@ -32,43 +32,7 @@ _GOOD_SVG = '<svg viewBox="0 0 12 12"><path d="M2 2 H10 V10 H2 Z" fill="currentC
 _BAD_SVG = '<svg viewBox="0 0 12 12"><script>nope()</script></svg>'  # script => SanitizeError
 
 
-@pytest.fixture(autouse=True)
-def _clean():
-    """Reset every process-global the glue touches, before and after each test."""
-
-    def _purge():
-        llm_adapter.clear_intent_cache()
-        set_default_client(None)
-        emb_adapter.clear_embedding_cache()
-        emb_adapter.set_default_embedding_client(None)
-        recraft_adapter.clear_motif_cache()
-        recraft_adapter.clear_recraft_motif_cache()
-        recraft_adapter.set_default_recraft_client(None)
-        store_mod.clear_default_store()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
-
-
-from tests._fakes import _ScriptedLLM
-
-
-class _ScriptedRecraft:
-    """Returns canned SVGs in order (last repeats); records calls. Mirrors _ScriptedLLM
-    but exposes the RecraftClient ``.generate(prompt)`` seam the miss path drives."""
-
-    def __init__(self, *svgs: str) -> None:
-        if not svgs:
-            raise ValueError("_ScriptedRecraft requires at least one SVG")
-        self._svgs = list(svgs)
-        self.calls: list[str] = []
-
-    def generate(self, prompt: str) -> str:
-        self.calls.append(prompt)
-        return self._svgs[min(len(self.calls) - 1, len(self._svgs) - 1)]
+from tests._fakes import _ScriptedLLM, _ScriptedRecraft
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

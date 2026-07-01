@@ -5,11 +5,6 @@ import html
 from app.engine.units import fmt
 
 
-def escape_text(value: object) -> str:
-    """Escape text content for SVG/XML: ``&``, ``<``, ``>``."""
-    return html.escape(str(value), quote=False)
-
-
 def escape_attr(value: object) -> str:
     """Escape an attribute value for SVG/XML, including quotes.
 

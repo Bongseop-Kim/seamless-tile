@@ -10,22 +10,9 @@ from app.engine.composition import compose
 from app.engine.seamless import Instance, clone_instances
 from app.motifs import glyph_builder as gb
 from app.motifs.registry import MOTIFS, get_motif
-from app.motifs.store import clear_default_store
 from app.validate.intent import validate_intent
 
 TILE = 48.0
-
-
-@pytest.fixture(autouse=True)
-def _clean():
-    def _purge():
-        clear_default_store()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
 
 
 def _intent(size_mm: float = 16.0) -> dict:

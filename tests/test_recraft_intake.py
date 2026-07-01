@@ -15,35 +15,11 @@ from tests.test_intent import mvp_intent
 
 
 from tests._helpers import _svg
-
-
-class _FakeRecraft:
-    """Returns a fixed SVG; counts calls so cache behavior is observable."""
-
-    def __init__(self, svg: str) -> None:
-        self._svg = svg
-        self.calls = 0
-
-    def generate(self, prompt: str) -> str:
-        self.calls += 1
-        return self._svg
-
-
-@pytest.fixture(autouse=True)
-def _clean_registry():
-    # Keep the process-wide registry/cache clean of test-authored motifs.
-    def _purge():
-        recraft.clear_motif_cache()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
+from tests._fakes import _ScriptedRecraft
 
 
 def test_create_motif_normalizes_and_registers():
-    client = _FakeRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#ff0000"/>'))
+    client = _ScriptedRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#ff0000"/>'))
     motif_id = create_motif("a red dot", client=client)
 
     assert motif_id.startswith("recraft-")
@@ -55,19 +31,19 @@ def test_create_motif_normalizes_and_registers():
 
 
 def test_same_input_same_motif_id_cache_hit():
-    client = _FakeRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#ff0000"/>'))
+    client = _ScriptedRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#ff0000"/>'))
     first = create_motif("p", client=client)
     second = create_motif("p", client=client)
     assert first == second
-    assert client.calls == 1  # second served from the per-prompt cache
+    assert len(client.calls) == 1  # second served from the per-prompt cache
 
 
 def test_distinct_prompts_same_shape_collide_by_content_hash():
     # Different prompts; the generator returns the same shape with a different color.
     # Normalization recolors to currentColor, so the geometry — and thus the content
     # hash id — is identical.
-    c1 = _FakeRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#ff0000"/>'))
-    c2 = _FakeRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#00ff00"/>'))
+    c1 = _ScriptedRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#ff0000"/>'))
+    c2 = _ScriptedRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#00ff00"/>'))
     a = create_motif("first", client=c1, use_cache=False)
     b = create_motif("second", client=c2, use_cache=False)
     assert a == b
@@ -75,7 +51,7 @@ def test_distinct_prompts_same_shape_collide_by_content_hash():
 
 def test_runtime_determinism_same_motif_same_symbol():
     raw = _svg('<path d="M0 0 L100 0 L50 100 Z" fill="#123456"/>')
-    motif_id = create_motif("triangle", client=_FakeRecraft(raw))
+    motif_id = create_motif("triangle", client=_ScriptedRecraft(raw))
     # An INDEPENDENT normalization of the same input must reproduce the id and the exact
     # symbol bytes the registry holds — a real determinism check (not x == x).
     fresh = normalize_motif_svg(raw)
@@ -84,7 +60,7 @@ def test_runtime_determinism_same_motif_same_symbol():
 
 
 def test_recraft_motif_composes_and_passes_output_gate():
-    client = _FakeRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#345678"/>'))
+    client = _ScriptedRecraft(_svg('<circle cx="50" cy="50" r="40" fill="#345678"/>'))
     motif_id = create_motif("a dot", client=client)
 
     intent = mvp_intent()
@@ -112,7 +88,7 @@ def test_intake_rejects_unsafe_geometry(inner):
 
 
 def test_create_motif_propagates_unsafe_svg():
-    client = _FakeRecraft(_svg('<script>alert(1)</script>'))
+    client = _ScriptedRecraft(_svg('<script>alert(1)</script>'))
     with pytest.raises(SanitizeError):
         create_motif("evil", client=client, use_cache=False)
 
@@ -141,7 +117,7 @@ def test_intake_rejects_nonpositive_viewbox(viewbox):
 
 
 def test_create_motif_surfaces_viewbox_valueerror_not_zerodiv():
-    client = _FakeRecraft(_svg('<circle cx="1" cy="1" r="1" fill="#abc"/>', viewbox="0 0 0 0"))
+    client = _ScriptedRecraft(_svg('<circle cx="1" cy="1" r="1" fill="#abc"/>', viewbox="0 0 0 0"))
     with pytest.raises(ValueError):  # not an uncaught ZeroDivisionError
         create_motif("degenerate", client=client, use_cache=False)
 
@@ -165,7 +141,7 @@ def test_intake_accepts_geometry_inside_group():
 
 
 def test_create_motif_rejects_empty_prompt():
-    client = _FakeRecraft(_svg('<circle cx="1" cy="1" r="1" fill="#abc"/>'))
+    client = _ScriptedRecraft(_svg('<circle cx="1" cy="1" r="1" fill="#abc"/>'))
     with pytest.raises(ValueError):
         create_motif("   ", client=client, use_cache=False)
-    assert client.calls == 0  # rejected before the generator is invoked
+    assert len(client.calls) == 0  # rejected before the generator is invoked

@@ -33,10 +33,10 @@ def place_lattice(placement: Placement, tile_mm: float) -> list[Instance]:
     ny = round(tile_mm / ch)
     # Defensive cap for direct engine callers that bypass validate_intent (the API path
     # already rejects this at stage-0); keeps a tiny cell from enumerating billions.
-    if nx * ny > get_settings().max_placement_instances:
+    cap = get_settings().max_placement_instances
+    if nx * ny > cap:
         raise ValueError(
-            f"lattice would place {nx * ny} instances "
-            f"(> max_placement_instances {get_settings().max_placement_instances})"
+            f"lattice would place {nx * ny} instances (> max_placement_instances {cap})"
         )
 
     if spec.drop_axis == "column":

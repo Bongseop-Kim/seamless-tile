@@ -18,3 +18,18 @@ class _ScriptedLLM:
         self.image_calls.append(images)
         idx = min(len(self.calls) - 1, len(self._responses) - 1)
         return self._responses[idx]
+
+
+class _ScriptedRecraft:
+    """Returns canned SVGs in order (last repeats); records calls. Mirrors _ScriptedLLM
+    but exposes the RecraftClient ``.generate(prompt)`` seam the miss path drives."""
+
+    def __init__(self, *svgs: str) -> None:
+        if not svgs:
+            raise ValueError("_ScriptedRecraft requires at least one SVG")
+        self._svgs = list(svgs)
+        self.calls: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        return self._svgs[min(len(self.calls) - 1, len(self._svgs) - 1)]

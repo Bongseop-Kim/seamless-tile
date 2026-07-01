@@ -20,7 +20,6 @@ from app.motifs.registry import (
     register_motif,
     slot_render_symbols,
 )
-from app.motifs.store import clear_default_store
 from app.render.raster import find_renderer, rasterize
 from app.validate.intent import IntentInvalid, validate_intent
 
@@ -41,18 +40,6 @@ _THREE_COLOR = _svg(
     '<rect x="34" y="0" width="33" height="100" fill="#00ff00"/>'
     '<rect x="67" y="0" width="33" height="100" fill="#0000ff"/>'
 )
-
-
-@pytest.fixture(autouse=True)
-def _clean():
-    def _purge():
-        clear_default_store()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
 
 
 def _palette(slots: dict[str, str], extra_colorways: dict[str, dict] | None = None):

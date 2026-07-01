@@ -81,7 +81,7 @@
 - `engine/placement/repeat.py` — block/half_drop/brick (→ 세션 5에서 `lattice`로 흡수)
 - `render/svg.py` — mm SVG 문서 (→ 세션 2에서 출력 인코딩 추가)
 - `render/raster.py` — rsvg/resvg + DPI (재사용; 검증 렌더러 핀)
-- `validate/seamless.py` — `seamless_diff`/`edge_seam` (재사용; 회귀 가드로 승격)
+- `validate/seamless.py` — `edge_seam`/`tiling_seam` (재사용; 회귀 가드로 승격)
 
 ## 세션 브리프 템플릿
 

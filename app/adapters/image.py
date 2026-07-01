@@ -29,6 +29,7 @@ from typing import Protocol
 from PIL import Image, ImageOps
 
 from app.adapters.base import AdapterClientError, AdapterResult, cache_key
+from app.engine.palette import rgb_to_hex
 from app.motifs.registry import MOTIFS
 from app.validate.intent import IntentInvalid, validate_intent
 
@@ -65,7 +66,6 @@ class VectorResult:
 
     path_count: int
     color_count: int
-    symbol_svg: str | None = None
 
 
 class VLMClient(Protocol):
@@ -213,7 +213,7 @@ def extract_palette(image_bytes: bytes, *, num_colors: int = DEFAULT_NUM_COLORS)
     seen: set[str] = set()
     for _, idx in counts:
         r, g, b = flat[idx * 3], flat[idx * 3 + 1], flat[idx * 3 + 2]
-        hexv = f"#{r:02x}{g:02x}{b:02x}"
+        hexv = rgb_to_hex(r, g, b)
         if hexv in seen:
             continue
         seen.add(hexv)

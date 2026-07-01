@@ -28,6 +28,7 @@ import httpx
 
 from app.adapters.base import AdapterClientError, cache_key
 from app.core.config import get_settings
+from app.engine.palette import rgb_to_hex
 from app.motifs import facets
 from app.motifs import geometry as geom
 from app.motifs.registry import normalize_motif_svg, register_motif
@@ -146,6 +147,28 @@ class RecraftHTTPClient:
         self._timeout = timeout
         self._transport = transport  # injected for offline tests (httpx.MockTransport)
 
+    def _post_for_svg(self, path: str, *, extract, label: str, **request_kwargs) -> str:
+        """POST to ``path``, then hand the parsed JSON (and the live client, for a
+        follow-up file GET) to ``extract`` to pull out the SVG text. Owns the httpx
+        client, the two error arms, and the ``<svg`` guard shared by generate/vectorize;
+        ``label`` disambiguates the RecraftError messages."""
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        try:
+            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+                resp = client.post(f"{self._base_url}{path}", headers=headers, **request_kwargs)
+                resp.raise_for_status()
+                svg = extract(client, resp.json())
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise RecraftError(
+                f"Recraft {label} HTTP {exc.response.status_code}: {body}"
+            ) from exc
+        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+            raise RecraftError(f"Recraft {label} request failed: {exc}") from exc
+        if not svg or "<svg" not in svg.lower():
+            raise RecraftError(f"Recraft {label} returned a non-SVG payload")
+        return svg
+
     def generate(self, prompt: str) -> str:
         payload = {
             "prompt": prompt,
@@ -157,30 +180,16 @@ class RecraftHTTPClient:
             payload["style"] = self._style
         if self._size:
             payload["size"] = self._size
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        try:
-            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
-                resp = client.post(
-                    f"{self._base_url}{_API_PATH}", json=payload, headers=headers
-                )
-                resp.raise_for_status()
-                item = resp.json()["data"][0]
-                if self._response_format == "b64_json":
-                    svg = base64.b64decode(item["b64_json"]).decode("utf-8")
-                else:
-                    file_resp = client.get(item["url"])
-                    file_resp.raise_for_status()
-                    svg = file_resp.text
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
-            raise RecraftError(
-                f"Recraft API HTTP {exc.response.status_code}: {body}"
-            ) from exc
-        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-            raise RecraftError(f"Recraft request failed: {exc}") from exc
-        if not svg or "<svg" not in svg.lower():
-            raise RecraftError("Recraft returned a non-SVG payload")
-        return svg
+
+        def _extract(client: httpx.Client, data: dict) -> str:
+            item = data["data"][0]
+            if self._response_format == "b64_json":
+                return base64.b64decode(item["b64_json"]).decode("utf-8")
+            file_resp = client.get(item["url"])
+            file_resp.raise_for_status()
+            return file_resp.text
+
+        return self._post_for_svg(_API_PATH, json=payload, extract=_extract, label="API")
 
     def vectorize(self, image_bytes: bytes) -> str:
         """Convert a raster image to SVG via ``POST /images/vectorize`` (multipart).
@@ -188,29 +197,18 @@ class RecraftHTTPClient:
         Returns the raw SVG text (fetched from ``response["image"]["url"]``). All failures
         normalize to :class:`RecraftError` (the route maps that to 502, but the resolver
         catches it on the vectorize path and drops the motif with a warning instead)."""
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        try:
-            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
-                resp = client.post(
-                    f"{self._base_url}{_VECTORIZE_PATH}",
-                    files={"file": ("image.png", image_bytes, "image/png")},
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                url = resp.json()["image"]["url"]
-                file_resp = client.get(url)
-                file_resp.raise_for_status()
-                svg = file_resp.text
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
-            raise RecraftError(
-                f"Recraft vectorize HTTP {exc.response.status_code}: {body}"
-            ) from exc
-        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-            raise RecraftError(f"Recraft vectorize request failed: {exc}") from exc
-        if not svg or "<svg" not in svg.lower():
-            raise RecraftError("Recraft vectorize returned a non-SVG payload")
-        return svg
+
+        def _extract(client: httpx.Client, data: dict) -> str:
+            file_resp = client.get(data["image"]["url"])
+            file_resp.raise_for_status()
+            return file_resp.text
+
+        return self._post_for_svg(
+            _VECTORIZE_PATH,
+            files={"file": ("image.png", image_bytes, "image/png")},
+            extract=_extract,
+            label="vectorize",
+        )
 
 
 def client_from_settings(settings) -> RecraftHTTPClient | None:
@@ -397,7 +395,7 @@ def _color_to_hex(value: str) -> str:
     if not match:
         return value
     r, g, b = (max(0, min(255, round(float(c)))) for c in match.groups())
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return rgb_to_hex(r, g, b)
 
 
 def _hoist_style_paint(el: ET.Element, style: str) -> None:

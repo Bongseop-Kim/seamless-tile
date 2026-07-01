@@ -27,17 +27,6 @@ _RECRAFT_SVG = (
 )
 
 
-@pytest.fixture(autouse=True)
-def _clean():
-    def _purge():
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
-
-
 def _register_motif() -> str:
     motif = normalize_motif_svg(_flatten_unsuitable(_RECRAFT_SVG), max_color_slots=6)
     return register_motif(motif, source="recraft")

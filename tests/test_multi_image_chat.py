@@ -17,7 +17,6 @@ from PIL import Image
 import app.adapters.embedding as emb_adapter
 import app.adapters.llm as llm_adapter
 import app.adapters.recraft as recraft_adapter
-import app.api.routes.generate as gen_route
 import app.motifs.store as store_mod
 from app.adapters.image import vectorize_limit_error
 from app.adapters.llm import build_intent, build_intents, set_default_client
@@ -25,7 +24,6 @@ from app.adapters.motif_resolver import resolve_motifs
 from app.adapters.recraft import (
     RecraftError,
     RecraftHTTPClient,
-    clear_vectorize_cache,
     vectorize_via_recraft,
 )
 from app.main import app
@@ -50,26 +48,6 @@ def _png(size: int = 300, color: tuple = (200, 60, 60)) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (size, size), color).save(buf, format="PNG")
     return buf.getvalue()
-
-
-@pytest.fixture(autouse=True)
-def _clean():
-    def _purge():
-        clear_vectorize_cache()
-        llm_adapter.clear_intent_cache()
-        set_default_client(None)
-        emb_adapter.clear_embedding_cache()
-        emb_adapter.set_default_embedding_client(None)
-        recraft_adapter.clear_recraft_motif_cache()
-        recraft_adapter.set_default_recraft_client(None)
-        store_mod.clear_default_store()
-        gen_route.reset_response_cache()
-        for key in [k for k in MOTIFS if k.startswith("recraft-")]:
-            del MOTIFS[key]
-
-    _purge()
-    yield
-    _purge()
 
 
 class _FakeVectorizer:

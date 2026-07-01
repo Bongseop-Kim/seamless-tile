@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -353,19 +354,26 @@ def _norm_color(value: str) -> str | None:
     return low
 
 
-def _distinct_colors(children: list[ET.Element]) -> list[str]:
-    """Distinct concrete paint values across ``children`` in document DFS
-    first-appearance order (deterministic slot ordering, D15)."""
-    order: list[str] = []
+def _paint_attrs(children: list[ET.Element]) -> Iterator[tuple[ET.Element, str, str]]:
+    """Yield ``(node, attr, raw_value)`` for every present ``fill``/``stroke`` across
+    ``children`` in document DFS, fill-before-stroke order — the single traversal the
+    color read/recolor/slotize/quantize paths share, so their ordering stays in lockstep."""
     for child in children:
         for node in child.iter():
             for attr in ("fill", "stroke"):
                 value = node.get(attr)
-                if value is None:
-                    continue
-                norm = _norm_color(value)
-                if norm is not None and norm not in order:
-                    order.append(norm)
+                if value is not None:
+                    yield node, attr, value
+
+
+def _distinct_colors(children: list[ET.Element]) -> list[str]:
+    """Distinct concrete paint values across ``children`` in document DFS
+    first-appearance order (deterministic slot ordering, D15)."""
+    order: list[str] = []
+    for _node, _attr, value in _paint_attrs(children):
+        norm = _norm_color(value)
+        if norm is not None and norm not in order:
+            order.append(norm)
     return order
 
 
@@ -373,15 +381,10 @@ def _recolor_single(children: list[ET.Element]) -> None:
     """Legacy single-color normalization: every concrete fill/stroke -> ``currentColor``
     (``none`` / internal ``url(#…)`` left intact). Byte-identical to the pre-multicolor
     behavior, preserving single-color motif ids and rendered output."""
-    for child in children:
-        for node in child.iter():
-            for attr in ("fill", "stroke"):
-                value = node.get(attr)
-                if value is None:
-                    continue
-                if _norm_color(value) is None:
-                    continue
-                node.set(attr, "currentColor")
+    for node, attr, value in _paint_attrs(children):
+        if _norm_color(value) is None:
+            continue
+        node.set(attr, "currentColor")
 
 
 def _slotize_colors(children: list[ET.Element]) -> tuple[str, ...]:
@@ -399,16 +402,11 @@ def _slotize_colors(children: list[ET.Element]) -> tuple[str, ...]:
         _recolor_single(children)
         return ("s0",)
     token = {color: f"s{i}" for i, color in enumerate(order)}
-    for child in children:
-        for node in child.iter():
-            for attr in ("fill", "stroke"):
-                value = node.get(attr)
-                if value is None:
-                    continue
-                norm = _norm_color(value)
-                if norm is None:
-                    continue
-                node.set(attr, token[norm])
+    for node, attr, value in _paint_attrs(children):
+        norm = _norm_color(value)
+        if norm is None:
+            continue
+        node.set(attr, token[norm])
     return tuple(f"s{i}" for i in range(len(order)))
 
 
@@ -466,15 +464,10 @@ def _quantize_colors(children: list[ET.Element], max_slots: int) -> None:
             f"motif has {len(distinct)} colors that cannot be quantized to "
             f"{max_slots} slots (too many non-hex paints)"
         )
-    for child in children:
-        for node in child.iter():
-            for attr in ("fill", "stroke"):
-                value = node.get(attr)
-                if value is None:
-                    continue
-                norm = _norm_color(value)
-                if norm is not None and rep.get(norm, norm) != norm:
-                    node.set(attr, rep[norm])
+    for node, attr, value in _paint_attrs(children):
+        norm = _norm_color(value)
+        if norm is not None and rep.get(norm, norm) != norm:
+            node.set(attr, rep[norm])
 
 
 # Elements that actually paint. A motif whose geometry is only non-rendering

@@ -61,7 +61,6 @@ class PathSpec(BaseModel):
     angle: float | None = None
     wavelength: float | None = Field(default=None, gt=0)
     amplitude: float | None = Field(default=None, ge=0)
-    path_id: str | None = None
 
 
 class LatticeSpec(BaseModel):
