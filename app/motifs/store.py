@@ -321,9 +321,14 @@ class PostgresMotifStore:
 
     def find_facets_meta(self, scope: str | None) -> list[MotifMeta]:
         with self._cursor("facet query") as cur:
+            from psycopg import sql
+
             where, params = _facet_where_clause(scope)
             cur.execute(
-                f"SELECT {_META_SELECT} FROM motifs WHERE {where} ORDER BY id",
+                sql.SQL("SELECT {} FROM motifs WHERE {} ORDER BY id").format(
+                    sql.SQL(_META_SELECT),
+                    sql.SQL(where),
+                ),
                 params,
             )
             rows = cur.fetchall()

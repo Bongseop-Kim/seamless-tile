@@ -74,7 +74,7 @@ def _resolve(specs, intent=None, **kw):
 
 
 def _motif_layers(resolved):
-    return [l for l in resolved["layers"] if l.get("type") == "motif"]
+    return [layer for layer in resolved["layers"] if layer.get("type") == "motif"]
 
 
 def _build(text, segments=None, slots=None):
@@ -125,6 +125,12 @@ def test_unknown_color_slot_falls_back_with_warning():
     result = _build("Hi", [{"text": "Hi", "color": "nope"}], slots={"ink"})
     assert result.color == "ink" and result.colors is None
     assert any("not in palette" in w for w in result.warnings)
+
+
+def test_unrenderable_segment_does_not_claim_color_slot():
+    result = _build("🎨A", [{"text": "🎨", "color": "accent"}, {"text": "A"}])
+    assert result.color == "ink" and result.colors is None
+    assert any("no glyph" in w for w in result.warnings)
 
 
 def test_resolver_keeps_one_text_layer():
@@ -222,6 +228,9 @@ def test_text_spec_valid_without_subject_scope():
 def test_text_spec_rejects_bad_text_and_segments():
     assert _validate_spec_facets([{"layer_id": "t", "text": ""}])
     assert _validate_spec_facets([{"layer_id": "t", "text": "x", "segments": "no"}])
+    assert _validate_spec_facets(
+        [{"layer_id": "t", "text": "x", "source_image_index": 0}], image_count=1
+    )
     assert _validate_spec_facets(
         [{"layer_id": "t", "text": "x", "segments": [{"text": "a", "scale": -1}]}]
     )

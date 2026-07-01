@@ -100,11 +100,6 @@ def build_text_motif(
                 )
                 warned_colors.add(color)
             color = default_color
-        paint = color_paints.get(color)
-        if paint is None:
-            color_order.append(color)
-            paint = f"#{len(color_order):06x}"
-            color_paints[color] = paint
         for ch in run_text:
             cp = ord(ch)
             outline = _glyph_outline(cp)
@@ -113,6 +108,11 @@ def build_text_motif(
                 continue
             d, advance = outline
             if d.strip():
+                paint = color_paints.get(color)
+                if paint is None:
+                    color_order.append(color)
+                    paint = f"#{len(color_order):06x}"
+                    color_paints[color] = paint
                 with _FONT_LOCK:
                     font = _font()
                     glyphset = font.getGlyphSet()
@@ -139,9 +139,13 @@ def build_text_motif(
 
     if len(color_order) <= 1:
         return TextMotif(motif.id, color_order[0], None, tuple(warnings))
+    if len(motif.color_slots) != len(color_order):
+        raise ValueError(
+            "text color slot count does not match rendered glyph color count"
+        )
     return TextMotif(
         motif.id,
         default_color,
-        dict(zip(motif.color_slots, color_order)),
+        dict(zip(motif.color_slots, color_order, strict=True)),
         tuple(warnings),
     )

@@ -388,11 +388,15 @@ def _validate_spec_facets(specs: list[dict], image_count: int = 0) -> list[str]:
         layer_id = spec.get("layer_id")
         if not isinstance(layer_id, str) or not layer_id:
             errors.append(f"motif_specs[{i}] missing string 'layer_id'")
-        if spec.get("text") is not None:
+        if "text" in spec:
             # Text-as-motif spec: a literal string (+ optional styled segments). It is
             # handled by the deterministic glyph pipeline, never embedding/Recraft, so it
-            # has no retrieval subject/scope — auto-fill them to keep the facet plumbing
-            # valid and skip the subject/scope/image checks below.
+            # has no retrieval subject/scope/image binding — auto-fill subject/scope to
+            # keep the facet plumbing valid and skip the retrieval checks below.
+            if spec.get("source_image_index") is not None:
+                errors.append(
+                    f"motif_specs[{i}] text motif must not include source_image_index"
+                )
             text = spec.get("text")
             if not isinstance(text, str) or not text.strip():
                 errors.append(f"motif_specs[{i}] 'text' must be a non-empty string")

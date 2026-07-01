@@ -226,8 +226,9 @@ async def generate_candidate(
         # binds each image to a role (style -> palette, motif -> vectorized). Decode +
         # validate + strip every image ONCE here, before any bytes leave the box.
         input_type = "reference_images"
-        cleaned_images = _run_adapter(
-            lambda: [image_decode_and_clean(s) for s in request.images]
+        cleaned_images = await asyncio.to_thread(
+            _run_adapter,
+            lambda: [image_decode_and_clean(s) for s in request.images],
         )
         adapted_list = await asyncio.to_thread(
             _run_adapter,
@@ -292,7 +293,8 @@ async def generate_candidate(
                 if request.seed is not None
                 else int(design_intent.get("seed") or 0)
             )
-            design_intent = _run_adapter(
+            design_intent = await asyncio.to_thread(
+                _run_adapter,
                 lambda di=design_intent, ds=design_specs, es=effective_seed: resolve_motifs(
                     di,
                     ds,
