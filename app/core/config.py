@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
     preview_dpi: int = Field(192, ge=1, le=1200)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
 
+    # Fabric texture render (session 15, /finalize). Resolution of the textured PNG;
+    # higher than preview for a convincing cloth look. Capped by max_dpi. Uploads reuse
+    # the preview bucket under a ``fabric/`` prefix.
+    fabric_dpi: int = Field(300, ge=1, le=1200)  # env: FABRIC_DPI
+
     # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
     # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 채팅 표면에서는 "같은 입력→바이트 동일"이
     # 기본이면 안 되므로 기본 0(비활성: lookup+store 생략). nonzero는 결정론/repro 디버깅용 opt-in.

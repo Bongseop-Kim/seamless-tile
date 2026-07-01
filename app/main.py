@@ -13,7 +13,7 @@ from app.adapters.gemini import client_from_settings
 from app.adapters.llm import set_default_client
 from app.adapters.recraft import client_from_settings as recraft_client_from_settings
 from app.adapters.recraft import set_default_recraft_client
-from app.api.routes import export, generate, health, palettes
+from app.api.routes import export, finalize, generate, health, palettes
 from app.core.config import get_settings
 from app.core.observability import (
     configure_logging,
@@ -97,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(palettes.router, prefix=settings.api_v1_prefix)
     app.include_router(generate.router, prefix=settings.api_v1_prefix)
     app.include_router(export.router, prefix=settings.api_v1_prefix)
+    app.include_router(finalize.router, prefix=settings.api_v1_prefix)
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
