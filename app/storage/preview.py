@@ -25,15 +25,12 @@ def preview_configured() -> bool:
     return bool(s.supabase_url and s.supabase_service_key)
 
 
-def make_preview(svg: str, *, tile_mm: float, dpi: int, path: str) -> str:
-    """Render ``svg`` to a PNG (one tile at ``dpi``) and upload it to the preview
-    bucket at ``path``; return the object's public URL.
-
-    Raises ``RasterError`` if rendering fails (e.g. no SVG renderer installed) or
-    ``httpx.HTTPError`` if the upload fails. Callers treat either as a per-candidate
-    best-effort miss. Assumes :func:`preview_configured` is True.
+def upload_png(png: bytes, *, path: str) -> str:
+    """Upload already-rendered PNG ``bytes`` to the preview bucket at ``path``; return
+    the object's public URL. Raises ``httpx.HTTPError`` on failure. Assumes
+    :func:`preview_configured` is True. Shared by preview (SVG->PNG) and fabric render
+    (PNG bytes) so the Storage REST call lives in one place.
     """
-    png, _media = rasterize(svg, "png", dpi=dpi, width_mm=tile_mm)
     s = get_settings()
     base = s.supabase_url.rstrip("/")
     bucket = s.preview_bucket
@@ -55,3 +52,15 @@ def make_preview(svg: str, *, tile_mm: float, dpi: int, path: str) -> str:
             response=resp,
         )
     return f"{base}/storage/v1/object/public/{bucket}/{path}"
+
+
+def make_preview(svg: str, *, tile_mm: float, dpi: int, path: str) -> str:
+    """Render ``svg`` to a PNG (one tile at ``dpi``) and upload it to the preview
+    bucket at ``path``; return the object's public URL.
+
+    Raises ``RasterError`` if rendering fails (e.g. no SVG renderer installed) or
+    ``httpx.HTTPError`` if the upload fails. Callers treat either as a per-candidate
+    best-effort miss. Assumes :func:`preview_configured` is True.
+    """
+    png, _media = rasterize(svg, "png", dpi=dpi, width_mm=tile_mm)
+    return upload_png(png, path=path)

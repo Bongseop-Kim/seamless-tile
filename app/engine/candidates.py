@@ -39,16 +39,16 @@ _DROP_FRACTIONS: tuple[float | None, ...] = (None, 0.5, 1.0 / 3.0, 0.25)
 _PLACEMENT_RANK = {"path_following": 2, "lattice": 1, "point_set": 1, "scatter": 0}
 
 # Uneven/guard-stripe rhythm presets (authentic repp is unbalanced, not equal-width).
-# Each is (name, band weights, between-band gap weight): widths/gaps are weight*u with
+# Each is (band weights, between-band gap weight): widths/gaps are weight*u with
 # u = period/total, so bands+gaps partition exactly one period (seamless), and colors only
 # cycle the layer's existing band colors. Literal order == emission order.
-_STRIPE_RHYTHMS_SINGLE: tuple[tuple[str, tuple[float, ...], float], ...] = (
-    ("guard_5_2_2", (5.0, 2.0, 2.0), 0.5),  # wide stripe + thin guard pair (3 bands)
-    ("asym_3_2_1", (3.0, 2.0, 1.0), 0.6),  # graduated uneven cluster (3 bands)
+_STRIPE_RHYTHMS_SINGLE: tuple[tuple[tuple[float, ...], float], ...] = (
+    ((5.0, 2.0, 2.0), 0.5),  # guard_5_2_2: wide stripe + thin guard pair (3 bands)
+    ((3.0, 2.0, 1.0), 0.6),  # asym_3_2_1: graduated uneven cluster (3 bands)
 )
-_STRIPE_RHYTHMS_MULTI: tuple[tuple[str, tuple[float, ...], float], ...] = (
-    ("ratio_5_11", (5.0, 11.0), 0.4),  # uneven two-band, cycle existing colors
-    ("asym_6_1_3", (6.0, 1.0, 3.0), 0.4),  # uneven three-band, cycle existing colors
+_STRIPE_RHYTHMS_MULTI: tuple[tuple[tuple[float, ...], float], ...] = (
+    ((5.0, 11.0), 0.4),  # ratio_5_11: uneven two-band, cycle existing colors
+    ((6.0, 1.0, 3.0), 0.4),  # asym_6_1_3: uneven three-band, cycle existing colors
 )
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ def generate_candidates(
                     # exception types are real bugs and intentionally propagate.
                     render_failures += 1
                     continue
-                repro = ReproMeta.build(
+                repro = ReproMeta(
                     intent_version=eff.intent_version,
                     seed=s,
                     colorway_id=cw,
@@ -393,7 +393,7 @@ def _stripe_variants(base: Intent, layer_idx: int) -> Iterator[Intent]:
         rhythms = _STRIPE_RHYTHMS_SINGLE
     else:
         rhythms = _STRIPE_RHYTHMS_MULTI
-    for _name, weights, gap in rhythms:
+    for weights, gap in rhythms:
         yield _with_stripe_rhythm(base, layer_idx, weights, gap)
 
 

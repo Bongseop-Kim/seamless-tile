@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     preview_bucket: str = "seamless-previews"  # env: PREVIEW_BUCKET
     preview_dpi: int = Field(192, ge=1, le=1200)  # env: PREVIEW_DPI; tile preview raster resolution (2x)
 
+    # Fabric texture render (session 15, /finalize). Resolution of the textured PNG;
+    # higher than preview for a convincing cloth look. Capped by max_dpi. Uploads reuse
+    # the preview bucket under a ``fabric/`` prefix.
+    fabric_dpi: int = Field(300, ge=1, le=1200)  # env: FABRIC_DPI
+
     # Generate 응답 캐시(in-process LRU). 동일 요청은 직전 candidates+preview URL을 그대로
     # 반환해 adapter/엔진/렌더+업로드 작업을 건너뜀. 채팅 표면에서는 "같은 입력→바이트 동일"이
     # 기본이면 안 되므로 기본 0(비활성: lookup+store 생략). nonzero는 결정론/repro 디버깅용 opt-in.
@@ -62,11 +67,23 @@ class Settings(BaseSettings):
     # Embedding model (session 11, D12). app.main requires openai_api_key and installs an
     # OpenAIEmbeddingClient as the default. Unit tests can still call the resolver with no
     # client to exercise exact/hard-filter behavior.
-    # motif_similarity_tau is the cosine threshold for "reuse vs generate"; it is a
-    # reuse-first start value (spec §6.1/D13) pending empirical calibration (spec §12).
+    # motif_similarity_tau is the cosine threshold for "reuse vs generate"; calibrated
+    # in S19 via the scripts/eval_motif_retrieval.py sweep against the labelset (zero-
+    # false-reuse rule; impostor ceiling 0.832) -- re-run --embed + recalibrate if
+    # EMBEDDING_MODEL or the labelset changes (tests/test_retrieval_eval.py pins this).
     openai_api_key: str | None = None  # env: OPENAI_API_KEY
     embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
-    motif_similarity_tau: float = Field(0.60, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
+    motif_similarity_tau: float = Field(0.84, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
+
+    # Conversational sessions (session 16). Interactive motif reuse presents this many
+    # free candidates before offering "generate new" (Recraft) behind a confirm gate.
+    motif_candidate_top_k: int = Field(5, ge=1)  # env: MOTIF_CANDIDATE_TOP_K
+
+    # Deterministic session cost guard (session 17, S13). Per-session ceilings on the
+    # expensive ops; exceeding either hard-blocks (429) even on an explicit confirm
+    # (resource-ceiling spirit, README). Counters only -- no wall-clock/time-based limit.
+    session_recraft_limit: int = Field(3, ge=0)  # env: SESSION_RECRAFT_LIMIT
+    session_finalize_limit: int = Field(10, ge=0)  # env: SESSION_FINALIZE_LIMIT
 
     # Recraft motif generation (session 13, D11/M1). The detailed/painterly miss path
     # routes to Recraft; its output is path-flattened and its color count capped to this

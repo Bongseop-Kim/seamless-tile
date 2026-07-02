@@ -18,7 +18,7 @@ def is_hex_color(value: str) -> bool:
     return bool(_HEX.match(value))
 
 
-def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
     h = value.lstrip("#")
     if len(h) == 3:
         h = "".join(c * 2 for c in h)
@@ -35,7 +35,7 @@ def out_of_gamut(hex_color: str) -> bool:
     used only to emit non-blocking warnings during validation."""
     if not is_hex_color(hex_color):
         return False
-    r, g, b = _hex_to_rgb(hex_color)
+    r, g, b = hex_to_rgb(hex_color)
     _, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
     return s > 0.95 and v > 0.9
 
@@ -48,15 +48,6 @@ PALETTES: dict[str, tuple[str, ...]] = {
     "earth": ("#e8ddcb", "#8b5e3c", "#3e2f1c"),
     "pastel": ("#fce4ec", "#b3e5fc", "#c8e6c9"),
 }
-
-
-def resolve_palette(name: str) -> tuple[str, ...]:
-    try:
-        return PALETTES[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown palette: {name!r}; choose one of {sorted(PALETTES)}"
-        ) from None
 
 
 # --- Color slots & colorways --------------------------------------------------

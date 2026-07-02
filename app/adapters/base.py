@@ -40,6 +40,33 @@ class AdapterClientError(RuntimeError):
     """
 
 
+class ClientSlot:
+    """Process-wide default-client slot: the set/get/resolve-or-raise trio every
+    adapter needs, collapsed from four hand-rolled module-global copies.
+
+    ``resolve`` prefers an explicitly injected client, falls back to the default, and
+    raises ``error(message)`` when neither exists — or returns ``None`` if no ``error``
+    was given (the embedding adapter's fail-soft contract)."""
+
+    def __init__(self, error: type[AdapterClientError] | None = None, message: str = "") -> None:
+        self._client = None
+        self._error = error
+        self._message = message
+
+    def set(self, client) -> None:
+        self._client = client
+
+    def get(self):
+        return self._client
+
+    def resolve(self, client=None):
+        if client is not None:
+            return client
+        if self._client is None and self._error is not None:
+            raise self._error(self._message)
+        return self._client
+
+
 def cache_key(payload: dict) -> str:
     """Stable hash of an adapter's inputs, used to freeze/cache the produced intent.
 

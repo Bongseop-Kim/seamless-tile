@@ -24,6 +24,11 @@
 9 (영속화) ──> 10 (글루·단색 E2E) ──> 11 (임베딩·변형) ──> 14 (카탈로그·풀 성숙)
                      └──> 13 (Recraft) ── 의존 ──> 12 (멀티컬러 엔진, 엔진 독립)
 # P0=9+10, P1=11, P2=12+13, P3=14
+
+# 파생출력 & 대화형 스튜디오 (spec: photoreal-fabric-render, conversational-design-sessions)
+15 (실사화 finalize, 독립) ──(P0 실사화 버튼이 핸드오프)──┐
+16 (세션·edit-as-delta·비용 게이트 P0) ──> 17 (영속·복원·비용 가드 P1) ──> 18 (fork/undo P2)
+# 15는 stateless 위에서 단독 완결. 16이 전환점. LangSmith(P3)·planner/critic는 선택/후보 — 별도 착수.
 ```
 
 7은 6에, 8은 3·4·6·7에 의존한다. 6의 "placement 종류" 다양성 축은 5를 전제하므로, 5 없이 4 직후
@@ -47,10 +52,21 @@
 | 12 | `12-multicolor-engine.md` | 멀티컬러 엔진(슬롯 보존·(b) 바인딩) | N>2 슬롯 렌더 + dedup 유지 + 바이트동일 |
 | 13 | `13-recraft-and-routing.md` | Recraft 연결 + 적합성 게이트 + 라우팅 | detailed 명세 → 멀티컬러 합성 |
 | 14 | `14-catalog-and-pool.md` | head 카탈로그 시드 + 풀 성숙 + ivfflat | 즉시 재사용 풀 + 변형 실효 |
+| 15 | `15-fabric-texture-render.md` | 결정론 원단 텍스처 렌더 + finalize(무료·로컬) | 승인 SVG → 천 느낌 PNG, 결정론·seamless·영역별 질감 |
+| 16 | `16-conversational-sessions-p0.md` | 세션 + edit-as-delta(도구) + Recraft 확인 게이트 | 턴2 국소 편집 + 게이트 없이 Recraft/실사화 미호출 + 결정론 그린 |
+| 17 | `17-session-persistence-and-cost-guard.md` | 세션 영속·복원 API + 결정론 비용 가드 | 재시작 후 복원·재현, 예산 상한·dedup, in-memory degrade |
+| 18 | `18-fork-undo-time-travel.md` | 분기/undo/redo/fork(checkpoint) | 되감기·fork 후보, 재합성 byte 동일 |
+| 19 | `19-retrieval-eval-and-tau-calibration.md` | 모티프 재사용 검색 품질: 라벨셋·τ 보정·recall/precision(오프라인) | τ 근거값 확정 + precision/recall 리포트 |
+| 20 | `20-review-followups.md` | 세션/finalize 후속 리뷰 반영 | set_material→finalize, dead-code/doc drift 정리 |
 
 세션 9–14는 상위 기능층(멀티컬러 모티프 라이브러리 & 프롬프트 생성)으로,
-설계 기준은 `docs/spec/motif-library-and-multicolor.md`다. 각 세션 파일은 **새 대화창에서 단독 실행**
-가능하도록 "부트스트랩"(읽을 스펙/코드)을 자체 포함한다.
+설계 기준은 `docs/spec/motif-library-and-multicolor.md`다. **세션 15**의 기준은
+`docs/spec/photoreal-fabric-render.md`(파생출력, stateless 위에서 독립), **세션 16–20**은
+`docs/spec/conversational-design-sessions.md`(대화형 스튜디오, LangGraph)다. LangSmith 트레이싱(P3)과
+planner/critic 멀티에이전트는 스펙상 **선택·후보** — 별도 착수(문서 미생성). **세션 17의 Postgres 영속은
+client-only** — `design_sessions` + LangGraph 체크포인트 4개 테이블은 **모노레포가 정의**하고 이 레포는
+`setup()`/DDL을 실행하지 않는다(모티프 밴드와 동일 규칙, 세션 17 "모노레포 선행" 표 참고). 각 세션 파일은
+**새 대화창에서 단독 실행** 가능하도록 "부트스트랩"(읽을 스펙/코드)을 자체 포함한다.
 
 ## 공통 규약 (모든 세션 적용)
 

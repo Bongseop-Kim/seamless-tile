@@ -7,13 +7,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.adapters.edit_llm import client_from_settings as edit_client_from_settings
+from app.adapters.edit_llm import set_default_edit_client
 from app.adapters.embedding import client_from_settings as embedding_client_from_settings
 from app.adapters.embedding import set_default_embedding_client
 from app.adapters.gemini import client_from_settings
 from app.adapters.llm import set_default_client
 from app.adapters.recraft import client_from_settings as recraft_client_from_settings
 from app.adapters.recraft import set_default_recraft_client
-from app.api.routes import export, generate, health, palettes
+from app.api.routes import export, finalize, generate, health, palettes, sessions
 from app.core.config import get_settings
 from app.core.observability import (
     configure_logging,
@@ -71,6 +73,11 @@ async def lifespan(app: FastAPI):
     set_default_client(llm_client)
     logger.info("LLM client configured (Gemini)")
 
+    # Edit-turn tool-use client (session 16): same Gemini key, bind_tools. Authoring
+    # already requires the key above, so this is always installed alongside it.
+    set_default_edit_client(edit_client_from_settings(settings))
+    logger.info("edit LLM client configured (Gemini bind_tools)")
+
     embedding_client = embedding_client_from_settings(settings)
     if embedding_client is None:
         raise RuntimeError("OPENAI_API_KEY is required to configure the embedding client")
@@ -97,6 +104,8 @@ def create_app() -> FastAPI:
     app.include_router(palettes.router, prefix=settings.api_v1_prefix)
     app.include_router(generate.router, prefix=settings.api_v1_prefix)
     app.include_router(export.router, prefix=settings.api_v1_prefix)
+    app.include_router(finalize.router, prefix=settings.api_v1_prefix)
+    app.include_router(sessions.router, prefix=settings.api_v1_prefix)
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):

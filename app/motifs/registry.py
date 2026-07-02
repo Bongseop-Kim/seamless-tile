@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.engine.palette import hex_to_rgb as palette_hex_to_rgb, is_hex_color
 from app.engine.units import fmt
 from app.motifs import facets
 from app.motifs import geometry as geom
@@ -298,7 +299,6 @@ def _flush_motif_id_caches() -> None:
     # Lazy import: the adapters import this module, so a top-level import is a cycle.
     from app.adapters import recraft
 
-    recraft.clear_motif_cache()
     recraft.clear_recraft_motif_cache()
 
 
@@ -412,18 +412,8 @@ def _slotize_colors(children: list[ET.Element]) -> tuple[str, ...]:
 
 def _hex_to_rgb(color: str) -> tuple[int, int, int] | None:
     """Parse a ``#rgb`` / ``#rrggbb`` token to an ``(r, g, b)`` tuple, else ``None``."""
-    c = color.strip().lower()
-    if not c.startswith("#"):
-        return None
-    h = c[1:]
-    if len(h) == 3:
-        h = "".join(ch * 2 for ch in h)
-    if len(h) != 6:
-        return None
-    try:
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except ValueError:
-        return None
+    c = color.strip()
+    return palette_hex_to_rgb(c) if is_hex_color(c) else None
 
 
 def _quantize_colors(children: list[ET.Element], max_slots: int) -> None:

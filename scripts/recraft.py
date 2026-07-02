@@ -21,13 +21,12 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.adapters.recraft import (  # noqa: E402
-    _flatten_unsuitable,
+    _gate_motif_svg,
     client_from_settings,
-    create_motif,
 )
 from app.core.config import get_settings  # noqa: E402
 from app.engine.generate import generate  # noqa: E402
-from app.motifs.registry import get_motif, normalize_motif_svg  # noqa: E402
+from app.motifs.registry import get_motif, register_motif  # noqa: E402
 from app.render.raster import RasterError, find_renderer, rasterize  # noqa: E402
 from app.render.sanitize import SanitizeError  # noqa: E402
 
@@ -100,10 +99,8 @@ def build_tile_intent(
     }
 
 
-def _gate(raw: str, max_slots: int):
-    flat = _flatten_unsuitable(raw)
-    motif = normalize_motif_svg(flat, max_color_slots=max_slots)
-    return flat, motif
+def _gate(raw: str, max_slots: int, **kwargs):
+    return _gate_motif_svg(raw, max_color_slots=max_slots, **kwargs)
 
 
 def cmd_smoke(args) -> int:
@@ -175,7 +172,15 @@ def cmd_tile(args) -> int:
     client = _client_or_exit()
     print(f"prompt   : {args.prompt}")
     print("1/3 generating motif via Recraft ...", flush=True)
-    motif_id = create_motif(args.prompt, client=client)
+    settings = get_settings()
+    _flat, motif = _gate(
+        client.generate(args.prompt),
+        settings.recraft_max_color_slots,
+        max_aspect_ratio=settings.motif_max_aspect_ratio,
+        edge_seam_tol=settings.motif_edge_seam_tol,
+        render_check=settings.motif_render_check,
+    )
+    motif_id = register_motif(motif)
     motif = get_motif(motif_id)
     print(f"    motif_id={motif_id}  color_slots={list(motif.color_slots)}")
 

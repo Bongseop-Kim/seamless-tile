@@ -103,8 +103,8 @@ def test_four_scripts_all_build():
 
 
 def test_whitespace_and_missing_glyphs():
-    assert gb.glyph_advance(ord(" ")) is not None
-    assert gb.glyph_advance(ord("🎨")) is None
+    assert gb._glyph_outline(ord(" ")) is not None
+    assert gb._glyph_outline(ord("🎨")) is None
     with pytest.raises(ValueError):
         _build(" ")
     result = _build("A🎨B")

@@ -13,11 +13,9 @@ import app.adapters.llm as llm_adapter
 import app.adapters.motif_resolver as motif_resolver
 import app.adapters.recraft as recraft_adapter
 from app.adapters.base import AdapterClientError, AdapterResult
-from app.adapters.llm import (
-    build_intent as llm_build_intent,
-    set_default_client,
-)
-from app.adapters.motif_resolver import resolve_motifs
+from app.adapters.embedding import EmbeddingError
+from app.adapters.llm import build_intents, set_default_client
+from app.adapters.motif_resolver import present_candidates, resolve_motifs
 import app.api.routes.generate as gen_route
 from app.main import app
 from app.motifs import store as store_mod
@@ -27,6 +25,11 @@ from app.validate.intent import IntentInvalid
 from tests.test_intent import mvp_intent
 
 client = TestClient(app)
+
+
+def llm_build_intent(*args, **kwargs):
+    """Single-design shim for the removed llm.build_intent wrapper."""
+    return build_intents(*args, **kwargs)[0]
 
 _GOOD_SVG = '<svg viewBox="0 0 12 12"><path d="M2 2 H10 V10 H2 Z" fill="currentColor"/></svg>'
 _BAD_SVG = '<svg viewBox="0 0 12 12"><script>nope()</script></svg>'  # script => SanitizeError
@@ -391,6 +394,29 @@ def test_resolver_embedding_call_failure_propagates(monkeypatch):
             _layer_intent(), [_spec(view="front")],
             store=_FakeStore(rec), embedding_client=_BoomEmbed(),
         )
+
+
+def test_present_candidates_embedding_failure_falls_back_to_pool_order():
+    class _BoomEmbed:
+        model = "m"
+
+        def embed(self, text):
+            raise EmbeddingError("embed upstream down")
+
+    store = _FakeStore(
+        _record("motif-a", "bee", "whole"),
+        _record("motif-b", "ant", "whole"),
+    )
+    out = present_candidates(
+        {"subject": "cat", "scope": "whole"},
+        store=store,
+        embedding_client=_BoomEmbed(),
+        k=2,
+    )
+    assert out == [
+        {"motif_id": "motif-a", "similarity": None},
+        {"motif_id": "motif-b", "similarity": None},
+    ]
 
 
 def test_resolver_dimension_mismatch_excluded_falls_back(monkeypatch):

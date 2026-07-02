@@ -78,30 +78,11 @@ def select_variant(pool_ids: list[str], variant_group: str, seed: int) -> str:
     return pool[stable_hash(f"{variant_group}:{seed}") % len(pool)]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ReproMeta:
     intent_version: int
-    engine_version: str
-    registry_version: str
     seed: int
     colorway_id: str
+    engine_version: str = ENGINE_VERSION
+    registry_version: str = REGISTRY_VERSION
     layout_id: str | None = None
-
-    @classmethod
-    def build(
-        cls,
-        *,
-        intent_version: int,
-        seed: int,
-        colorway_id: str,
-        layout_id: str | None = None,
-        registry_version: str = REGISTRY_VERSION,
-    ) -> "ReproMeta":
-        return cls(
-            intent_version=intent_version,
-            engine_version=ENGINE_VERSION,
-            registry_version=registry_version,
-            seed=seed,
-            colorway_id=colorway_id,
-            layout_id=layout_id,
-        )

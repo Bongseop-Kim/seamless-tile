@@ -1,5 +1,5 @@
-"""Session-7 adapter tests. All external calls (LLM, VLM, vectorizer) are mocked —
-no network. Palette extraction runs for real against synthetic Pillow images."""
+"""Session-7 adapter tests. All external LLM calls are mocked — no network.
+Palette extraction runs for real against synthetic Pillow images."""
 
 import base64
 import io
@@ -14,15 +14,11 @@ from app.adapters import image as image_adapter
 from app.adapters import llm as llm_adapter
 from app.adapters.base import AdapterResult
 from app.adapters.image import (
-    ImageAdapterError,
-    VectorResult,
     build_intent as image_build_intent,
     extract_palette,
 )
-from app.adapters.image import judge_vectorization
 from app.adapters.llm import (
     LLMNotConfigured,
-    build_intent as llm_build_intent,
     build_intents as llm_build_intents,
 )
 from app.main import app
@@ -30,6 +26,11 @@ from app.validate.intent import IntentInvalid, validate_intent
 from tests.test_intent import mvp_intent
 
 client = TestClient(app)
+
+
+def llm_build_intent(*args, **kwargs):
+    """Single-design shim for the removed llm.build_intent wrapper."""
+    return llm_build_intents(*args, **kwargs)[0]
 
 
 @pytest.fixture(autouse=True)
@@ -45,41 +46,6 @@ def _clear_caches():
 
 
 from tests._fakes import _ScriptedLLM
-
-
-class _StubVLM:
-    def __init__(self, motif_id: str | None) -> None:
-        self._motif_id = motif_id
-
-    def describe(self, image_bytes: bytes) -> dict:
-        return {"motif_id": self._motif_id}
-
-
-class _FakeVectorizer:
-    def __init__(self, path_count: int, color_count: int) -> None:
-        self._r = VectorResult(path_count=path_count, color_count=color_count)
-        self.calls = 0
-
-    def trace(self, image_bytes: bytes) -> VectorResult:
-        self.calls += 1
-        return self._r
-
-
-class _UnhashableVLM:
-    """A misbehaving VLM whose motif_id is unhashable (would crash a naive `in MOTIFS`)."""
-
-    def describe(self, image_bytes: bytes) -> dict:
-        return {"motif_id": ["not", "a", "string"]}
-
-
-class _FailingVLM:
-    def describe(self, image_bytes: bytes) -> dict:
-        raise RuntimeError("vlm down")
-
-
-class _FailingVectorizer:
-    def trace(self, image_bytes: bytes) -> VectorResult:
-        raise RuntimeError("vectorizer down")
 
 
 def _png_b64(*colors: tuple[int, int, int]) -> str:
@@ -410,74 +376,9 @@ def test_extract_palette_is_deterministic_hex_slots():
 
 def test_image_adapter_builds_valid_intent_from_palette():
     res = image_build_intent(_png_b64((16, 36, 58), (239, 138, 122)), use_cache=False)
-    assert res.source_fidelity == "vector"  # no vectorizer injected -> default vector
+    assert res.source_fidelity == "vector"  # image path is palette-only
     assert res.intent["palette"]["slots"]
     validate_intent(res.intent)  # frozen intent passes stage-0
-
-
-def test_image_adapter_marks_unfit_texture_as_raster_hybrid():
-    res = image_build_intent(
-        _png_b64((16, 36, 58), (239, 138, 122)),
-        vectorizer=_FakeVectorizer(path_count=5000, color_count=200),
-        use_cache=False,
-    )
-    assert res.source_fidelity == "raster_hybrid"
-    assert any("unfit" in w for w in res.warnings)
-
-
-def test_image_adapter_marks_fit_texture_as_vector():
-    res = image_build_intent(
-        _png_b64((16, 36, 58), (239, 138, 122)),
-        vectorizer=_FakeVectorizer(path_count=120, color_count=8),
-        use_cache=False,
-    )
-    assert res.source_fidelity == "vector"
-
-
-def test_image_adapter_honors_registry_motif_hint():
-    res = image_build_intent(
-        _png_b64((16, 36, 58), (239, 138, 122)),
-        vlm=_StubVLM("bee"),
-        use_cache=False,
-    )
-    motif_ids = [
-        layer["params"]["motif_id"]
-        for layer in res.intent["layers"]
-        if layer["type"] == "motif"
-    ]
-    assert "bee" in motif_ids
-
-
-def test_image_adapter_ignores_unknown_motif_hint():
-    res = image_build_intent(
-        _png_b64((16, 36, 58), (239, 138, 122)),
-        vlm=_StubVLM("definitely-not-a-registered-motif"),
-        use_cache=False,
-    )
-    motif_ids = [
-        layer["params"]["motif_id"]
-        for layer in res.intent["layers"]
-        if layer["type"] == "motif"
-    ]
-    assert motif_ids == []  # no fallback motif: the motif layer is dropped
-
-
-def test_image_adapter_maps_vlm_failure_to_adapter_error():
-    with pytest.raises(ImageAdapterError, match="VLM service failed"):
-        image_build_intent(
-            _png_b64((16, 36, 58), (239, 138, 122)),
-            vlm=_FailingVLM(),
-            use_cache=False,
-        )
-
-
-def test_image_adapter_maps_vectorizer_failure_to_adapter_error():
-    with pytest.raises(ImageAdapterError, match="vectorizer service failed"):
-        image_build_intent(
-            _png_b64((16, 36, 58), (239, 138, 122)),
-            vectorizer=_FailingVectorizer(),
-            use_cache=False,
-        )
 
 
 def test_image_adapter_rejects_bad_base64():
@@ -485,20 +386,21 @@ def test_image_adapter_rejects_bad_base64():
         image_build_intent("!!! not base64 !!!", use_cache=False)
 
 
-def test_judge_vectorization_boundaries():
-    assert judge_vectorization(VectorResult(1500, 32)) == "vector"
-    assert judge_vectorization(VectorResult(1501, 32)) == "raster_hybrid"
-    assert judge_vectorization(VectorResult(1500, 33)) == "raster_hybrid"
-
-
-def test_image_adapter_caches_frozen_intent():
+def test_image_adapter_caches_frozen_intent(monkeypatch):
     b64 = _png_b64((16, 36, 58), (239, 138, 122))
-    vec = _FakeVectorizer(path_count=5000, color_count=200)  # unfit -> raster_hybrid
-    a = image_build_intent(b64, vectorizer=vec)  # caching ON (default)
-    b = image_build_intent(b64, vectorizer=vec)
-    assert vec.calls == 1  # second call served from cache; vectorizer not re-run
+    calls = {"n": 0}
+    real = image_adapter.extract_palette
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(image_adapter, "extract_palette", counting)
+    a = image_build_intent(b64)  # caching ON (default)
+    b = image_build_intent(b64)
+    assert calls["n"] == 1  # second call served from cache; palette not re-extracted
     assert a.intent == b.intent
-    assert a.source_fidelity == b.source_fidelity == "raster_hybrid"
+    assert a.source_fidelity == b.source_fidelity == "vector"
     assert a.warnings == b.warnings  # fidelity + warnings replayed on the hit
 
 
@@ -510,41 +412,13 @@ def test_image_cached_intent_is_isolated_from_caller_mutation():
     assert b.intent["canvas"]["tile_mm"] == 48.0
 
 
-def test_image_adapter_drops_motif_on_constrained_retry(monkeypatch):
-    real = image_adapter.validate_intent
-    state = {"n": 0}
-
-    def flaky(raw, **kwargs):
-        state["n"] += 1
-        if state["n"] == 1:
-            raise IntentInvalid(["forced first-attempt failure"])  # triggers the retry
-        return real(raw, **kwargs)
-
-    monkeypatch.setattr(image_adapter, "validate_intent", flaky)
-    res = image_build_intent(_png_b64((16, 36, 58), (239, 138, 122)), use_cache=False)
-    assert state["n"] == 2  # initial attempt + one constrained retry
-    assert [l for l in res.intent["layers"] if l["type"] == "motif"] == []  # motif dropped
-
-
-def test_image_adapter_retry_exhausted_raises_intent_invalid(monkeypatch):
+def test_image_adapter_validation_failure_raises_intent_invalid(monkeypatch):
     def always_fail(raw, **kwargs):
         raise IntentInvalid(["always invalid"])
 
     monkeypatch.setattr(image_adapter, "validate_intent", always_fail)
     with pytest.raises(IntentInvalid):
         image_build_intent(_png_b64((16, 36, 58), (239, 138, 122)), use_cache=False)
-
-
-def test_image_adapter_ignores_unhashable_motif_hint():
-    res = image_build_intent(
-        _png_b64((16, 36, 58), (239, 138, 122)), vlm=_UnhashableVLM(), use_cache=False
-    )
-    motif_ids = [
-        layer["params"]["motif_id"]
-        for layer in res.intent["layers"]
-        if layer["type"] == "motif"
-    ]
-    assert motif_ids == []  # malformed hint ignored, motif layer dropped, no crash
 
 
 def test_image_adapter_rejects_data_uri_without_payload():

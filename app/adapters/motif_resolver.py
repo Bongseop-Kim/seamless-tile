@@ -23,7 +23,7 @@ import copy
 import math
 
 from app.adapters.base import AdapterClientError
-from app.adapters.embedding import embed_query
+from app.adapters.embedding import EmbeddingError, embed_query
 from app.adapters.recraft import generate_via_recraft, vectorize_via_recraft
 from app.core.config import get_settings
 from app.core.observability import log_metrics
@@ -216,6 +216,69 @@ def _resolve_one(
     new_id = generate_via_recraft(spec, client=recraft_client, embedding=query_vec)
     _log_path("generate", spec, similarity=best_sim, selected_id=new_id)
     return new_id
+
+
+def present_candidates(
+    spec: dict,
+    *,
+    store=None,
+    embedding_client=None,
+    k: int | None = None,
+) -> list[dict]:
+    """Free reuse candidates for a motif spec — the interactive gate's read-only
+    counterpart to :func:`_resolve_one`'s retrieval ladder, stopping BEFORE
+    ``generate_via_recraft`` (spec §8.3, S12). Presenting reuse options is free; the
+    expensive Recraft generation is gated on an explicit user confirm elsewhere, so this
+    function NEVER calls Recraft.
+
+    Returns up to ``k`` ``{"motif_id", "similarity"}`` dicts, best first: the exact
+    descriptor match (similarity 1.0) → the best embedding match (its cosine) → scope-pool
+    fill by lowest id (similarity ``None``). Empty when there is no store/scope/pool.
+    """
+    if k is None:
+        k = get_settings().motif_candidate_top_k
+    if store is None:
+        store = get_default_store()
+    scope = facets.normalize_facet(spec.get("scope"))
+    if not scope or store is None:
+        return []
+    try:
+        candidates = store.find_facets_meta(scope)
+    except MotifStoreError:
+        return []
+    if not candidates:
+        return []
+
+    ranked: list[tuple[str, float | None]] = []
+    seen: set[str] = set()
+    exact = _exact_match(spec, candidates)
+    if exact is not None:
+        ranked.append((exact, 1.0))
+        seen.add(exact)
+    # embed_query is None when embeddings are unconfigured. Presentation is a gate UI
+    # helper, so embedding outages are soft failures here: keep exact/id-order candidates.
+    try:
+        query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
+    except EmbeddingError:
+        query_vec = None
+    if query_vec is not None:
+        try:
+            match = store.find_best_by_embedding(scope, query_vec)
+        except MotifStoreError:
+            match = None
+        if match is not None and match.id not in seen:
+            ranked.append((match.id, round(match.similarity, 4)))
+            seen.add(match.id)
+    # ponytail: fill the rest from the scope pool in id order (candidates arrive ORDER BY
+    # id). This is exact + best-embedding + id-fill, NOT a true embedding top-K query —
+    # add a store.find_top_by_embedding(scope, vec, k) if ranking the tail matters.
+    for rec in candidates:
+        if len(ranked) >= k:
+            break
+        if rec.id not in seen:
+            ranked.append((rec.id, None))
+            seen.add(rec.id)
+    return [{"motif_id": mid, "similarity": sim} for mid, sim in ranked[:k]]
 
 
 def _resolve_text_layer(spec: dict, layer: dict, resolved: dict, sink: list[str]) -> str:

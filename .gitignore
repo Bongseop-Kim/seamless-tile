@@ -7,4 +7,5 @@ __pycache__/
 .omc/
 .serena/
 recraft_out/
-gallery/*.svg
+gallery/svg/
+gallery/png/

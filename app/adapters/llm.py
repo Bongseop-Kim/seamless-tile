@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 from typing import Protocol
 
-from app.adapters.base import AdapterClientError, AdapterResult, cache_key
+from app.adapters.base import AdapterClientError, AdapterResult, ClientSlot, cache_key
 from app.core.config import get_settings
 from app.motifs import facets
 from app.validate.intent import IntentInvalid, validate_intent
@@ -41,24 +41,13 @@ class LLMNotConfigured(AdapterClientError):
     """No LLM client was injected and none is configured as the default."""
 
 
-_DEFAULT_CLIENT: LLMClient | None = None
-
-
-def set_default_client(client: LLMClient | None) -> None:
-    """Register a process-wide default client (opt-in; used for real calls)."""
-    global _DEFAULT_CLIENT
-    _DEFAULT_CLIENT = client
-
-
-def _resolve_client(client: LLMClient | None) -> LLMClient:
-    if client is not None:
-        return client
-    if _DEFAULT_CLIENT is not None:
-        return _DEFAULT_CLIENT
-    raise LLMNotConfigured(
-        "no LLM client configured; inject one via build_intent(client=...) or "
-        "set_default_client(...). Network calls are opt-in — session 7 mocks all externals."
-    )
+_slot = ClientSlot(
+    LLMNotConfigured,
+    "no LLM client configured; inject one via build_intents(client=...) or "
+    "set_default_client(...). Network calls are opt-in — session 7 mocks all externals.",
+)
+set_default_client = _slot.set
+_resolve_client = _slot.resolve
 
 
 # Process-local freeze cache: same inputs -> same finalized intent -> same SVG.
@@ -607,23 +596,3 @@ def build_intents(
 
     assert last_exc is not None  # the loop only exits early via return
     raise last_exc
-
-
-def build_intent(
-    prompt: str,
-    *,
-    canvas: dict | None = None,
-    palette: dict | None = None,
-    client: LLMClient | None = None,
-    images: list[bytes] | None = None,
-    use_cache: bool = True,
-) -> AdapterResult:
-    """Back-compat single-design wrapper: returns the first design of :func:`build_intents`."""
-    return build_intents(
-        prompt,
-        canvas=canvas,
-        palette=palette,
-        client=client,
-        images=images,
-        use_cache=use_cache,
-    )[0]
