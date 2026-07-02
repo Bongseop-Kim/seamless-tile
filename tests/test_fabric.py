@@ -362,7 +362,7 @@ def test_api_finalize_unknown_weave_400():
     assert resp.status_code == 400
 
 
-def test_api_finalize_bad_production_method_422():
+def test_api_finalize_bad_production_method_400():
     # Literal enforces the value at the request-schema boundary.
     resp = client.post(
         "/api/v1/finalize",

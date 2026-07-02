@@ -298,3 +298,33 @@ def test_generate_images_path_rejects_bad_image_with_422():
         json={"prompt": "x", "images": ["not-valid-base64-!!!"]},
     )
     assert resp.status_code == 422
+
+
+def test_session_generate_images_threads_cleaned_bytes():
+    llm = _ScriptedLLM(json.dumps({"designs": [{"intent": mvp_intent()}]}))
+    set_default_client(llm)
+    data_uri = "data:image/png;base64," + base64.b64encode(_png()).decode()
+    resp = client.post(
+        "/api/v1/generate",
+        json={"session_id": "session-images", "prompt": "use this", "images": [data_uri]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert llm.image_calls[0] is not None
+    assert llm.image_calls[0][0].startswith(b"\x89PNG")
+
+
+def test_session_generate_reference_image_threads_cleaned_bytes():
+    llm = _ScriptedLLM(json.dumps({"designs": [{"intent": mvp_intent()}]}))
+    set_default_client(llm)
+    image_b64 = base64.b64encode(_png()).decode()
+    resp = client.post(
+        "/api/v1/generate",
+        json={
+            "session_id": "session-reference-image",
+            "prompt": "use this",
+            "reference_image": image_b64,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert llm.image_calls[0] is not None
+    assert llm.image_calls[0][0].startswith(b"\x89PNG")

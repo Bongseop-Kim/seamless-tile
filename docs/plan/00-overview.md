@@ -57,10 +57,11 @@
 | 17 | `17-session-persistence-and-cost-guard.md` | 세션 영속·복원 API + 결정론 비용 가드 | 재시작 후 복원·재현, 예산 상한·dedup, in-memory degrade |
 | 18 | `18-fork-undo-time-travel.md` | 분기/undo/redo/fork(checkpoint) | 되감기·fork 후보, 재합성 byte 동일 |
 | 19 | `19-retrieval-eval-and-tau-calibration.md` | 모티프 재사용 검색 품질: 라벨셋·τ 보정·recall/precision(오프라인) | τ 근거값 확정 + precision/recall 리포트 |
+| 20 | `20-review-followups.md` | 세션/finalize 후속 리뷰 반영 | set_material→finalize, dead-code/doc drift 정리 |
 
 세션 9–14는 상위 기능층(멀티컬러 모티프 라이브러리 & 프롬프트 생성)으로,
 설계 기준은 `docs/spec/motif-library-and-multicolor.md`다. **세션 15**의 기준은
-`docs/spec/photoreal-fabric-render.md`(파생출력, stateless 위에서 독립), **세션 16–18**은
+`docs/spec/photoreal-fabric-render.md`(파생출력, stateless 위에서 독립), **세션 16–20**은
 `docs/spec/conversational-design-sessions.md`(대화형 스튜디오, LangGraph)다. LangSmith 트레이싱(P3)과
 planner/critic 멀티에이전트는 스펙상 **선택·후보** — 별도 착수(문서 미생성). **세션 17의 Postgres 영속은
 client-only** — `design_sessions` + LangGraph 체크포인트 4개 테이블은 **모노레포가 정의**하고 이 레포는

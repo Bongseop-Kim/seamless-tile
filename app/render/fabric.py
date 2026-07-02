@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import colorsys
 import io
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageOps
@@ -89,13 +90,18 @@ class FabricError(ValueError):
     """Bad fabric request (unknown weave / colorway / slot). Route maps to 400."""
 
 
+@lru_cache(maxsize=32)
+def _load_texture_file(path: str) -> Image.Image:
+    return Image.open(path).convert("RGB")
+
+
 def _load_texture(weave: str) -> Image.Image:
     path = _ASSETS / f"{weave}.png"
     if not path.exists():
         raise FabricError(
             f"unknown weave: {weave!r}; choose one of {list(available_weaves())}"
         )
-    return Image.open(path).convert("RGB")
+    return _load_texture_file(str(path))
 
 
 def _tile_to(texture: Image.Image, size: tuple[int, int]) -> Image.Image:
@@ -147,7 +153,7 @@ def _segment(intent, palette, *, dpi: int, tile_mm: float):
     colors = _label_colors(len(slot_ids))
     label_cw = Colorway(
         id=_LABEL_COLORWAY_ID,
-        mapping={sid: rgb_to_hex(*rgb) for sid, rgb in zip(slot_ids, colors)},
+        mapping={sid: rgb_to_hex(*rgb) for sid, rgb in zip(slot_ids, colors, strict=True)},
     )
     label_palette = Palette(slots=palette.slots, colorways=palette.colorways + (label_cw,))
     label_svg = compose(intent, label_palette, _LABEL_COLORWAY_ID)
@@ -161,7 +167,7 @@ def _segment(intent, palette, *, dpi: int, tile_mm: float):
     flat += [0, 0, 0] * (256 - len(colors))
     pal_img.putpalette(flat)
     seg = seg_rgb.quantize(palette=pal_img, dither=Image.Dither.NONE)
-    return seg, {sid: i for i, sid in enumerate(slot_ids)}
+    return seg, dict(zip(slot_ids, range(len(slot_ids)), strict=True))
 
 
 def _mask_for(seg: Image.Image, index: int) -> Image.Image:
@@ -300,14 +306,24 @@ def render_fabric(
     design_png, _ = rasterize(design_svg, "png", dpi=dpi, width_mm=tile_mm)
     design = Image.open(io.BytesIO(design_png)).convert("RGB")
 
-    out = _apply_weave(design, weave, strength)  # uniform base / fallback for unmapped slots
+    woven_cache: dict[tuple[str, float], Image.Image] = {}
+
+    def woven(slot_weave: str) -> Image.Image:
+        key = (slot_weave, strength)
+        cached = woven_cache.get(key)
+        if cached is None:
+            cached = _apply_weave(design, slot_weave, strength)
+            woven_cache[key] = cached
+        return cached
+
+    out = woven(weave)  # uniform base / fallback for unmapped slots
     if material_map or apply_relief:
         seg, index_for = _segment(intent, palette, dpi=dpi, tile_mm=tile_mm)
         # Regions are disjoint (each pixel has one nearest label), so composite order is
         # irrelevant -> result is independent of material_map dict order (deterministic).
         for slot, slot_weave in (material_map or {}).items():
             mask = _mask_for(seg, index_for[slot])
-            out = Image.composite(_apply_weave(design, slot_weave, strength), out, mask)
+            out = Image.composite(woven(slot_weave), out, mask)
         if apply_relief:  # emboss slot boundaries on top of the woven surface
             out = _apply_relief(out, seg, weave, relief, dpi=dpi)
 

@@ -30,7 +30,7 @@
 - **motif 핀 = 기본값**: `fabric.py` — `{**motif_pins, **(material_map or {})}`로 반전.
   미지정 motif slot만 MOTIF_WEAVE, 명시 항목은 사용자 승리. docstring 갱신.
 - **데드코드 정리**: `SessionState.pending`(안 읽힘) / `ToolOutcome.recompose`(안 읽힘) /
-  `GenerateResponse.turn_id`(안 세팅됨) / `ASSETS_VERSION`(미참조) /
+  `GenerateResponse.turn_id`는 유지하고 세션 응답에서 실제 값 세팅 / `ASSETS_VERSION`(미참조) /
   `list_turn_checkpoints`의 중복 `not snap.interrupts` 필터 / `seamless_sessions` UPSERT의
   `updated_at = now()`(스키마 트리거와 중복) 삭제.
 - **eval 스크립트 축소**: `scripts/eval_motif_retrieval.py` — 죽은 clean-gap/midpoint 분기 삭제

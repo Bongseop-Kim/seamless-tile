@@ -14,6 +14,7 @@ stateless route uses), so there is no injection plumbing and test resets apply u
 from __future__ import annotations
 
 import copy
+import threading
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
@@ -29,6 +30,7 @@ from app.core.config import get_settings
 from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidate_set
 from app.motifs.store import get_default_store
 from app.sessions.checkpointer import checkpointer_from_settings, close_checkpointer
+from app.sessions.budget import session_critical
 from app.sessions.state import SessionState, new_budget
 from app.sessions.store import upsert_session_row
 from app.sessions.tools import apply_tools
@@ -78,6 +80,17 @@ def _classify(state: SessionState) -> str:
     return "edit" if state.get("current_intent") else "author"
 
 
+def _candidate_lists(specs: list[dict]) -> list[list[dict]]:
+    store = get_default_store()
+    emb = get_default_embedding_client()
+    return [
+        []
+        if spec.get("force_new")
+        else present_candidates(spec, store=store, embedding_client=emb)
+        for spec in specs
+    ]
+
+
 def author_intent(state: SessionState) -> dict:
     adapted = build_intents(
         state["prompt"], images=state.get("images"), use_cache=False
@@ -111,6 +124,7 @@ def author_intent(state: SessionState) -> dict:
     return {
         "working_intent": intent,
         "pending_specs": gated,
+        "pending_candidates": _candidate_lists(gated),
         "seed": seed,
         "warnings": warnings,
         "material_map": state.get("material_map") or {},
@@ -136,9 +150,11 @@ def edit_intent(state: SessionState) -> dict:
         )
     tool_calls = resolve_edit_client().propose(summarize_intent(current), instruction)
     outcome = apply_tools(current, tool_calls)
+    pending_specs = list(outcome.motif_specs)
     updates: dict = {
         "working_intent": outcome.intent,
-        "pending_specs": list(outcome.motif_specs),
+        "pending_specs": pending_specs,
+        "pending_candidates": _candidate_lists(pending_specs),
         "warnings": list(outcome.warnings),
         "validate_errors": [],
         "edit_retried": bool(errors),  # this pass IS the retry when errors were fed in
@@ -164,11 +180,8 @@ def resolve_gate(state: SessionState) -> dict:
         return {}
     spec = specs[0]
     emb = get_default_embedding_client()
-    candidates = (
-        []
-        if spec.get("force_new")
-        else present_candidates(spec, store=get_default_store(), embedding_client=emb)
-    )
+    candidate_lists = state.get("pending_candidates") or []
+    candidates = candidate_lists[0] if candidate_lists else []
     # Pause the turn (checkpoint). The route surfaces this payload as `pending`; the
     # select-motif / confirm endpoints resume with {action, motif_id?}. `budget` is a cost
     # hint only (S13) -- spend is always shown before the user confirms "generate".
@@ -205,7 +218,12 @@ def resolve_gate(state: SessionState) -> dict:
     else:
         raise AdapterClientError(f"unknown gate action {action!r}")
     _freeze_motif(intent, spec["layer_id"], motif_id)
-    return {"working_intent": intent, "pending_specs": specs[1:], "budget": budget}
+    return {
+        "working_intent": intent,
+        "pending_specs": specs[1:],
+        "pending_candidates": candidate_lists[1:],
+        "budget": budget,
+    }
 
 
 def _gate_more(state: SessionState) -> str:
@@ -289,6 +307,7 @@ def commit(state: SessionState) -> dict:
 
 
 _GRAPH = None
+_GRAPH_LOCK = threading.Lock()
 
 
 def _build_graph():
@@ -318,15 +337,18 @@ def _build_graph():
 def _graph():
     global _GRAPH
     if _GRAPH is None:
-        _GRAPH = _build_graph()
+        with _GRAPH_LOCK:
+            if _GRAPH is None:
+                _GRAPH = _build_graph()
     return _GRAPH
 
 
 def reset_sessions() -> None:
     """Drop the session graph + its checkpointer (test isolation / ops)."""
     global _GRAPH
-    _GRAPH = None
-    close_checkpointer()
+    with _GRAPH_LOCK:
+        _GRAPH = None
+        close_checkpointer()
 
 
 # --- entrypoints --------------------------------------------------------------
@@ -386,6 +408,11 @@ def pending_of(result: dict) -> dict | None:
     if not interrupts:
         return None
     return interrupts[0].value
+
+
+def turn_id_of(values: dict) -> str | None:
+    turns = values.get("turns") or []
+    return str(len(turns)) if turns else None
 
 
 def get_state(session_id: str, checkpoint_id: str | None = None) -> dict:
@@ -461,6 +488,7 @@ def pending_payload(session_id: str) -> dict | None:
 def increment_budget(session_id: str, key: str) -> None:
     """Bump a budget counter outside the graph (e.g. ``finalize_used``): finalize runs via
     its own route, not a graph node, so it must record its spend explicitly."""
-    budget = dict(get_state(session_id).get("budget") or new_budget())
-    budget[key] = budget.get(key, 0) + 1
-    _graph().update_state(_cfg(session_id), {"budget": budget})
+    with session_critical(session_id):
+        budget = dict(get_state(session_id).get("budget") or new_budget())
+        budget[key] = budget.get(key, 0) + 1
+        _graph().update_state(_cfg(session_id), {"budget": budget})

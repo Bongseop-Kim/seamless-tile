@@ -270,6 +270,25 @@ def _flatten_unsuitable(raw_svg: str) -> str:
     return ET.tostring(root, encoding="unicode")
 
 
+def _gate_motif_svg(
+    raw_svg: str,
+    *,
+    max_color_slots: int,
+    max_aspect_ratio: float | None = None,
+    edge_seam_tol: float | None = None,
+    render_check: bool | None = None,
+):
+    flat = _flatten_unsuitable(raw_svg)
+    kwargs = {"max_color_slots": max_color_slots}
+    if max_aspect_ratio is not None:
+        kwargs["max_aspect_ratio"] = max_aspect_ratio
+    if edge_seam_tol is not None:
+        kwargs["edge_seam_tol"] = edge_seam_tol
+    if render_check is not None:
+        kwargs["render_check"] = render_check
+    return flat, normalize_motif_svg(flat, **kwargs)
+
+
 def _first_stop_color(gradient: ET.Element) -> str:
     """The first ``<stop>``'s color as a representative solid (deterministic), or black."""
     for child in gradient.iter():
@@ -456,8 +475,8 @@ def generate_via_recraft(
         except Exception as exc:  # any generator failure is upstream (502-class)
             raise RecraftError(f"Recraft generation failed: {exc}") from exc
         try:
-            motif = normalize_motif_svg(
-                _flatten_unsuitable(raw),
+            _flat, motif = _gate_motif_svg(
+                raw,
                 max_color_slots=settings.recraft_max_color_slots,
                 max_aspect_ratio=settings.motif_max_aspect_ratio,
                 edge_seam_tol=settings.motif_edge_seam_tol,
@@ -537,8 +556,8 @@ def vectorize_via_recraft(
 
     settings = get_settings()
     try:
-        motif = normalize_motif_svg(
-            _flatten_unsuitable(raw),
+        _flat, motif = _gate_motif_svg(
+            raw,
             max_color_slots=settings.recraft_max_color_slots,
             max_aspect_ratio=settings.motif_max_aspect_ratio,
             edge_seam_tol=settings.motif_edge_seam_tol,

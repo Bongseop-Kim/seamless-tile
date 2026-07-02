@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.engine.palette import _hex_to_rgb as palette_hex_to_rgb, is_hex_color
+from app.engine.palette import hex_to_rgb as palette_hex_to_rgb, is_hex_color
 from app.engine.units import fmt
 from app.motifs import facets
 from app.motifs import geometry as geom

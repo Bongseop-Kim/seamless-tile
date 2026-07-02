@@ -42,8 +42,9 @@ in-memory 경로만 허용(선택이 아니라 순서 제약). 이 레포는 `SU
   - **client 전용**: 앱은 DDL 실행 안 함. `setup()` 미호출 — 테이블은 모노레포가 선정의(부트스트랩 ⚠ 참고).
   - `SUPABASE_DB_URL`은 서버 사이드 전용·RLS 우회 — 클라이언트 노출 금지.
 - **복원 API**: `GET /api/v1/sessions/{id}` — 대화 이력 + `current_intent`(노출 정책 §16) + 후보 이력 복원.
-- **결정론 비용 가드(S13)**: `budget`(recraft_used/repaint_used…) 카운터를 세션 상태에 두고,
-  - 세션당 Recraft 생성·실사화 횟수 **상한**(초과 시 확인에도 거부/경고 — resource-ceiling 정신).
+- **결정론 비용 가드(S13)**: `budget`의 Recraft 사용 카운터(`recraft_used`)를 세션 상태에 두고,
+  - 세션당 Recraft 생성 횟수 **상한**(초과 시 확인에도 거부/경고 — resource-ceiling 정신).
+  - finalize/repaint는 무료·로컬 결정 경로라 비용 상한 대상이 아니며, 필요 시 별도 사용 지표로만 추적.
   - **in-flight lock**: 같은 motif spec/승인 타일이 생성 중이면 중복 호출 금지(dedup).
   - **비용/시간 힌트**를 확인 UI에 노출(지출은 항상 사용자가 본 뒤 누른다).
 

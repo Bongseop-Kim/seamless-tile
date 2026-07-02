@@ -267,7 +267,9 @@ def build_intent(
     slots = extract_palette(data, num_colors=num_colors)
     # ponytail: motif inference (VLM) / vectorization seams removed until a real
     # client exists — the image path is palette-only, source_fidelity always "vector".
-    warnings: list[str] = ["motif inference unavailable/ignored; using palette only"]
+    warnings: list[str] = [
+        "image input is palette-only by design; motif inference/vectorization is not attempted"
+    ]
     source_fidelity = "vector"
 
     tile_mm = float((canvas or {}).get("tile_mm", DEFAULT_TILE_MM))

@@ -298,6 +298,8 @@ def _run_embed(labelset: dict, cache: dict) -> dict:
             "no embedding client configured (OPENAI_API_KEY unset) -- cannot run --embed"
         )
         sys.exit(2)
+    if cache.get("model") != settings.embedding_model:
+        cache["vectors"] = {}
     to_embed = missing_texts(labelset, cache)
     if not to_embed:
         print("embeddings.json already covers every corpus/query text; nothing to do")
@@ -346,7 +348,7 @@ def main(argv: list[str] | None = None) -> None:
     scored = score_queries(labelset, cache["vectors"])
     sweep(scored)
     print()
-    tau, explanation = recommend(scored)
+    _, explanation = recommend(scored)
     print(explanation)
 
 

@@ -87,7 +87,9 @@ def test_session_survives_checkpointer_rebuild(fake_preview, monkeypatch):
     )
     assert resp2.status_code == 200
     after = _committed_intent(sid)
-    stripe_angle = next(l for l in after["layers"] if l["type"] == "stripe")["params"]["angle"]
+    stripe_angle = next(layer for layer in after["layers"] if layer["type"] == "stripe")[
+        "params"
+    ]["angle"]
     assert stripe_angle == 45  # the edit applied against the RESTORED intent, not a blank one
 
 

@@ -16,6 +16,7 @@ returning an approximate top-1 instead of the exact nearest neighbor.
 """
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,7 @@ from scripts.eval_motif_retrieval import (
     metrics,
     missing_texts,
     predict,
+    _run_embed,
     score_queries,
 )
 
@@ -45,6 +47,34 @@ def test_fixture_embeddings_complete():
     assert missing_texts(labelset, cache) == []
     assert {len(v) for v in cache["vectors"].values()} == {1536}
     assert cache["model"] == Settings(_env_file=None).embedding_model
+
+
+def test_run_embed_rebuilds_when_model_changes(monkeypatch, tmp_path):
+    import scripts.eval_motif_retrieval as eval_mod
+
+    labelset = {
+        "corpus": [{"id": "corpus-bee", "subject": "bee", "scope": "whole"}],
+        "queries": [{"name": "cat", "spec": {"subject": "cat", "scope": "whole"}}],
+    }
+    old_vectors = {
+        _descriptor_text(labelset["corpus"][0]): [0.0],
+        _descriptor_text(labelset["queries"][0]["spec"]): [0.0],
+    }
+
+    class _FakeClient:
+        def embed(self, text: str) -> list[float]:
+            return [float(len(text))]
+
+    monkeypatch.setattr(eval_mod, "FIXTURE_DIR", tmp_path)
+    monkeypatch.setattr(eval_mod, "get_settings", lambda: SimpleNamespace(embedding_model="new-model"))
+    monkeypatch.setattr(eval_mod, "client_from_settings", lambda settings: _FakeClient())
+
+    cache = _run_embed(labelset, {"model": "old-model", "vectors": old_vectors})
+
+    assert cache["model"] == "new-model"
+    assert set(cache["vectors"]) == set(old_vectors)
+    assert all(vec != [0.0] for vec in cache["vectors"].values())
+    assert (tmp_path / "embeddings.json").exists()
 
 
 def test_default_tau_meets_baseline():
@@ -102,7 +132,7 @@ def _py_cosine(a: list[float], b: list[float]) -> float:
     nb = math.sqrt(sum(x * x for x in b))
     if na == 0.0 or nb == 0.0:
         return 0.0
-    return sum(x * y for x, y in zip(a, b)) / (na * nb)
+    return sum(x * y for x, y in zip(a, b, strict=True)) / (na * nb)
 
 
 @pytest.mark.live_db

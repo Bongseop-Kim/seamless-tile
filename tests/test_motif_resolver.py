@@ -13,8 +13,9 @@ import app.adapters.llm as llm_adapter
 import app.adapters.motif_resolver as motif_resolver
 import app.adapters.recraft as recraft_adapter
 from app.adapters.base import AdapterClientError, AdapterResult
+from app.adapters.embedding import EmbeddingError
 from app.adapters.llm import build_intents, set_default_client
-from app.adapters.motif_resolver import resolve_motifs
+from app.adapters.motif_resolver import present_candidates, resolve_motifs
 import app.api.routes.generate as gen_route
 from app.main import app
 from app.motifs import store as store_mod
@@ -393,6 +394,29 @@ def test_resolver_embedding_call_failure_propagates(monkeypatch):
             _layer_intent(), [_spec(view="front")],
             store=_FakeStore(rec), embedding_client=_BoomEmbed(),
         )
+
+
+def test_present_candidates_embedding_failure_falls_back_to_pool_order():
+    class _BoomEmbed:
+        model = "m"
+
+        def embed(self, text):
+            raise EmbeddingError("embed upstream down")
+
+    store = _FakeStore(
+        _record("motif-a", "bee", "whole"),
+        _record("motif-b", "ant", "whole"),
+    )
+    out = present_candidates(
+        {"subject": "cat", "scope": "whole"},
+        store=store,
+        embedding_client=_BoomEmbed(),
+        k=2,
+    )
+    assert out == [
+        {"motif_id": "motif-a", "similarity": None},
+        {"motif_id": "motif-b", "similarity": None},
+    ]
 
 
 def test_resolver_dimension_mismatch_excluded_falls_back(monkeypatch):

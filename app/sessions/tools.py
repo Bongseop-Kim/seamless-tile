@@ -22,6 +22,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from pydantic import ValidationError
+
 from app.engine.intent import Intent
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -122,7 +124,11 @@ def _set_palette_slot(intent: Intent, args: dict) -> Intent:
 
 def _scale_motif(intent: Intent, args: dict) -> Intent:
     layer_id = _require(args, "layer_id")
-    factor = float(_require(args, "factor"))
+    raw_factor = _require(args, "factor")
+    try:
+        factor = float(raw_factor)
+    except (TypeError, ValueError):
+        raise ToolArgError(f"factor must be a number, got {raw_factor!r}") from None
     if factor <= 0:
         raise ToolArgError(f"factor must be positive, got {factor}")
     idx = _layer_index(intent, layer_id, want_type="motif")
@@ -140,9 +146,17 @@ def _set_stripe(intent: Intent, args: dict) -> Intent:
     layer = intent.layers[idx]
     update: dict = {}
     if args.get("angle") is not None:
-        update["angle"] = float(args["angle"])
+        try:
+            update["angle"] = float(args["angle"])
+        except (TypeError, ValueError):
+            raise ToolArgError(f"angle must be a number, got {args['angle']!r}") from None
     if args.get("period_mm") is not None:
-        period = float(args["period_mm"])
+        try:
+            period = float(args["period_mm"])
+        except (TypeError, ValueError):
+            raise ToolArgError(
+                f"period_mm must be a number, got {args['period_mm']!r}"
+            ) from None
         if period <= 0:
             raise ToolArgError(f"period_mm must be positive, got {period}")
         update["period_mm"] = period
@@ -161,7 +175,10 @@ def _set_density(intent: Intent, args: dict) -> Intent:
         # ponytail: P0 supports spacing_mm only (the common path_following/scatter knob);
         # count->spacing conversion needs the lane closure — add when a test needs it.
         raise ToolArgError("set_density requires spacing_mm (count is not supported yet)")
-    spacing = float(spacing)
+    try:
+        spacing = float(spacing)
+    except (TypeError, ValueError):
+        raise ToolArgError(f"spacing_mm must be a number, got {spacing!r}") from None
     if spacing <= 0:
         raise ToolArgError(f"spacing_mm must be positive, got {spacing}")
     idx = _layer_index(intent, layer_id, want_type="motif")
@@ -215,7 +232,10 @@ def _add_layer(intent: Intent, args: dict) -> tuple[Intent, dict | None]:
     # new layer's shape now (a malformed layer raises here, not deep in compose).
     raw = intent.model_dump(mode="json")
     raw["layers"].append(spec)
-    new_intent = Intent.model_validate(raw)
+    try:
+        new_intent = Intent.model_validate(raw)
+    except ValidationError as exc:
+        raise ToolArgError(f"add_layer.layer is invalid: {exc.errors()[0]['msg']}") from None
     return new_intent, motif_spec
 
 

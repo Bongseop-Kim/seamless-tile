@@ -118,14 +118,7 @@ async def _session_generate(request: GenerateRequest) -> GenerateResponse:
         with session_inflight(request.session_id):
             result = await asyncio.to_thread(
                 _run_adapter,
-                lambda: sg.run_turn(
-                    request.session_id,
-                    prompt=request.prompt or "",
-                    seed=request.seed,
-                    colorway=request.colorway,
-                    candidate_count=request.candidate_count,
-                    from_checkpoint=request.from_checkpoint,
-                ),
+                lambda: _run_session_turn(request, sg),
             )
             return await respond_session_turn(request.session_id, result)
     except SessionBusy:
@@ -133,6 +126,23 @@ async def _session_generate(request: GenerateRequest) -> GenerateResponse:
             status_code=409,
             detail=[f"session {request.session_id!r} already has an operation in flight"],
         ) from None
+
+
+def _run_session_turn(request: GenerateRequest, sg) -> dict:
+    images: list[bytes] | None = None
+    if request.images:
+        images = [image_decode_and_clean(s) for s in request.images]
+    elif request.reference_image is not None:
+        images = [image_decode_and_clean(request.reference_image)]
+    return sg.run_turn(
+        request.session_id,
+        prompt=request.prompt or "",
+        images=images,
+        seed=request.seed,
+        colorway=request.colorway,
+        candidate_count=request.candidate_count,
+        from_checkpoint=request.from_checkpoint,
+    )
 
 
 async def respond_session_turn(session_id: str, result: dict) -> GenerateResponse:
@@ -143,11 +153,13 @@ async def respond_session_turn(session_id: str, result: dict) -> GenerateRespons
 
     request_id = get_request_id()
     warnings = list(result.get("warnings") or [])
+    turn_id = sg.turn_id_of(result) or sg.turn_id_of(sg.get_state(session_id))
     pending = sg.pending_of(result)
     if pending is not None:
         return GenerateResponse(
             request_id=request_id,
             session_id=session_id,
+            turn_id=turn_id,
             candidates=[],
             warnings=warnings,
             pending=pending,
@@ -169,6 +181,7 @@ async def respond_session_turn(session_id: str, result: dict) -> GenerateRespons
     return GenerateResponse(
         request_id=request_id,
         session_id=session_id,
+        turn_id=turn_id,
         candidates=[
             CandidateResponse(id=b["id"], png_url=url)
             for b, url in zip(batch, png_urls, strict=True)

@@ -108,7 +108,76 @@ def _committed_intent(session_id: str) -> dict:
 
 
 def _stripe_angle(intent: dict) -> float:
-    return next(l for l in intent["layers"] if l["type"] == "stripe")["params"]["angle"]
+    return next(layer for layer in intent["layers"] if layer["type"] == "stripe")[
+        "params"
+    ]["angle"]
+
+
+class _CandidateStore:
+    def __init__(self, *records) -> None:
+        self.rows = {r.id: r for r in records}
+
+    def upsert(self, record) -> None:
+        self.rows.setdefault(record.id, record)
+
+    def get(self, motif_id: str):
+        return self.rows.get(motif_id)
+
+    def all(self):
+        return sorted(self.rows.values(), key=lambda r: r.id)
+
+    def all_ids(self):
+        return sorted(self.rows)
+
+    def find_facets_meta(self, scope):
+        from app.motifs.store import MotifMeta
+
+        return [
+            MotifMeta(
+                id=r.id,
+                variant_group=r.variant_group,
+                subject=r.subject,
+                scope=r.scope,
+                view=r.view,
+                expression=r.expression,
+                style=r.style,
+                description=r.description,
+            )
+            for r in self.all()
+            if r.scope == scope
+        ]
+
+    def find_best_by_embedding(self, scope, query_vec):
+        return None
+
+    def find_by_variant_group(self, variant_group):
+        return [
+            r for r in self.all() if r.variant_group == variant_group
+        ]
+
+    def delete(self, motif_id):
+        self.rows.pop(motif_id, None)
+
+
+def _offer_motif(motif_id: str, *, subject: str, scope: str) -> None:
+    from app.motifs.registry import get_motif
+    from app.motifs.store import MotifRecord, set_default_store
+
+    motif = get_motif(motif_id)
+    set_default_store(
+        _CandidateStore(
+            MotifRecord(
+                id=motif.id,
+                symbol=motif.symbol,
+                bbox_mm=motif.bbox_mm,
+                anchor=motif.anchor,
+                subject=subject,
+                scope=scope,
+                source="builtin",
+                color_slots=list(motif.color_slots),
+            )
+        )
+    )
 
 
 # --- acceptance #6: stateless compatibility -----------------------------------
@@ -192,6 +261,34 @@ def test_bad_hex_is_rejected():
     assert any("#RRGGBB" in w for w in out.warnings)
 
 
+def test_tool_parse_errors_are_skipped_with_warnings():
+    from app.sessions.tools import apply_tools
+
+    motif_out = apply_tools(
+        BASE_MOTIF,
+        [
+            {"name": "scale_motif", "args": {"layer_id": "dots", "factor": "big"}},
+            {"name": "set_density", "args": {"layer_id": "dots", "spacing_mm": "dense"}},
+        ],
+    )
+    stripe_out = apply_tools(
+        BASE_STRIPE,
+        [
+            {"name": "set_stripe", "args": {"layer_id": "stripe_base", "angle": "steep"}},
+            {"name": "set_stripe", "args": {"layer_id": "stripe_base", "period_mm": "wide"}},
+            {"name": "add_layer", "args": {"layer": {"id": "bad", "type": "mystery"}}},
+        ],
+    )
+    assert motif_out.intent == apply_tools(BASE_MOTIF, []).intent
+    assert stripe_out.intent == apply_tools(BASE_STRIPE, []).intent
+    warnings = motif_out.warnings + stripe_out.warnings
+    assert any("factor must be a number" in w for w in warnings)
+    assert any("spacing_mm must be a number" in w for w in warnings)
+    assert any("angle must be a number" in w for w in warnings)
+    assert any("period_mm must be a number" in w for w in warnings)
+    assert any("add_layer.layer is invalid" in w for w in warnings)
+
+
 # --- acceptance #4: apply_tools determinism -----------------------------------
 
 
@@ -237,6 +334,7 @@ def test_reuse_candidate_presentation_is_free(fake_preview):
     body = resp.json()
     assert body["pending"] is not None
     assert body["pending"]["type"] == "motif_candidates"
+    assert body["turn_id"]
     assert rec.calls == []  # presenting reuse candidates never calls Recraft
 
 
@@ -272,6 +370,7 @@ def test_select_existing_motif_is_free_and_commits(fake_preview):
     from app.adapters.recraft import set_default_recraft_client
 
     set_default_recraft_client(rec)
+    _offer_motif("bee", subject="bee", scope="whole")
     _set_author(BASE_MOTIF)
     _set_edit(
         [{"name": "swap_motif", "args": {"layer_id": "dots", "description": "a bee", "subject": "bee", "scope": "whole"}}]
@@ -284,9 +383,15 @@ def test_select_existing_motif_is_free_and_commits(fake_preview):
         f"/api/v1/sessions/{sid}/select-motif", json={"layer_id": "dots", "motif_id": "bee"}
     )
     assert resp.status_code == 200, resp.text
+    assert resp.json()["turn_id"]
     assert rec.calls == []
     intent = _committed_intent(sid)
-    assert next(l for l in intent["layers"] if l["id"] == "dots")["params"]["motif_id"] == "bee"
+    assert (
+        next(layer for layer in intent["layers"] if layer["id"] == "dots")["params"][
+            "motif_id"
+        ]
+        == "bee"
+    )
 
 
 # --- acceptance #3c: finalize gate --------------------------------------------
@@ -419,6 +524,7 @@ class _FlakyRecraft:
 def test_add_layer_motif_freezes_a_valid_palette_color(fake_preview):
     # Regression: _freeze_motif must replace add_layer's "s0" placeholder color with a real
     # palette slot, else the frozen intent 422s after the gate.
+    _offer_motif("bee", subject="bee", scope="whole")
     _set_author(BASE_MOTIF)
     _set_edit(
         [
@@ -444,10 +550,83 @@ def test_add_layer_motif_freezes_a_valid_palette_color(fake_preview):
     )
     assert resp.status_code == 200, resp.text
     intent = _committed_intent(sid)
-    extra = next(l for l in intent["layers"] if l["id"] == "extra")
+    extra = next(layer for layer in intent["layers"] if layer["id"] == "extra")
     assert extra["params"]["motif_id"] == "bee"
     slot_ids = {s["id"] for s in intent["palette"]["slots"]}
     assert extra["params"]["color"] in slot_ids  # a real palette slot, not "s0"
+
+
+def test_select_motif_rejects_wrong_layer_without_consuming_gate(fake_preview):
+    _set_author(BASE_MOTIF)
+    _set_edit(
+        [{"name": "swap_motif", "args": {"layer_id": "dots", "description": "a bee", "subject": "bee", "scope": "whole"}}]
+    )
+    sid = "gate-wrong-layer"
+    client.post("/api/v1/generate", json={"session_id": sid, "prompt": "dots"})
+    client.post("/api/v1/generate", json={"session_id": sid, "prompt": "use a bee"})
+    bad = client.post(
+        f"/api/v1/sessions/{sid}/select-motif",
+        json={"layer_id": "other", "motif_id": "bee"},
+    )
+    assert bad.status_code == 409
+
+    from app.sessions.graph import awaiting_gate
+
+    assert awaiting_gate(sid) is True
+
+
+def test_select_motif_rejects_existing_motif_not_in_active_candidates(fake_preview):
+    _set_author(BASE_MOTIF)
+    _set_edit(
+        [
+            {
+                "name": "swap_motif",
+                "args": {
+                    "layer_id": "dots",
+                    "description": "a new thing",
+                    "subject": "new thing",
+                    "scope": "whole",
+                    "force_new": True,
+                },
+            }
+        ]
+    )
+    sid = "gate-not-offered"
+    client.post("/api/v1/generate", json={"session_id": sid, "prompt": "dots"})
+    client.post("/api/v1/generate", json={"session_id": sid, "prompt": "use a new thing"})
+    bad = client.post(
+        f"/api/v1/sessions/{sid}/select-motif",
+        json={"layer_id": "dots", "motif_id": "bee"},
+    )
+    assert bad.status_code == 400
+
+
+def test_gate_candidates_are_not_recomputed_on_resume(fake_preview, monkeypatch):
+    import app.sessions.graph as sg
+
+    calls = {"n": 0}
+
+    def fake_present(*args, **kwargs):
+        calls["n"] += 1
+        return [{"motif_id": "bee", "similarity": None}]
+
+    monkeypatch.setattr(sg, "present_candidates", fake_present)
+    _set_author(BASE_MOTIF)
+    _set_edit(
+        [{"name": "swap_motif", "args": {"layer_id": "dots", "description": "a bee", "subject": "bee", "scope": "whole"}}]
+    )
+    sid = "gate-cached-candidates"
+    client.post("/api/v1/generate", json={"session_id": sid, "prompt": "dots"})
+    pending = client.post("/api/v1/generate", json={"session_id": sid, "prompt": "use a bee"})
+    assert pending.status_code == 200, pending.text
+    assert calls["n"] == 1
+
+    selected = client.post(
+        f"/api/v1/sessions/{sid}/select-motif",
+        json={"layer_id": "dots", "motif_id": "bee"},
+    )
+    assert selected.status_code == 200, selected.text
+    assert calls["n"] == 1
 
 
 def test_text_motif_is_resolved_free_not_gated(fake_preview):
@@ -487,6 +666,7 @@ def test_select_unknown_motif_is_404_and_recoverable(fake_preview):
     from app.adapters.recraft import set_default_recraft_client
 
     set_default_recraft_client(rec)
+    _offer_motif("bee", subject="bee", scope="whole")
     _set_author(BASE_MOTIF)
     _set_edit(
         [{"name": "swap_motif", "args": {"layer_id": "dots", "description": "a bee", "subject": "bee", "scope": "whole"}}]
@@ -568,7 +748,12 @@ def test_edit_validation_failure_is_retried_once_then_succeeds(fake_preview):
     resp = client.post("/api/v1/generate", json={"session_id": sid, "prompt": "much bigger dots"})
     assert resp.status_code == 200, resp.text
     intent = _committed_intent(sid)
-    assert next(l for l in intent["layers"] if l["id"] == "dots")["params"]["size_mm"] == 2
+    assert (
+        next(layer for layer in intent["layers"] if layer["id"] == "dots")["params"][
+            "size_mm"
+        ]
+        == 2
+    )
     assert _edit_client_calls() == 2  # proposed once, re-prompted once
 
 
@@ -582,4 +767,11 @@ def test_edit_validation_failure_after_retry_returns_422(fake_preview):
     assert "exceeds tile_mm" in str(resp.json()["detail"])
     assert _edit_client_calls() == 2  # initial + exactly one retry, then 422
     # the session is not wedged: current_intent is still the committed turn-1 intent
-    assert next(l for l in _committed_intent(sid)["layers"] if l["id"] == "dots")["params"]["size_mm"] == 4
+    assert (
+        next(
+            layer
+            for layer in _committed_intent(sid)["layers"]
+            if layer["id"] == "dots"
+        )["params"]["size_mm"]
+        == 4
+    )

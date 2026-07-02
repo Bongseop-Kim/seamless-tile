@@ -373,8 +373,16 @@ def test_single_color_motif_composes_via_color():
 
 
 def _close(image: Image.Image, rgb: tuple[int, int, int], tol: int = 28) -> int:
+    data = (
+        list(image.get_flattened_data())
+        if hasattr(image, "get_flattened_data")
+        else list(image.getdata())
+    )
+    if data and isinstance(data[0], int):
+        bands = len(image.getbands())
+        data = [tuple(data[i : i + bands]) for i in range(0, len(data), bands)]
     count = 0
-    for pixel in image.getdata():
+    for pixel in data:
         if all(abs(int(pixel[i]) - rgb[i]) <= tol for i in range(3)):
             count += 1
     return count

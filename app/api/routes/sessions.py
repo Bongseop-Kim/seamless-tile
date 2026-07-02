@@ -183,19 +183,35 @@ async def list_checkpoints(session_id: str) -> CheckpointListResponse:
 async def select_motif(
     session_id: str, request: Annotated[SelectMotifRequest, Body()]
 ) -> GenerateResponse:
-    _require_gate(session_id)
-    # Validate the motif exists BEFORE resuming: LangGraph caches the resume value against
-    # the interrupt, so resuming with a bad id would consume the gate and wedge the turn
-    # (and a bad client id is a 4xx, not the 502 that a downstream compose failure yields).
-    from app.motifs.registry import get_motif
-
-    try:
-        get_motif(request.motif_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=404, detail=[f"unknown motif_id {request.motif_id!r}"]
-        ) from None
     with _dedup(session_id):
+        _require_gate(session_id)
+        pending = sg.pending_payload(session_id)
+        if pending is None:
+            raise HTTPException(
+                status_code=409,
+                detail=[f"session {session_id!r} is not awaiting a motif decision"],
+            )
+        if request.layer_id != pending.get("layer_id"):
+            raise HTTPException(
+                status_code=409,
+                detail=[f"session {session_id!r} is awaiting layer {pending.get('layer_id')!r}"],
+            )
+        # Validate the motif exists BEFORE resuming: LangGraph caches the resume value
+        # against the interrupt, so a bad id would consume the gate and wedge the turn.
+        from app.motifs.registry import get_motif
+
+        try:
+            get_motif(request.motif_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail=[f"unknown motif_id {request.motif_id!r}"]
+            ) from None
+        offered = {c.get("motif_id") for c in pending.get("candidates") or []}
+        if request.motif_id not in offered:
+            raise HTTPException(
+                status_code=400,
+                detail=[f"motif_id {request.motif_id!r} is not an active candidate"],
+            )
         result = _run_adapter(
             lambda: sg.resume_turn(
                 session_id, {"action": "select", "motif_id": request.motif_id}
@@ -211,9 +227,9 @@ async def select_motif(
 )
 async def confirm(session_id: str, request: Annotated[ConfirmRequest, Body()]):
     if request.action == "generate_motif":
-        _require_gate(session_id)
-        _require_budget(session_id, "recraft")
         with _dedup(session_id):
+            _require_gate(session_id)
+            _require_budget(session_id, "recraft")
             result = _run_adapter(
                 lambda: sg.resume_turn(session_id, {"action": "generate"})
             )
@@ -222,48 +238,48 @@ async def confirm(session_id: str, request: Annotated[ConfirmRequest, Body()]):
     # finalize: hand the chosen committed candidate to the (free, local) fabric render.
     # Reject while an edit turn is paused at the gate — current_candidates would still be
     # the PREVIOUS turn's, so finalizing now would render a stale candidate.
-    if sg.awaiting_gate(session_id):
-        raise HTTPException(
-            status_code=409,
-            detail=[f"session {session_id!r} has a pending motif decision; resolve it first"],
-        )
-    _require_budget(session_id, "finalize")
-    state = sg.get_state(session_id)
-    candidates = state.get("current_candidates") or []
-    if not candidates:
-        raise HTTPException(
-            status_code=404, detail=[f"session {session_id!r} has no committed candidate"]
-        )
-    chosen = candidates[0]
-    if request.candidate_id is not None:
-        chosen = next(
-            (c for c in candidates if c.get("id") == request.candidate_id), None
-        )
-        if chosen is None:
-            raise HTTPException(
-                status_code=404, detail=[f"unknown candidate {request.candidate_id!r}"]
-            )
-    # Conversational set_material flows into the fabric render here; an explicit
-    # material_map on the finalize request wins per slot.
-    material_map = {
-        **_session_weave_map(state, chosen["intent"]),
-        **(request.material_map or {}),
-    }
-    fin = FinalizeRequest(
-        intent=chosen["intent"],
-        colorway_id=request.colorway_id or chosen.get("colorway_id"),
-        material_map=material_map or None,
-        **({"weave": request.weave} if request.weave else {}),
-    )
     with _dedup(session_id):
+        if sg.awaiting_gate(session_id):
+            raise HTTPException(
+                status_code=409,
+                detail=[f"session {session_id!r} has a pending motif decision; resolve it first"],
+            )
+        _require_budget(session_id, "finalize")
+        state = sg.get_state(session_id)
+        candidates = state.get("current_candidates") or []
+        if not candidates:
+            raise HTTPException(
+                status_code=404, detail=[f"session {session_id!r} has no committed candidate"]
+            )
+        chosen = candidates[0]
+        if request.candidate_id is not None:
+            chosen = next(
+                (c for c in candidates if c.get("id") == request.candidate_id), None
+            )
+            if chosen is None:
+                raise HTTPException(
+                    status_code=404, detail=[f"unknown candidate {request.candidate_id!r}"]
+                )
+        # Conversational set_material flows into the fabric render here; an explicit
+        # material_map on the finalize request wins per slot.
+        material_map = {
+            **_session_weave_map(state, chosen["intent"]),
+            **(request.material_map or {}),
+        }
+        fin = FinalizeRequest(
+            intent=chosen["intent"],
+            colorway_id=request.colorway_id or chosen.get("colorway_id"),
+            material_map=material_map or None,
+            **({"weave": request.weave} if request.weave else {}),
+        )
         resp = await finalize_candidate(fin)
-    sg.increment_budget(session_id, "finalize_used")
-    upsert_session_row(
-        thread_id=session_id,
-        status="finalized",
-        seed=state.get("seed"),
-        colorway=chosen.get("colorway_id") or state.get("colorway"),
-        registry_version=state.get("registry_version"),
-        current_intent=state.get("current_intent"),
-    )
-    return resp
+        sg.increment_budget(session_id, "finalize_used")
+        upsert_session_row(
+            thread_id=session_id,
+            status="finalized",
+            seed=state.get("seed"),
+            colorway=chosen.get("colorway_id") or state.get("colorway"),
+            registry_version=state.get("registry_version"),
+            current_intent=state.get("current_intent"),
+        )
+        return resp

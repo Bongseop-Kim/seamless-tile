@@ -32,6 +32,7 @@ class SessionState(TypedDict, total=False):
     # --- gate / in-flight (§8) ---
     working_intent: dict | None  # in-progress intent before commit
     pending_specs: list[dict]  # motif specs still awaiting the resolve gate
+    pending_candidates: list[list[dict]]  # candidates precomputed for pending_specs
     validate_errors: list[str]  # carried out to a 422 when the (retried) edit won't validate
     edit_retried: bool  # guards the single validation-failure re-prompt (§6.3)
 

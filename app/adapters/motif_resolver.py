@@ -23,7 +23,7 @@ import copy
 import math
 
 from app.adapters.base import AdapterClientError
-from app.adapters.embedding import embed_query
+from app.adapters.embedding import EmbeddingError, embed_query
 from app.adapters.recraft import generate_via_recraft, vectorize_via_recraft
 from app.core.config import get_settings
 from app.core.observability import log_metrics
@@ -255,9 +255,12 @@ def present_candidates(
     if exact is not None:
         ranked.append((exact, 1.0))
         seen.add(exact)
-    # embed_query is None when embeddings are unconfigured (graceful, coarser pool); a
-    # real call FAILURE still propagates (surfacing the outage), same as _resolve_one.
-    query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
+    # embed_query is None when embeddings are unconfigured. Presentation is a gate UI
+    # helper, so embedding outages are soft failures here: keep exact/id-order candidates.
+    try:
+        query_vec = embed_query(_descriptor_text(spec), client=embedding_client)
+    except EmbeddingError:
+        query_vec = None
     if query_vec is not None:
         try:
             match = store.find_best_by_embedding(scope, query_vec)

@@ -66,7 +66,7 @@ librsvg 고정 + sanitizer 확장을 감수할 때만(§8 대안). **생성형(G
 | R6 | finalize 트리거는 **UX 결정 단계**(이 후보로 확정 → 렌더). **비용 게이트 아님**(무료·로컬) | ✅ | 세션 spec §8.4 |
 | R7 | 출력 PNG는 **Supabase Storage** 업로드 → URL(기존 프리뷰 패턴), 미설정 시 URL null + warning | ✅ | `app/storage/` |
 | R8 | 원단 노브: `fabric`(cotton/linen/silk/knit/denim), `finish`(matte/sheen), `lighting`(방향/세기) → 자산/파라미터 선택 | ❓ | 노브별 자산 세트 §9 |
-| R9 | 승인 후보의 **resolved intent**(label 렌더용) + SVG 조회: 세션 state(current_intent) / `(request_id, candidate_id)` 로그 / 클라이언트 전달 | ❓ | slim response가 숨김; §5.6이 intent 필요 |
+| R9 | finalize 입력은 승인 후보의 **resolved intent**(`FinalizeRequest.intent`)이며 세션 경로는 committed candidate intent를 전달 | ✅ | 현재 `/finalize` 구현·테스트 기준 |
 | R10 | **영역별(per-region) 질감**: material map(region→fabric)을 label 렌더 + 마스크 합성으로 적용. 배경/스트라이프/모티프마다 다른 텍스처, 미지정은 기본 폴백 | ✅ | §5.6 |
 
 ---
@@ -76,7 +76,7 @@ librsvg 고정 + sanitizer 확장을 감수할 때만(§8 대안). **생성형(G
 ```text
 [사용자 결정] 후보 X 확정 (UX 버튼 — 무료라 비용 게이트 아님, R6)
         │
-  승인 SVG 조회 (세션 state | 로그 (request_id,candidate_id) | 클라이언트 전달)      ← R9
+  resolved intent 전달 (`FinalizeRequest.intent`, 세션 current_candidates intent)       ← R9
         │
   render/raster.py 로 민짜 색상 PNG + compose(intent, label-colorway)로 region 세그맵  ← 기존 자산/compose (§5.6)
         │
@@ -150,10 +150,10 @@ construction."* 엔진 출력은 반드시 `sanitize_svg`를 통과하므로, A�
 
 ## 6. API 표면
 
-- `POST /api/v1/finalize`(명칭 §9): 승인 후보 참조(R9) + 노브(R8) → 텍스처 렌더 URL.
+- `POST /api/v1/finalize`: `FinalizeRequest.intent` + 노브(R8) → 텍스처 렌더 URL.
   - **무료·로컬이라 비용 승인 아님**(R6). 세션 경로에선 "이 후보로 결정" UX 액션이 곧 이 호출.
   - 응답: `{ request_id, image_url, warnings[] }`. `X-Request-ID` 전파, 에러 바디 `detail`+`request_id`.
-  - 에러: 참조 해석 실패 404/422, 렌더/스토리지 실패 502(기존 매핑).
+  - 에러: 잘못된 `weave`/`colorway_id`/`material_map` 등 `FabricError` 입력 400, intent 검증 실패 422, 렌더/스토리지 실패 502.
 - 세션 연계: conversational-design-sessions의 finalize 노드가 동일 로직 호출.
 
 ---
@@ -189,7 +189,7 @@ construction."* 엔진 출력은 반드시 `sanitize_svg`를 통과하므로, A�
 - **R10 granularity**: 영역 label을 **color slot 기준**(기본, 기존 colorway 재사용)으로 갈지 **element-id 기준**
   (밴드마다/인스턴스마다 구분, 엔진에 label 렌더 모드 추가 필요)으로 갈지. 초기엔 slot 기준으로 시작 권장.
 - **region별 텍스처 회전**: 실 방향 맞춤을 지원할지(tile-commensurate 각도 제약) — 초기엔 축정렬만.
-- **R9**: 승인 SVG 조회 경로 확정(세션 state / 로그 / 클라이언트 전달). slim response가 SVG를 숨김.
+- **R9 resolved**: `/finalize`는 `FinalizeRequest.intent`를 받고, 세션 finalize는 committed candidate의 resolved intent를 전달한다.
 - **엔드포인트 명칭**: `/finalize` vs `/render-fabric`.
 - **입력 형태**: 단일 타일 vs N×N 패치 center-crop — 질감 품질 실측.
 - **리스크**: 텍스처 자산/파라미터가 결정론 입력의 일부이므로 버전 pin 필수. relight 광원·강도 과하면 seamless
