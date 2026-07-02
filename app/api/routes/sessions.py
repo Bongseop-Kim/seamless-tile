@@ -8,6 +8,13 @@
 The turn itself runs in the LangGraph session graph; these endpoints only resume it with
 a decision or trigger the finalize hand-off. Recraft can never fire without an explicit
 ``generate_motif`` confirm; the fabric render can never fire without ``finalize``.
+
+Time-travel (session 18): ``GET /{id}/checkpoints`` lists turn-boundary checkpoints;
+``GET /{id}?checkpoint_id=...`` is a read-only restore of one (undo = an earlier id, redo =
+a later one). Forking a new branch from a checkpoint is ``POST /generate`` with
+``from_checkpoint`` — not exposed here. ``select-motif``/``confirm`` stay head-only: a
+historical gate interrupt is not resumable, so time-travel only reaches as far back as the
+last committed turn.
 """
 
 from __future__ import annotations
@@ -39,6 +46,18 @@ class SessionRestoreResponse(BaseModel):
     seed: int | None = None
     colorway: str | None = None
     budget: dict[str, Any] = Field(default_factory=dict)
+
+
+class CheckpointResponse(BaseModel):
+    checkpoint_id: str
+    created_at: str
+    turns: int  # turn count committed as of this checkpoint
+    prompt: str | None = None  # that turn's last user message
+
+
+class CheckpointListResponse(BaseModel):
+    session_id: str
+    checkpoints: list[CheckpointResponse] = Field(default_factory=list)
 
 
 class SelectMotifRequest(BaseModel):
@@ -95,9 +114,15 @@ def _dedup(session_id: str):
     response_model=SessionRestoreResponse,
     summary="Restore a session's conversation, committed candidates, and gate state",
 )
-async def get_session(session_id: str) -> SessionRestoreResponse:
-    values = _run_adapter(lambda: sg.get_state(session_id))
-    pending = _run_adapter(lambda: sg.pending_payload(session_id))
+async def get_session(
+    session_id: str, checkpoint_id: str | None = None
+) -> SessionRestoreResponse:
+    # checkpoint_id (session 18): a read-only restore of an earlier turn boundary
+    # (undo/redo). `pending` stays head-only -- a past gate payload isn't resumable here.
+    values = _run_adapter(lambda: sg.get_state(session_id, checkpoint_id))
+    pending = (
+        None if checkpoint_id else _run_adapter(lambda: sg.pending_payload(session_id))
+    )
     if not values and pending is None:
         raise HTTPException(status_code=404, detail=[f"unknown session {session_id!r}"])
     candidates = [
@@ -113,6 +138,22 @@ async def get_session(session_id: str) -> SessionRestoreResponse:
         colorway=values.get("colorway"),
         budget=values.get("budget") or {},
     )
+
+
+@router.get(
+    "/{session_id}/checkpoints",
+    response_model=CheckpointListResponse,
+    summary="List turn-boundary checkpoints for undo/redo/fork (session 18)",
+)
+async def list_checkpoints(session_id: str) -> CheckpointListResponse:
+    # Same "unknown session" check as get_session (not "empty list" -- a session paused
+    # at its very first gate legitimately has zero committed turns yet).
+    values = _run_adapter(lambda: sg.get_state(session_id))
+    pending = _run_adapter(lambda: sg.pending_payload(session_id))
+    if not values and pending is None:
+        raise HTTPException(status_code=404, detail=[f"unknown session {session_id!r}"])
+    checkpoints = _run_adapter(lambda: sg.list_turn_checkpoints(session_id))
+    return CheckpointListResponse(session_id=session_id, checkpoints=checkpoints)
 
 
 @router.post(

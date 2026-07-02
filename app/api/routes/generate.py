@@ -109,6 +109,7 @@ async def _session_generate(request: GenerateRequest) -> GenerateResponse:
                     seed=request.seed,
                     colorway=request.colorway,
                     candidate_count=request.candidate_count,
+                    from_checkpoint=request.from_checkpoint,
                 ),
             )
             return await respond_session_turn(request.session_id, result)
@@ -277,6 +278,12 @@ async def generate_candidate(
     ],
     background_tasks: BackgroundTasks,
 ) -> GenerateResponse:
+    # Session 18: `from_checkpoint` (time-travel fork) only makes sense against a session.
+    if request.from_checkpoint and not request.session_id:
+        raise HTTPException(
+            status_code=422, detail=["`from_checkpoint` requires `session_id`"]
+        )
+
     # Session 16: a session_id opts into the conversational graph (author/edit turn,
     # confirm gate). Absent => the stateless path below runs unchanged (acceptance #6).
     if request.session_id:

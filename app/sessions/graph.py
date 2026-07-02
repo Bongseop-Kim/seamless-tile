@@ -335,8 +335,11 @@ def reset_sessions() -> None:
 # --- entrypoints --------------------------------------------------------------
 
 
-def _cfg(session_id: str) -> dict:
-    return {"configurable": {"thread_id": session_id}}
+def _cfg(session_id: str, checkpoint_id: str | None = None) -> dict:
+    configurable = {"thread_id": session_id}
+    if checkpoint_id is not None:
+        configurable["checkpoint_id"] = checkpoint_id
+    return {"configurable": configurable}
 
 
 def run_turn(
@@ -347,9 +350,17 @@ def run_turn(
     seed: int | None = None,
     colorway: str | None = None,
     candidate_count: int = 1,
+    from_checkpoint: str | None = None,
 ) -> dict:
     """Run one turn (author or edit — the graph classifies). Returns the raw graph result;
-    a paused turn carries ``__interrupt__`` (read it with :func:`pending_of`)."""
+    a paused turn carries ``__interrupt__`` (read it with :func:`pending_of`).
+
+    ``from_checkpoint`` (session 18, time-travel fork) invokes against an earlier
+    checkpoint instead of the thread head: LangGraph forks a new branch from it, leaving
+    the original branch's checkpoints untouched. The budget is carried forward from the
+    thread HEAD (not the fork point) — it is a cost-guard trust boundary, so forking to an
+    earlier, lower counter must never refund spend.
+    """
     turn_input: dict = {
         "session_id": session_id,
         "prompt": prompt,
@@ -360,7 +371,11 @@ def run_turn(
         turn_input["seed"] = seed
     if colorway is not None:
         turn_input["colorway"] = colorway
-    return _graph().invoke(turn_input, config=_cfg(session_id))
+    if from_checkpoint:
+        head_budget = get_state(session_id).get("budget")
+        if head_budget:
+            turn_input["budget"] = head_budget
+    return _graph().invoke(turn_input, config=_cfg(session_id, from_checkpoint))
 
 
 def resume_turn(session_id: str, resume_value: dict) -> dict:
@@ -376,9 +391,43 @@ def pending_of(result: dict) -> dict | None:
     return interrupts[0].value
 
 
-def get_state(session_id: str) -> dict:
-    """Current committed session values (empty dict for an unknown session)."""
-    return dict(_graph().get_state(_cfg(session_id)).values)
+def get_state(session_id: str, checkpoint_id: str | None = None) -> dict:
+    """Session values at ``checkpoint_id`` (thread head by default). Empty dict for an
+    unknown session or checkpoint — a read-only restore, never a head move (undo/redo,
+    session 18)."""
+    return dict(_graph().get_state(_cfg(session_id, checkpoint_id)).values)
+
+
+def list_turn_checkpoints(session_id: str) -> list[dict]:
+    """Turn-boundary checkpoints, oldest first: ``[{checkpoint_id, created_at, turns,
+    prompt}]`` for undo/redo/fork (session 18). Filtered to loop-end commits (excludes
+    in-turn ``update_state`` writes, failed/validation-error turns, and gate pauses), so
+    each committed turn yields exactly one entry; ``turns`` is the turn count at that
+    checkpoint and ``prompt`` is its last user message."""
+    snapshots = [
+        snap
+        for snap in _graph().get_state_history(_cfg(session_id))
+        if snap.next == ()
+        and (snap.metadata or {}).get("source") == "loop"
+        and snap.values.get("current_intent")
+        and not snap.values.get("validate_errors")
+        and not snap.interrupts
+    ]
+    out = []
+    for snap in reversed(snapshots):  # oldest first
+        turns = snap.values.get("turns") or []
+        prompt = next(
+            (t.get("text") for t in reversed(turns) if t.get("role") == "user"), None
+        )
+        out.append(
+            {
+                "checkpoint_id": snap.config["configurable"]["checkpoint_id"],
+                "created_at": snap.created_at,
+                "turns": len(turns),
+                "prompt": prompt,
+            }
+        )
+    return out
 
 
 def awaiting_gate(session_id: str) -> bool:

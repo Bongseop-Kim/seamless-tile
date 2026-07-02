@@ -52,6 +52,10 @@ class GenerateRequest(BaseModel):
     # a session turn: unknown id authors a new design, known id treats `prompt` as an
     # edit instruction. Client-supplied (a uuid) so opting in is explicit.
     session_id: str | None = None
+    # Time-travel fork (session 18): run this turn from an earlier committed checkpoint
+    # (see `GET /sessions/{id}/checkpoints`) instead of the session head. Requires
+    # `session_id`; leaves the original branch's checkpoints untouched.
+    from_checkpoint: str | None = None
 
 
 class CandidateResponse(BaseModel):
