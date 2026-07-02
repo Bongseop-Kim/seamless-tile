@@ -2,8 +2,9 @@
 
 The embedding model is a SEPARATE model from the chat LLM (D12): OpenAI
 ``text-embedding-3-small``. Like the other adapters, the client is an injected seam
-(a ``Protocol``). The OpenAI SDK is a required dependency for this service; real network
-calls still happen only when :func:`embed_query` is invoked.
+(a ``Protocol``); the concrete client is a direct ``httpx`` POST to
+``/v1/embeddings`` (no SDK). Real network calls happen only when
+:func:`embed_query` is invoked.
 
 This adapter lives OUTSIDE the engine's determinism boundary. The motif resolver uses
 the returned vector only to decide *which* concrete ``motif_id`` to reuse/generate; the
@@ -13,7 +14,7 @@ determinism guarantee.
 
 The app requires ``OPENAI_API_KEY`` at startup. For direct unit tests or explicitly
 injected resolver calls, no client still means :func:`embed_query` returns ``None`` and
-the resolver skips the soft-similarity stage. SDK/network failures are normalized to
+the resolver skips the soft-similarity stage. Network failures are normalized to
 :class:`~app.adapters.base.AdapterClientError`.
 """
 
@@ -22,9 +23,9 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Protocol
 
-from openai import OpenAI
+import httpx
 
-from app.adapters.base import AdapterClientError, cache_key
+from app.adapters.base import AdapterClientError, ClientSlot, cache_key
 
 DEFAULT_MODEL = "text-embedding-3-small"
 EMBEDDING_CACHE_MAX_SIZE = 512
@@ -44,36 +45,38 @@ class EmbeddingError(AdapterClientError):
 
 
 class OpenAIEmbeddingClient:
-    """Adapts the ``openai`` SDK to the ``embed(text) -> list[float]`` seam."""
+    """``embed(text) -> list[float]`` via a direct POST to OpenAI ``/v1/embeddings``.
+
+    ponytail: one endpoint, one call — httpx (already a dependency) instead of the
+    openai SDK."""
 
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL) -> None:
         if not api_key:
             raise EmbeddingError("OpenAIEmbeddingClient requires a non-empty api_key")
         self.model = model
-        self._client = OpenAI(api_key=api_key)
+        self._api_key = api_key
 
     def embed(self, text: str) -> list[float]:
         try:
-            response = self._client.embeddings.create(model=self.model, input=text)
-        except Exception as exc:  # transport / SDK / API failure
+            resp = httpx.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={"model": self.model, "input": text},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except Exception as exc:  # transport / HTTP / API failure
             raise EmbeddingError(f"OpenAI embedding request failed: {exc}") from exc
         try:
-            return list(response.data[0].embedding)
-        except (AttributeError, IndexError, TypeError) as exc:
+            return list(resp.json()["data"][0]["embedding"])
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise EmbeddingError(f"OpenAI returned an unexpected payload: {exc}") from exc
 
 
-_DEFAULT_EMBEDDING_CLIENT: EmbeddingClient | None = None
-
-
-def set_default_embedding_client(client: EmbeddingClient | None) -> None:
-    """Register a process-wide default embedding client (opt-in; used for real calls)."""
-    global _DEFAULT_EMBEDDING_CLIENT
-    _DEFAULT_EMBEDDING_CLIENT = client
-
-
-def get_default_embedding_client() -> EmbeddingClient | None:
-    return _DEFAULT_EMBEDDING_CLIENT
+# No error type: resolve() returning None means "soft-similarity unavailable".
+_slot = ClientSlot()
+set_default_embedding_client = _slot.set
+get_default_embedding_client = _slot.get
 
 
 # Process-local freeze cache: same (model, text) -> same vector within the process.
@@ -97,7 +100,7 @@ def embed_query(
     failures raise :class:`EmbeddingError` for the caller to handle (the resolver
     catches it and falls back, spec §6.4 graceful-degradation precedent).
     """
-    resolved = client if client is not None else _DEFAULT_EMBEDDING_CLIENT
+    resolved = _slot.resolve(client)
     if resolved is None:
         return None
     model = getattr(resolved, "model", DEFAULT_MODEL)

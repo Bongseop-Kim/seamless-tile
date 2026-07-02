@@ -10,10 +10,9 @@ yields the same SVG.
 The generator is an injected seam (a ``Protocol``), mirroring :mod:`app.adapters.llm`:
 no SDK is added to ``requirements.txt`` and tests inject a fake client.
 
-Caching is two-layered and both layers preserve determinism:
-- a per-prompt cache avoids re-invoking the generator for an identical request;
-- the ``motif_id`` is the hash of the *normalized* geometry, so two different prompts
-  that normalize to the same shape collide to the same id (a registry cache hit).
+Caching preserves determinism: a per-spec freeze cache avoids re-invoking the generator
+for an identical request, and the ``motif_id`` is the hash of the *normalized* geometry,
+so two different prompts that normalize to the same shape collide to the same id.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from typing import Protocol
 
 import httpx
 
-from app.adapters.base import AdapterClientError, cache_key
+from app.adapters.base import AdapterClientError, ClientSlot, cache_key
 from app.core.config import get_settings
 from app.engine.palette import rgb_to_hex
 from app.motifs import facets
@@ -74,28 +73,14 @@ class RecraftNotConfigured(RecraftError):
     """No Recraft client was injected and none is configured as the default."""
 
 
-def _resolve_client(client: RecraftClient | None) -> RecraftClient:
-    if client is not None:
-        return client
-    if _DEFAULT_RECRAFT_CLIENT is not None:
-        return _DEFAULT_RECRAFT_CLIENT
-    raise RecraftNotConfigured(
-        "no Recraft client provided; pass client=... or set_default_recraft_client(...). "
-        "Generation is opt-in; detailed misses with no Recraft client surface a 502."
-    )
-
-
-_DEFAULT_RECRAFT_CLIENT: RecraftClient | None = None
-
-
-def set_default_recraft_client(client: RecraftClient | None) -> None:
-    """Register a process-wide default Recraft client (opt-in; injected, no SDK shipped)."""
-    global _DEFAULT_RECRAFT_CLIENT
-    _DEFAULT_RECRAFT_CLIENT = client
-
-
-def get_default_recraft_client() -> RecraftClient | None:
-    return _DEFAULT_RECRAFT_CLIENT
+_slot = ClientSlot(
+    RecraftNotConfigured,
+    "no Recraft client provided; pass client=... or set_default_recraft_client(...). "
+    "Generation is opt-in; detailed misses with no Recraft client surface a 502.",
+)
+set_default_recraft_client = _slot.set
+get_default_recraft_client = _slot.get
+_resolve_client = _slot.resolve
 
 
 # Default Recraft vector API contract (recraft.ai/docs api-reference/examples). Vector
@@ -117,8 +102,7 @@ class RecraftHTTPClient:
     ``POST {base_url}/images/generations`` with a ``*_vector`` model (e.g.
     ``recraftv4_1_vector``) returns ``{"data": [{"url": ...}]}`` pointing to an SVG file
     (or, with ``response_format="b64_json"``, the SVG base64-encoded inline). ``generate``
-    returns
-    the raw SVG text; the caller (``create_motif`` / ``generate_via_recraft``) then runs
+    returns the raw SVG text; the caller (``generate_via_recraft``) then runs
     the suitability gate. Network calls are opt-in — :func:`app.main.lifespan` installs
     this only when ``RECRAFT_API_KEY`` is set. All failures normalize to
     :class:`RecraftError` (the route maps that to 502).
@@ -224,58 +208,6 @@ def client_from_settings(settings) -> RecraftHTTPClient | None:
         response_format=getattr(settings, "recraft_response_format", None) or "url",
         base_url=getattr(settings, "recraft_base_url", None) or DEFAULT_BASE_URL,
     )
-
-
-# Per-prompt cache: prompt -> motif_id, so an identical authoring request never
-# re-invokes the generator. Distinct from the content-hash id dedup in the registry.
-_motif_cache: dict[str, str] = {}
-
-
-def clear_motif_cache() -> None:
-    _motif_cache.clear()
-
-
-def create_motif(
-    prompt: str,
-    *,
-    client: RecraftClient | None = None,
-    use_cache: bool = True,
-) -> str:
-    """Generate, normalize, and register a motif at authoring time; return its ``motif_id``.
-
-    The raw SVG passes through the suitability gate (:func:`_flatten_unsuitable`) before
-    normalization, so painterly gradients/filters are flattened to path-only and the
-    color count is capped (``recraft_max_color_slots``). Raises :class:`RecraftError` if
-    the generator is unavailable or fails, and propagates
-    :class:`app.render.sanitize.SanitizeError` / ``ValueError`` if the generated SVG is
-    unsafe or unnormalizable even after flattening.
-    """
-    if not prompt or not prompt.strip():
-        raise ValueError("create_motif requires a non-empty prompt")
-    key = cache_key({"k": "recraft", "prompt": prompt})
-    if use_cache and key in _motif_cache:
-        return _motif_cache[key]
-
-    generator = _resolve_client(client)
-    try:
-        raw_svg = generator.generate(prompt)
-    except RecraftError:
-        raise
-    except Exception as exc:  # any generator failure is an upstream (5xx-class) error
-        raise RecraftError(f"Recraft generation failed: {exc}") from exc
-
-    settings = get_settings()
-    motif = normalize_motif_svg(
-        _flatten_unsuitable(raw_svg),
-        max_color_slots=settings.recraft_max_color_slots,
-        max_aspect_ratio=settings.motif_max_aspect_ratio,
-        edge_seam_tol=settings.motif_edge_seam_tol,
-        render_check=settings.motif_render_check,
-    )
-    motif_id = register_motif(motif)
-    if use_cache:
-        _motif_cache[key] = motif_id
-    return motif_id
 
 
 def _flatten_unsuitable(raw_svg: str) -> str:

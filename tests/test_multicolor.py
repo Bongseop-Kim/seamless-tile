@@ -374,8 +374,7 @@ def test_single_color_motif_composes_via_color():
 
 def _close(image: Image.Image, rgb: tuple[int, int, int], tol: int = 28) -> int:
     count = 0
-    data_source = getattr(image, "get_flattened_data", image.getdata)
-    for pixel in data_source():
+    for pixel in image.getdata():
         if all(abs(int(pixel[i]) - rgb[i]) <= tol for i in range(3)):
             count += 1
     return count

@@ -10,16 +10,11 @@ from contextlib import contextmanager
 
 from app.core.config import get_settings
 
-_LIMITS = {
-    "recraft": lambda s: s.session_recraft_limit,
-    "finalize": lambda s: s.session_finalize_limit,
-}
-
-
 def budget_exceeded(budget: dict | None, kind: str) -> str | None:
     """``None`` if ``{kind}_used`` is under the configured ceiling, else a rejection
-    message. Pure: settings + the counter already on the session state, nothing else."""
-    limit = _LIMITS[kind](get_settings())
+    message. Pure: settings + the counter already on the session state, nothing else.
+    ``kind`` maps to the ``session_{kind}_limit`` setting by naming convention."""
+    limit = getattr(get_settings(), f"session_{kind}_limit")
     used = (budget or {}).get(f"{kind}_used", 0)
     if used >= limit:
         return f"session {kind} budget exhausted ({used}/{limit})"

@@ -8,7 +8,6 @@ from app.engine.palette import (
     Palette,
     is_hex_color,
     out_of_gamut,
-    resolve_palette,
 )
 from app.main import app
 
@@ -81,12 +80,6 @@ def test_hex_color_validation():
 def test_out_of_gamut_flags_neon_only():
     assert out_of_gamut("#00ff00")
     assert not out_of_gamut("#f5ca57")
-
-
-def test_resolve_palette():
-    assert resolve_palette("navy") == PALETTES["navy"]
-    with pytest.raises(ValueError):
-        resolve_palette("neon")
 
 
 def test_list_palettes():

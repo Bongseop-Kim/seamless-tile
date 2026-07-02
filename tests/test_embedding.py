@@ -109,17 +109,10 @@ def test_client_from_settings_none_without_key():
     assert client_from_settings(SimpleNamespace(openai_api_key="")) is None
 
 
-def test_client_from_settings_builds_with_key(monkeypatch):
-    captured = {}
-
-    class _OpenAI:
-        def __init__(self, api_key):
-            captured["api_key"] = api_key
-
-    monkeypatch.setattr("app.adapters.embedding.OpenAI", _OpenAI)
+def test_client_from_settings_builds_with_key():
     client = client_from_settings(
         SimpleNamespace(openai_api_key="sk-test", embedding_model="embed-test")
     )
     assert client is not None
     assert client.model == "embed-test"
-    assert captured["api_key"] == "sk-test"
+    assert client._api_key == "sk-test"

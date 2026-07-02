@@ -51,7 +51,6 @@ def _clean():
 
     def _purge():
         store_mod.clear_default_store()
-        recraft_adapter.clear_motif_cache()
         recraft_adapter.clear_recraft_motif_cache()
         for key in [k for k in MOTIFS if k not in BUILTIN_MOTIF_IDS]:
             del MOTIFS[key]
@@ -86,14 +85,12 @@ def test_delete_removes_from_store_memory_and_caches():
     fake = _FakeStore()
     mid = _register(fake, '<circle cx="50" cy="50" r="40" fill="#abc"/>')
     assert mid in MOTIFS and mid in fake.rows
-    recraft_adapter._motif_cache["k"] = mid
     recraft_adapter._motif_svg_cache["k"] = mid
 
     delete_motif(mid)
 
     assert mid not in fake.rows
     assert mid not in MOTIFS
-    assert recraft_adapter._motif_cache == {}
     assert recraft_adapter._motif_svg_cache == {}
 
 

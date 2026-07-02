@@ -67,7 +67,6 @@ def _block_external_side_effects(request, monkeypatch):
         llm_adapter.set_default_client(None)
         emb_adapter.clear_embedding_cache()
         emb_adapter.set_default_embedding_client(None)
-        recraft_adapter.clear_motif_cache()
         recraft_adapter.clear_recraft_motif_cache()
         recraft_adapter.clear_vectorize_cache()
         recraft_adapter.set_default_recraft_client(None)

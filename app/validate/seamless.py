@@ -12,8 +12,7 @@ def _rows(tile_rgba) -> Rows:
     """Normalize a PIL image or nested RGBA pixel rows to list-backed rows."""
     if hasattr(tile_rgba, "getdata") and hasattr(tile_rgba, "size"):
         width, height = tile_rgba.size
-        data_source = getattr(tile_rgba, "get_flattened_data", tile_rgba.getdata)
-        data = list(data_source())
+        data = list(tile_rgba.getdata())
         return [data[y * width : (y + 1) * width] for y in range(height)]
     rows = []
     width = None

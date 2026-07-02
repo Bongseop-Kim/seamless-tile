@@ -5,7 +5,6 @@ pillow
 fonttools
 defusedxml
 httpx
-openai
 google-genai
 psycopg[binary]
 langgraph==1.2.7

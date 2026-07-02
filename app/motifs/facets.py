@@ -73,16 +73,17 @@ def variant_group_key(subject: str | None, scope: str | None) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:VARIANT_GROUP_LEN]
 
 
+_SCOPE_ALLOWED = frozenset(normalize_facet(s) for s in SCOPE_VOCAB)
+
+
 def validate_facets(scope: str | None) -> None:
     """Controlled-vocab validation for the one controlled facet, ``scope`` (M2).
 
     ``subject`` is free text and intentionally unvalidated. ``scope`` is validated when
-    the caller supplies one and ``SCOPE_VOCAB`` is non-empty; ``None`` passes. Raises
-    ``ValueError`` on an out-of-vocab value.
+    the caller supplies one; ``None`` passes. Raises ``ValueError`` on an out-of-vocab
+    value.
     """
-    if scope is not None and SCOPE_VOCAB:
-        allowed = {normalize_facet(s) for s in SCOPE_VOCAB}
-        if normalize_facet(scope) not in allowed:
-            raise ValueError(
-                f"scope {scope!r} not in controlled vocabulary: {sorted(SCOPE_VOCAB)}"
-            )
+    if scope is not None and normalize_facet(scope) not in _SCOPE_ALLOWED:
+        raise ValueError(
+            f"scope {scope!r} not in controlled vocabulary: {sorted(SCOPE_VOCAB)}"
+        )

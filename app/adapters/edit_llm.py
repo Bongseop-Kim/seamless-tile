@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
-from app.adapters.base import AdapterClientError
+from app.adapters.base import AdapterClientError, ClientSlot
 from app.sessions.tools import TOOL_NAMES
 
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
@@ -34,16 +34,18 @@ class EditLLM(Protocol):
     def propose(self, summary: str, instruction: str) -> list[dict]: ...
 
 
-# Argument schemas for the closed whitelist (spec §7), in OpenAI function-tool form so
-# ``bind_tools`` accepts them across providers. The *shapes* mirror app.sessions.tools;
-# that module — not the LLM — is the enforcement point.
-_P = {
+# Description + argument schema for the closed whitelist (spec §7); folded into OpenAI
+# function-tool form below so ``bind_tools`` accepts them across providers. The *shapes*
+# mirror app.sessions.tools; that module — not the LLM — is the enforcement point.
+_TOOLS = {
     "set_colorway": {
+        "description": "Switch the active colorway.",
         "type": "object",
         "properties": {"colorway_id": {"type": "string"}},
         "required": ["colorway_id"],
     },
     "set_palette_slot": {
+        "description": "Change one palette slot's hex color.",
         "type": "object",
         "properties": {
             "slot_id": {"type": "string"},
@@ -52,6 +54,7 @@ _P = {
         "required": ["slot_id", "hex"],
     },
     "scale_motif": {
+        "description": "Scale a motif layer's size by a factor.",
         "type": "object",
         "properties": {
             "layer_id": {"type": "string"},
@@ -60,6 +63,7 @@ _P = {
         "required": ["layer_id", "factor"],
     },
     "set_stripe": {
+        "description": "Change a stripe layer's angle and/or period.",
         "type": "object",
         "properties": {
             "layer_id": {"type": "string"},
@@ -69,6 +73,7 @@ _P = {
         "required": ["layer_id"],
     },
     "set_density": {
+        "description": "Change a motif layer's placement spacing.",
         "type": "object",
         "properties": {
             "layer_id": {"type": "string"},
@@ -77,6 +82,7 @@ _P = {
         "required": ["layer_id", "spacing_mm"],
     },
     "add_layer": {
+        "description": "Add a new layer (background, stripe, or motif).",
         "type": "object",
         "properties": {
             "layer": {"type": "object", "description": "a layer dict (id, type, params, ...)"},
@@ -86,11 +92,14 @@ _P = {
         "required": ["layer"],
     },
     "remove_layer": {
+        "description": "Remove a layer by id.",
         "type": "object",
         "properties": {"layer_id": {"type": "string"}},
         "required": ["layer_id"],
     },
     "swap_motif": {
+        "description": "Replace a motif layer's motif with a described one (presents reuse "
+        "candidates; generation is confirmed separately).",
         "type": "object",
         "properties": {
             "layer_id": {"type": "string"},
@@ -103,12 +112,15 @@ _P = {
         "required": ["layer_id", "description"],
     },
     "set_seed": {
+        "description": "Re-roll the deterministic variant seed.",
         "type": "object",
         "properties": {"seed": {"type": "integer"}},
         "required": ["seed"],
     },
-    "regenerate": {"type": "object", "properties": {}},
+    "regenerate": {"description": "Re-emit candidates from the current design.", "type": "object", "properties": {}},
     "set_material": {
+        "description": "Set a fabric/finish/lighting material on a layer or slot (used only "
+        "at fabric finalize; does not change the design).",
         "type": "object",
         "properties": {
             "target": {"type": "string", "description": "a layer id or palette slot id"},
@@ -120,29 +132,13 @@ _P = {
     },
 }
 
-_DESCRIPTIONS = {
-    "set_colorway": "Switch the active colorway.",
-    "set_palette_slot": "Change one palette slot's hex color.",
-    "scale_motif": "Scale a motif layer's size by a factor.",
-    "set_stripe": "Change a stripe layer's angle and/or period.",
-    "set_density": "Change a motif layer's placement spacing.",
-    "add_layer": "Add a new layer (background, stripe, or motif).",
-    "remove_layer": "Remove a layer by id.",
-    "swap_motif": "Replace a motif layer's motif with a described one (presents reuse "
-    "candidates; generation is confirmed separately).",
-    "set_seed": "Re-roll the deterministic variant seed.",
-    "regenerate": "Re-emit candidates from the current design.",
-    "set_material": "Set a fabric/finish/lighting material on a layer or slot (used only "
-    "at fabric finalize; does not change the design).",
-}
-
 TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
             "name": name,
-            "description": _DESCRIPTIONS[name],
-            "parameters": _P[name],
+            "description": _TOOLS[name]["description"],
+            "parameters": {k: v for k, v in _TOOLS[name].items() if k != "description"},
         },
     }
     for name in TOOL_NAMES
@@ -184,25 +180,13 @@ class GeminiEditLLM:
         return [{"name": tc["name"], "args": tc.get("args") or {}} for tc in (msg.tool_calls or [])]
 
 
-_DEFAULT_EDIT_CLIENT: EditLLM | None = None
-
-
-def set_default_edit_client(client: EditLLM | None) -> None:
-    global _DEFAULT_EDIT_CLIENT
-    _DEFAULT_EDIT_CLIENT = client
-
-
-def get_default_edit_client() -> EditLLM | None:
-    return _DEFAULT_EDIT_CLIENT
-
-
-def resolve_edit_client(client: EditLLM | None = None) -> EditLLM:
-    resolved = client or _DEFAULT_EDIT_CLIENT
-    if resolved is None:
-        raise EditLLMNotConfigured(
-            "no edit LLM configured; set GEMINI_API_KEY or inject via set_default_edit_client(...)"
-        )
-    return resolved
+_slot = ClientSlot(
+    EditLLMNotConfigured,
+    "no edit LLM configured; set GEMINI_API_KEY or inject via set_default_edit_client(...)",
+)
+set_default_edit_client = _slot.set
+get_default_edit_client = _slot.get
+resolve_edit_client = _slot.resolve
 
 
 def client_from_settings(settings) -> EditLLM | None:

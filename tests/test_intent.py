@@ -345,7 +345,7 @@ def test_seeded_rng_is_deterministic():
 
 
 def test_repro_meta_carries_versions():
-    meta = ReproMeta.build(intent_version=1, seed=42, colorway_id="default")
+    meta = ReproMeta(intent_version=1, seed=42, colorway_id="default")
     assert meta.engine_version and meta.registry_version
     assert meta.seed == 42 and meta.colorway_id == "default"
 

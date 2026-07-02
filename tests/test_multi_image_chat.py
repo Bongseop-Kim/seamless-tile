@@ -19,7 +19,7 @@ import app.adapters.llm as llm_adapter
 import app.adapters.recraft as recraft_adapter
 import app.motifs.store as store_mod
 from app.adapters.image import vectorize_limit_error
-from app.adapters.llm import build_intent, build_intents, set_default_client
+from app.adapters.llm import build_intents, set_default_client
 from app.adapters.motif_resolver import resolve_motifs
 from app.adapters.recraft import (
     RecraftError,
@@ -238,7 +238,7 @@ def test_build_intents_passes_valid_source_image_index_through():
         ],
     }
     llm = _ScriptedLLM(json.dumps(design))
-    res = build_intent("x", client=llm, images=[_png()], use_cache=False)
+    res = build_intents("x", client=llm, images=[_png()], use_cache=False)[0]
     assert res.motif_specs[0]["source_image_index"] == 0
 
 

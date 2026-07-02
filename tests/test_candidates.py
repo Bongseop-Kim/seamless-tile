@@ -239,5 +239,5 @@ def test_candidate_set_deterministic():
 def test_stripe_presets_are_uneven():
     from app.engine.candidates import _STRIPE_RHYTHMS_MULTI, _STRIPE_RHYTHMS_SINGLE
 
-    for _name, weights, _gap in _STRIPE_RHYTHMS_SINGLE + _STRIPE_RHYTHMS_MULTI:
+    for weights, _gap in _STRIPE_RHYTHMS_SINGLE + _STRIPE_RHYTHMS_MULTI:
         assert len(set(weights)) > 1  # not all-equal widths

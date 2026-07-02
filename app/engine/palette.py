@@ -50,15 +50,6 @@ PALETTES: dict[str, tuple[str, ...]] = {
 }
 
 
-def resolve_palette(name: str) -> tuple[str, ...]:
-    try:
-        return PALETTES[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown palette: {name!r}; choose one of {sorted(PALETTES)}"
-        ) from None
-
-
 # --- Color slots & colorways --------------------------------------------------
 
 DEFAULT_COLORWAY_ID = "default"

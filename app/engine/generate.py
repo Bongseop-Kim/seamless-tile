@@ -50,7 +50,7 @@ def generate(
     assert_seamless_invariants(intent)
     svg = compose(intent, result.palette, colorway_id)
     layout_id = layout_id_for(intent)
-    repro = ReproMeta.build(
+    repro = ReproMeta(
         intent_version=intent.intent_version,
         seed=effective_seed,
         colorway_id=colorway_id,

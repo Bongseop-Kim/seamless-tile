@@ -13,10 +13,7 @@ import app.adapters.llm as llm_adapter
 import app.adapters.motif_resolver as motif_resolver
 import app.adapters.recraft as recraft_adapter
 from app.adapters.base import AdapterClientError, AdapterResult
-from app.adapters.llm import (
-    build_intent as llm_build_intent,
-    set_default_client,
-)
+from app.adapters.llm import build_intents, set_default_client
 from app.adapters.motif_resolver import resolve_motifs
 import app.api.routes.generate as gen_route
 from app.main import app
@@ -27,6 +24,11 @@ from app.validate.intent import IntentInvalid
 from tests.test_intent import mvp_intent
 
 client = TestClient(app)
+
+
+def llm_build_intent(*args, **kwargs):
+    """Single-design shim for the removed llm.build_intent wrapper."""
+    return build_intents(*args, **kwargs)[0]
 
 _GOOD_SVG = '<svg viewBox="0 0 12 12"><path d="M2 2 H10 V10 H2 Z" fill="currentColor"/></svg>'
 _BAD_SVG = '<svg viewBox="0 0 12 12"><script>nope()</script></svg>'  # script => SanitizeError

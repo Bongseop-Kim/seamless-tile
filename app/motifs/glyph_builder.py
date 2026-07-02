@@ -47,11 +47,6 @@ def _glyph_outline(codepoint: int) -> tuple[str, float] | None:
         return pen.getCommands(), advance
 
 
-def glyph_advance(codepoint: int) -> float | None:
-    outline = _glyph_outline(codepoint)
-    return None if outline is None else outline[1]
-
-
 def _runs(
     text: str, segments: list[dict] | None, default_color: str
 ) -> list[tuple[str, float, str]]:

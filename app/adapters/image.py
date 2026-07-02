@@ -3,13 +3,8 @@
 Reference images are used for MEANING extraction (style / motif / color), not pixel
 reproduction (ARCHITECTURE.md "Reference Image 처리 정책"). Two parts:
 
-- **Palette extraction** is done for real, dependency-free, via Pillow median-cut
-  (no scikit-learn). 8-16 dominant colors -> palette slots + a default colorway.
-- **VLM structure hints** and **vectorization** are planned injected seams (Protocols).
-  They are not wired to real clients in the FastAPI route yet; tests pin the intended
-  contract while the reference-image product flow is still being planned.
-  The vectorize fit/unfit rule (path_count <= N AND color_count <= M) decides
-  ``source_fidelity``; unfit textures fall back to palette only and are flagged.
+Palette extraction is done for real, dependency-free, via Pillow median-cut
+(no scikit-learn). 8-16 dominant colors -> palette slots + a default colorway.
 
 Transport is a base64 / data-URI string in the JSON body. Upload validation runs on
 this path (session 8): an encoded-size guard, then format allowlist, pixel/decode-bomb
@@ -23,14 +18,11 @@ import binascii
 import copy
 import hashlib
 import io
-from dataclasses import dataclass
-from typing import Protocol
 
 from PIL import Image, ImageOps
 
-from app.adapters.base import AdapterClientError, AdapterResult, cache_key
+from app.adapters.base import AdapterResult, cache_key
 from app.engine.palette import rgb_to_hex
-from app.motifs.registry import MOTIFS
 from app.validate.intent import IntentInvalid, validate_intent
 
 DEFAULT_TILE_MM = 48.0
@@ -48,9 +40,6 @@ MAX_ENCODED_CHARS = MAX_IMAGE_BYTES * 4 // 3 + 16
 ALLOWED_IMAGE_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
 MAX_IMAGE_DIM = 8192
 MAX_IMAGE_PIXELS = 24_000_000
-# Vectorization fit thresholds (ARCHITECTURE.md: clean path under a count, bounded colors).
-VECTORIZE_MAX_PATHS = 1500
-VECTORIZE_MAX_COLORS = 32
 # Recraft /images/vectorize input limits (tighter than the adapter caps above). The API
 # rejects images outside these, so the multi-image path screens a motif image against
 # them BEFORE the call and surfaces a clear reason instead of an opaque upstream 502.
@@ -58,27 +47,6 @@ RECRAFT_VECTORIZE_MAX_BYTES = 5 * 1024 * 1024
 RECRAFT_VECTORIZE_MAX_DIM = 4096
 RECRAFT_VECTORIZE_MIN_DIM = 256
 RECRAFT_VECTORIZE_MAX_PIXELS = 16_000_000
-
-@dataclass(frozen=True)
-class VectorResult:
-    """Contract returned by a vectorizer seam. We judge fitness off these counts;
-    we never read the raw pixels for the decision."""
-
-    path_count: int
-    color_count: int
-
-
-class VLMClient(Protocol):
-    def describe(self, image_bytes: bytes) -> dict: ...
-
-
-class Vectorizer(Protocol):
-    def trace(self, image_bytes: bytes) -> VectorResult: ...
-
-
-class ImageAdapterError(AdapterClientError):
-    """An injected image dependency (VLM / vectorizer) failed."""
-
 
 _intent_cache: dict[str, dict] = {}
 
@@ -228,14 +196,7 @@ def extract_palette(image_bytes: bytes, *, num_colors: int = DEFAULT_NUM_COLORS)
     return slots
 
 
-def judge_vectorization(result: VectorResult) -> str:
-    """Fit (flat/geometric/simple) -> 'vector'; unfit (photo/painterly) -> 'raster_hybrid'."""
-    if result.path_count <= VECTORIZE_MAX_PATHS and result.color_count <= VECTORIZE_MAX_COLORS:
-        return "vector"
-    return "raster_hybrid"
-
-
-def _assemble_intent(slots: list[dict], *, motif_id: str | None, tile_mm: float, dpi: int) -> dict:
+def _assemble_intent(slots: list[dict], *, tile_mm: float, dpi: int) -> dict:
     ground = slots[0]["id"]
     accent = slots[1]["id"] if len(slots) > 1 else slots[0]["id"]
     mapping = {s["id"]: s["hex"] for s in slots}
@@ -254,23 +215,6 @@ def _assemble_intent(slots: list[dict], *, motif_id: str | None, tile_mm: float,
             },
         },
     ]
-    if motif_id is not None:
-        motif_color = slots[2]["id"] if len(slots) > 2 else accent
-        layers.append(
-            {
-                "id": "motif_lane",
-                "type": "motif",
-                "z_order": 2,
-                "params": {"motif_id": motif_id, "size_mm": 1.4, "color": motif_color},
-                "placement": {
-                    "type": "path_following",
-                    "host_layer": "stripe_base",
-                    "lane": "center",
-                    "spacing_mm": tile_mm / 8,
-                    "phase_mm": 0,
-                },
-            }
-        )
     return {
         "intent_version": 1,
         "canvas": {"tile_mm": tile_mm, "dpi": dpi},
@@ -287,8 +231,6 @@ def build_intent(
     *,
     canvas: dict | None = None,
     num_colors: int = DEFAULT_NUM_COLORS,
-    vlm: VLMClient | None = None,
-    vectorizer: Vectorizer | None = None,
     use_cache: bool = True,
 ) -> AdapterResult:
     """Turn a reference image into a validated, frozen intent + source_fidelity.
@@ -298,7 +240,7 @@ def build_intent(
     the cache key.
 
     Raises :class:`IntentInvalid` for unusable input (bad base64 / undecodable image /
-    an intent that fails stage-0 even after dropping the motif layer).
+    an intent that fails stage-0 validation).
     """
     data = _decode_image(image_b64)
     # Session-8 upload hardening: reject spoofed/oversize/corrupt images, then strip
@@ -323,51 +265,16 @@ def build_intent(
         )
 
     slots = extract_palette(data, num_colors=num_colors)
-    warnings: list[str] = []
-
-    # VLM structure hint (style/motif). Optional & mocked; only registry motifs are honored.
-    # No usable hint -> motif_id stays None and the motif layer is dropped (palette only).
-    motif_id: str | None = None
-    if vlm is not None:
-        try:
-            hints = vlm.describe(data)
-        except Exception as exc:  # noqa: BLE001 - external client failures map to 502
-            raise ImageAdapterError(f"VLM service failed while describing image: {exc}") from exc
-        cand = hints.get("motif_id") if isinstance(hints, dict) else None
-        # isinstance guard: a misbehaving VLM could return an unhashable value, which
-        # would raise TypeError on the dict membership test and escape as a 500.
-        if isinstance(cand, str) and cand in MOTIFS:
-            motif_id = cand
-    if motif_id is None:
-        warnings.append("motif inference unavailable/ignored; using palette only")
-
-    # Vectorization fit/unfit -> source_fidelity (vectorizer is mocked in tests).
+    # ponytail: motif inference (VLM) / vectorization seams removed until a real
+    # client exists — the image path is palette-only, source_fidelity always "vector".
+    warnings: list[str] = ["motif inference unavailable/ignored; using palette only"]
     source_fidelity = "vector"
-    if vectorizer is not None:
-        try:
-            vres = vectorizer.trace(data)
-        except Exception as exc:  # noqa: BLE001 - external client failures map to 502
-            raise ImageAdapterError(f"vectorizer service failed while tracing image: {exc}") from exc
-        source_fidelity = judge_vectorization(vres)
-        if source_fidelity != "vector":
-            warnings.append(
-                "reference texture is unfit for clean vectorization "
-                f"(paths={vres.path_count}, colors={vres.color_count}); using palette "
-                "only (raster baking deferred to session 8)"
-            )
 
     tile_mm = float((canvas or {}).get("tile_mm", DEFAULT_TILE_MM))
     dpi = int((canvas or {}).get("dpi", DEFAULT_DPI))
 
-    raw = _assemble_intent(slots, motif_id=motif_id, tile_mm=tile_mm, dpi=dpi)
-    try:
-        result = validate_intent(raw, repair=True)
-    except IntentInvalid:
-        # Constrained retry (the image analog of the LLM re-prompt): drop the motif
-        # layer and keep background + stripe. If this still fails, IntentInvalid
-        # propagates and the route maps it to 422.
-        raw = _assemble_intent(slots, motif_id=None, tile_mm=tile_mm, dpi=dpi)
-        result = validate_intent(raw, repair=True)
+    raw = _assemble_intent(slots, tile_mm=tile_mm, dpi=dpi)
+    result = validate_intent(raw, repair=True)
 
     frozen = result.intent.model_dump(mode="json")
     warnings += list(result.warnings)
