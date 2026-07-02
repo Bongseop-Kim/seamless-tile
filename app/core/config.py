@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # free candidates before offering "generate new" (Recraft) behind a confirm gate.
     motif_candidate_top_k: int = Field(5, ge=1)  # env: MOTIF_CANDIDATE_TOP_K
 
+    # Deterministic session cost guard (session 17, S13). Per-session ceilings on the
+    # expensive ops; exceeding either hard-blocks (429) even on an explicit confirm
+    # (resource-ceiling spirit, README). Counters only -- no wall-clock/time-based limit.
+    session_recraft_limit: int = Field(3, ge=0)  # env: SESSION_RECRAFT_LIMIT
+    session_finalize_limit: int = Field(10, ge=0)  # env: SESSION_FINALIZE_LIMIT
+
     # Recraft motif generation (session 13, D11/M1). The detailed/painterly miss path
     # routes to Recraft; its output is path-flattened and its color count capped to this
     # many slots (excess colors are deterministically merged; spec §6.2/§12).

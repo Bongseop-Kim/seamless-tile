@@ -97,18 +97,26 @@ async def _session_generate(request: GenerateRequest) -> GenerateResponse:
     """Session path: run one turn through the LangGraph session graph. Returns a `pending`
     response when the turn pauses at the confirm gate, else the committed candidates."""
     from app.sessions import graph as sg
+    from app.sessions.budget import SessionBusy, session_inflight
 
-    result = await asyncio.to_thread(
-        _run_adapter,
-        lambda: sg.run_turn(
-            request.session_id,
-            prompt=request.prompt or "",
-            seed=request.seed,
-            colorway=request.colorway,
-            candidate_count=request.candidate_count,
-        ),
-    )
-    return await respond_session_turn(request.session_id, result)
+    try:
+        with session_inflight(request.session_id):
+            result = await asyncio.to_thread(
+                _run_adapter,
+                lambda: sg.run_turn(
+                    request.session_id,
+                    prompt=request.prompt or "",
+                    seed=request.seed,
+                    colorway=request.colorway,
+                    candidate_count=request.candidate_count,
+                ),
+            )
+            return await respond_session_turn(request.session_id, result)
+    except SessionBusy:
+        raise HTTPException(
+            status_code=409,
+            detail=[f"session {request.session_id!r} already has an operation in flight"],
+        ) from None
 
 
 async def respond_session_turn(session_id: str, result: dict) -> GenerateResponse:

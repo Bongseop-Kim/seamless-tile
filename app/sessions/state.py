@@ -25,7 +25,8 @@ class SessionState(TypedDict, total=False):
     colorway: str | None
     registry_version: str
     material_map: dict  # set_material writes here only — never the engine intent (§7)
-    budget: dict  # {"recraft_used": int} — counter only in P0; enforcement is P1 (S13)
+    budget: dict  # {"recraft_used": int, "finalize_used": int} — ceilings enforced in the
+    # route layer, pre-resume (app.sessions.budget, S13)
     turns: list[dict]  # {role, text, tool_calls?, gate?} — minimal history for edit summary
 
     # --- gate / in-flight (§8) ---

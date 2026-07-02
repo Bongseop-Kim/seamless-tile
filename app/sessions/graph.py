@@ -3,8 +3,9 @@
 A thin authoring adapter: ``classify → author|edit → apply_tools → resolve_gate → validate
 → commit``. The gate is the only place an expensive op can happen, and only after an
 ``interrupt`` (human-in-the-loop confirm, §8.2). Everything below the committed intent is
-the untouched deterministic engine. ``MemorySaver`` owns session state per
-``thread_id == session_id`` (P0 in-memory; Postgres persistence is P1).
+the untouched deterministic engine. The checkpointer (``app.sessions.checkpointer``) owns
+session state per ``thread_id == session_id`` -- ``MemorySaver`` when ``SUPABASE_DB_URL``
+is unset, ``PostgresSaver`` (client-only, no DDL) when it is set (session 17, S7).
 
 Nodes resolve their dependencies from the process-wide defaults (the same getters the
 stateless route uses), so there is no injection plumbing and test resets apply uniformly.
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import copy
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -25,9 +25,12 @@ from app.adapters.llm import build_intents
 from app.adapters.motif_resolver import present_candidates, resolve_motifs
 from app.adapters.recraft import generate_via_recraft, get_default_recraft_client
 from app.adapters.registry_fingerprint import registry_version_for
+from app.core.config import get_settings
 from app.engine.candidates import SOURCE_FIDELITY_VECTOR, generate_candidate_set
 from app.motifs.store import get_default_store
+from app.sessions.checkpointer import checkpointer_from_settings, close_checkpointer
 from app.sessions.state import SessionState, new_budget
+from app.sessions.store import upsert_session_row
 from app.sessions.tools import apply_tools
 from app.validate.intent import IntentInvalid, validate_intent
 
@@ -169,13 +172,20 @@ def resolve_gate(state: SessionState) -> dict:
         else present_candidates(spec, store=get_default_store(), embedding_client=emb)
     )
     # Pause the turn (checkpoint). The route surfaces this payload as `pending`; the
-    # select-motif / confirm endpoints resume with {action, motif_id?}.
+    # select-motif / confirm endpoints resume with {action, motif_id?}. `budget` is a cost
+    # hint only (S13) -- spend is always shown before the user confirms "generate".
+    settings = get_settings()
+    used = (state.get("budget") or {}).get("recraft_used", 0)
     decision = interrupt(
         {
             "type": "motif_candidates",
             "layer_id": spec.get("layer_id"),
             "spec": spec,
             "candidates": candidates,
+            "budget": {
+                "recraft_used": used,
+                "recraft_limit": settings.session_recraft_limit,
+            },
         }
     )
     # ---- resumes here ----
@@ -241,6 +251,15 @@ def commit(state: SessionState) -> dict:
     )
     if not result.candidates:
         raise AdapterClientError("no candidate could be composed")
+    # Best-effort mirror into `seamless_sessions` (monorepo-owned, S7/§11); never fails the
+    # turn -- the checkpointer (this graph's state) is the restore source of truth.
+    upsert_session_row(
+        thread_id=state["session_id"],
+        seed=state.get("seed"),
+        colorway=state.get("colorway"),
+        registry_version=reg,
+        current_intent=intent,
+    )
     render_batch = [
         {"id": rc.id, "svg": rc.candidate.svg, "tile_mm": rc.intent.canvas.tile_mm}
         for rc in result.candidates
@@ -296,7 +315,7 @@ def _build_graph():
         {"commit": "commit", "retry": "edit_intent", "done": END},
     )
     b.add_edge("commit", END)
-    return b.compile(checkpointer=MemorySaver())
+    return b.compile(checkpointer=checkpointer_from_settings(get_settings()))
 
 
 def _graph():
@@ -307,9 +326,10 @@ def _graph():
 
 
 def reset_sessions() -> None:
-    """Drop the in-memory session graph + its MemorySaver (test isolation / ops)."""
+    """Drop the session graph + its checkpointer (test isolation / ops)."""
     global _GRAPH
     _GRAPH = None
+    close_checkpointer()
 
 
 # --- entrypoints --------------------------------------------------------------
@@ -380,3 +400,22 @@ def set_candidate_previews(session_id: str, candidates: list[dict]) -> None:
     _graph().update_state(
         _cfg(session_id), {"current_candidates": candidates, "render_batch": []}
     )
+
+
+def pending_payload(session_id: str) -> dict | None:
+    """The live gate interrupt payload from the checkpoint, or ``None`` when not paused --
+    lets ``GET /sessions/{id}`` re-render the confirm UI after a process restart."""
+    snap = _graph().get_state(_cfg(session_id))
+    for task in snap.tasks or ():
+        interrupts = getattr(task, "interrupts", None)
+        if interrupts:
+            return interrupts[0].value
+    return None
+
+
+def increment_budget(session_id: str, key: str) -> None:
+    """Bump a budget counter outside the graph (e.g. ``finalize_used``): finalize runs via
+    its own route, not a graph node, so it must record its spend explicitly."""
+    budget = dict(get_state(session_id).get("budget") or new_budget())
+    budget[key] = budget.get(key, 0) + 1
+    _graph().update_state(_cfg(session_id), {"budget": budget})

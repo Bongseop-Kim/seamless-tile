@@ -12,7 +12,8 @@ a decision or trigger the finalize hand-off. Recraft can never fire without an e
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from contextlib import contextmanager
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,8 +23,22 @@ from app.api.routes.generate import _run_adapter, respond_session_turn
 from app.api.schemas.finalize import FinalizeRequest, FinalizeResponse
 from app.api.schemas.generate import GenerateResponse
 from app.sessions import graph as sg
+from app.sessions.budget import SessionBusy, budget_exceeded, session_inflight
+from app.sessions.store import upsert_session_row
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+class SessionRestoreResponse(BaseModel):
+    session_id: str
+    turns: list[dict[str, Any]] = Field(default_factory=list)
+    # [{id, png_url, colorway_id}] — no `intent` (§16: current_intent stays server-side,
+    # consistent with the slim /generate response policy).
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    pending: dict[str, Any] | None = None  # gate payload if paused (resume via select/confirm)
+    seed: int | None = None
+    colorway: str | None = None
+    budget: dict[str, Any] = Field(default_factory=dict)
 
 
 class SelectMotifRequest(BaseModel):
@@ -52,6 +67,54 @@ def _require_gate(session_id: str) -> None:
         )
 
 
+def _require_budget(session_id: str, kind: str) -> None:
+    # Checked BEFORE resuming the graph / firing the expensive op: rejecting from inside
+    # a resumed node would consume the interrupt and wedge the gate (S13; same reasoning
+    # as the pre-resume motif-id check below).
+    msg = budget_exceeded(sg.get_state(session_id).get("budget"), kind)
+    if msg:
+        raise HTTPException(status_code=429, detail=[msg])
+
+
+@contextmanager
+def _dedup(session_id: str):
+    """Serialize mutating ops per session (S13 in-flight lock); a duplicate call while one
+    is running gets a 409 instead of double-firing Recraft/finalize."""
+    try:
+        with session_inflight(session_id):
+            yield
+    except SessionBusy:
+        raise HTTPException(
+            status_code=409,
+            detail=[f"session {session_id!r} already has an operation in flight"],
+        ) from None
+
+
+@router.get(
+    "/{session_id}",
+    response_model=SessionRestoreResponse,
+    summary="Restore a session's conversation, committed candidates, and gate state",
+)
+async def get_session(session_id: str) -> SessionRestoreResponse:
+    values = _run_adapter(lambda: sg.get_state(session_id))
+    pending = _run_adapter(lambda: sg.pending_payload(session_id))
+    if not values and pending is None:
+        raise HTTPException(status_code=404, detail=[f"unknown session {session_id!r}"])
+    candidates = [
+        {k: c.get(k) for k in ("id", "png_url", "colorway_id")}
+        for c in (values.get("current_candidates") or [])
+    ]
+    return SessionRestoreResponse(
+        session_id=session_id,
+        turns=values.get("turns") or [],
+        candidates=candidates,
+        pending=pending,
+        seed=values.get("seed"),
+        colorway=values.get("colorway"),
+        budget=values.get("budget") or {},
+    )
+
+
 @router.post(
     "/{session_id}/select-motif",
     response_model=GenerateResponse,
@@ -72,12 +135,13 @@ async def select_motif(
         raise HTTPException(
             status_code=404, detail=[f"unknown motif_id {request.motif_id!r}"]
         ) from None
-    result = _run_adapter(
-        lambda: sg.resume_turn(
-            session_id, {"action": "select", "motif_id": request.motif_id}
+    with _dedup(session_id):
+        result = _run_adapter(
+            lambda: sg.resume_turn(
+                session_id, {"action": "select", "motif_id": request.motif_id}
+            )
         )
-    )
-    return await respond_session_turn(session_id, result)
+        return await respond_session_turn(session_id, result)
 
 
 @router.post(
@@ -88,10 +152,12 @@ async def select_motif(
 async def confirm(session_id: str, request: Annotated[ConfirmRequest, Body()]):
     if request.action == "generate_motif":
         _require_gate(session_id)
-        result = _run_adapter(
-            lambda: sg.resume_turn(session_id, {"action": "generate"})
-        )
-        return await respond_session_turn(session_id, result)
+        _require_budget(session_id, "recraft")
+        with _dedup(session_id):
+            result = _run_adapter(
+                lambda: sg.resume_turn(session_id, {"action": "generate"})
+            )
+            return await respond_session_turn(session_id, result)
 
     # finalize: hand the chosen committed candidate to the (free, local) fabric render.
     # Reject while an edit turn is paused at the gate — current_candidates would still be
@@ -101,7 +167,9 @@ async def confirm(session_id: str, request: Annotated[ConfirmRequest, Body()]):
             status_code=409,
             detail=[f"session {session_id!r} has a pending motif decision; resolve it first"],
         )
-    candidates = sg.get_state(session_id).get("current_candidates") or []
+    _require_budget(session_id, "finalize")
+    state = sg.get_state(session_id)
+    candidates = state.get("current_candidates") or []
     if not candidates:
         raise HTTPException(
             status_code=404, detail=[f"session {session_id!r} has no committed candidate"]
@@ -123,4 +191,15 @@ async def confirm(session_id: str, request: Annotated[ConfirmRequest, Body()]):
         material_map=request.material_map,
         **({"weave": request.weave} if request.weave else {}),
     )
-    return await finalize_candidate(fin)
+    with _dedup(session_id):
+        resp = await finalize_candidate(fin)
+    sg.increment_budget(session_id, "finalize_used")
+    upsert_session_row(
+        thread_id=session_id,
+        status="finalized",
+        seed=state.get("seed"),
+        colorway=chosen.get("colorway_id") or state.get("colorway"),
+        registry_version=state.get("registry_version"),
+        current_intent=state.get("current_intent"),
+    )
+    return resp
