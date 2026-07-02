@@ -205,7 +205,7 @@ def _segment(intent, palette, *, dpi: int, tile_mm: float):
         id=_LABEL_COLORWAY_ID,
         mapping={sid: rgb_to_hex(*rgb) for sid, rgb in zip(slot_ids, colors, strict=True)},
     )
-    label_palette = Palette(slots=palette.slots, colorways=palette.colorways + (label_cw,))
+    label_palette = Palette(slots=palette.slots, colorways=(*palette.colorways, label_cw))
     label_svg = compose(intent, label_palette, _LABEL_COLORWAY_ID)
     png, _ = rasterize(label_svg, "png", dpi=dpi, width_mm=tile_mm)
     rgba = Image.open(io.BytesIO(png)).convert("RGBA")

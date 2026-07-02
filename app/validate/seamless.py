@@ -8,17 +8,27 @@ Pixel = Sequence[int]
 Rows = list[list[Pixel]]
 
 
+def flatten_pixels(image) -> list[tuple[int, ...]]:
+    """Flatten a PIL image's pixel data to RGBA/RGB tuples.
+
+    Some Pillow builds' ``get_flattened_data`` returns a flat int buffer instead of
+    per-pixel tuples; ``getbands`` gives the channel count to regroup it."""
+    data = (
+        list(image.get_flattened_data())
+        if hasattr(image, "get_flattened_data")
+        else list(image.getdata())
+    )
+    if data and isinstance(data[0], int):
+        bands = len(image.getbands()) if hasattr(image, "getbands") else 4
+        data = [tuple(data[i : i + bands]) for i in range(0, len(data), bands)]
+    return data
+
+
 def _rows(tile_rgba) -> Rows:
     """Normalize a PIL image or nested RGBA pixel rows to list-backed rows."""
     if hasattr(tile_rgba, "getdata") and hasattr(tile_rgba, "size"):
         width, height = tile_rgba.size
-        if hasattr(tile_rgba, "get_flattened_data"):
-            data = list(tile_rgba.get_flattened_data())
-            if data and isinstance(data[0], int):
-                bands = len(tile_rgba.getbands()) if hasattr(tile_rgba, "getbands") else 4
-                data = [tuple(data[i : i + bands]) for i in range(0, len(data), bands)]
-        else:
-            data = list(tile_rgba.getdata())
+        data = flatten_pixels(tile_rgba)
         return [data[y * width : (y + 1) * width] for y in range(height)]
     rows = []
     width = None

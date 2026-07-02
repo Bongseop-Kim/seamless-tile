@@ -22,6 +22,7 @@ from app.motifs.registry import (
 )
 from app.render.raster import find_renderer, rasterize
 from app.validate.intent import IntentInvalid, validate_intent
+from app.validate.seamless import flatten_pixels
 
 NS = "{http://www.w3.org/2000/svg}"
 
@@ -373,14 +374,7 @@ def test_single_color_motif_composes_via_color():
 
 
 def _close(image: Image.Image, rgb: tuple[int, int, int], tol: int = 28) -> int:
-    data = (
-        list(image.get_flattened_data())
-        if hasattr(image, "get_flattened_data")
-        else list(image.getdata())
-    )
-    if data and isinstance(data[0], int):
-        bands = len(image.getbands())
-        data = [tuple(data[i : i + bands]) for i in range(0, len(data), bands)]
+    data = flatten_pixels(image)
     count = 0
     for pixel in data:
         if all(abs(int(pixel[i]) - rgb[i]) <= tol for i in range(3)):

@@ -285,7 +285,7 @@ def test_yarn_dyed_motif_uses_diagonal_thread_inlay():
     intent = _motif_intent()
     base_intent = {
         **intent,
-        "layers": [l for l in intent["layers"] if l["type"] != "motif"],
+        "layers": [layer for layer in intent["layers"] if layer["type"] != "motif"],
     }
     threaded = Image.open(
         io.BytesIO(render_fabric(intent, weave="solid", relief_strength=0))
