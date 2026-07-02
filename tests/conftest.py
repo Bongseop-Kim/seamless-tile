@@ -48,6 +48,8 @@ def _block_external_side_effects(request, monkeypatch):
     import app.adapters.llm as llm_adapter
     import app.adapters.embedding as emb_adapter
     import app.adapters.recraft as recraft_adapter
+    import app.adapters.edit_llm as edit_llm_adapter
+    import app.sessions.graph as session_graph
     import app.api.routes.generate as generate_route
 
     def _reset_process_globals() -> None:
@@ -68,6 +70,8 @@ def _block_external_side_effects(request, monkeypatch):
         recraft_adapter.clear_recraft_motif_cache()
         recraft_adapter.clear_vectorize_cache()
         recraft_adapter.set_default_recraft_client(None)
+        edit_llm_adapter.set_default_edit_client(None)
+        session_graph.reset_sessions()  # fresh MemorySaver so sessions don't leak
         for key in [k for k in MOTIFS if k.startswith("recraft-")]:
             del MOTIFS[key]
 

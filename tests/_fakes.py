@@ -33,3 +33,17 @@ class _ScriptedRecraft:
     def generate(self, prompt: str) -> str:
         self.calls.append(prompt)
         return self._svgs[min(len(self.calls) - 1, len(self._svgs) - 1)]
+
+
+class _ScriptedEditLLM:
+    """Returns canned edit tool-call lists in order (last repeats); records calls. Mirrors
+    the ``EditLLM.propose(summary, instruction) -> list[{name, args}]`` seam so session
+    edit turns run without a real bind_tools LLM."""
+
+    def __init__(self, *tool_call_lists: list[dict]) -> None:
+        self._lists = list(tool_call_lists) or [[]]
+        self.calls: list[tuple[str, str]] = []
+
+    def propose(self, summary: str, instruction: str) -> list[dict]:
+        self.calls.append((summary, instruction))
+        return self._lists[min(len(self.calls) - 1, len(self._lists) - 1)]

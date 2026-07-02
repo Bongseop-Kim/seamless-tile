@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
     motif_similarity_tau: float = Field(0.60, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
 
+    # Conversational sessions (session 16). Interactive motif reuse presents this many
+    # free candidates before offering "generate new" (Recraft) behind a confirm gate.
+    motif_candidate_top_k: int = Field(5, ge=1)  # env: MOTIF_CANDIDATE_TOP_K
+
     # Recraft motif generation (session 13, D11/M1). The detailed/painterly miss path
     # routes to Recraft; its output is path-flattened and its color count capped to this
     # many slots (excess colors are deterministically merged; spec §6.2/§12).

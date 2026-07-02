@@ -52,6 +52,106 @@ def reset_response_cache() -> None:
     """Clear the in-process generate response cache (test isolation / ops)."""
     _RESPONSE_CACHE.clear()
 
+
+async def render_previews(
+    items: list[dict], *, request_id: str, warnings: list[str]
+) -> list[str | None]:
+    """Rasterize ``[{id, svg, tile_mm}]`` to preview PNG urls (parallel, best-effort).
+
+    Shared by the stateless and session paths. References the module-level
+    ``preview_configured``/``make_preview`` so test monkeypatches on this module apply. A
+    render/upload miss degrades that item to ``None`` + a warning.
+    """
+    if not preview_configured():
+        warnings.append("preview storage not configured; png_url is null")
+        return [None] * len(items)
+    settings = get_settings()
+    loop = asyncio.get_event_loop()
+    rendered = await asyncio.gather(
+        *(
+            loop.run_in_executor(
+                None,
+                partial(
+                    make_preview,
+                    it["svg"],
+                    tile_mm=it["tile_mm"],
+                    dpi=settings.preview_dpi,
+                    path=f"{request_id}/{it['id']}.png",
+                ),
+            )
+            for it in items
+        ),
+        return_exceptions=True,
+    )
+    urls: list[str | None] = []
+    for it, res in zip(items, rendered, strict=True):
+        if isinstance(res, BaseException):
+            warnings.append(f"preview unavailable for candidate {it['id']}: {res}")
+            urls.append(None)
+        else:
+            urls.append(res)
+    return urls
+
+
+async def _session_generate(request: GenerateRequest) -> GenerateResponse:
+    """Session path: run one turn through the LangGraph session graph. Returns a `pending`
+    response when the turn pauses at the confirm gate, else the committed candidates."""
+    from app.sessions import graph as sg
+
+    result = await asyncio.to_thread(
+        _run_adapter,
+        lambda: sg.run_turn(
+            request.session_id,
+            prompt=request.prompt or "",
+            seed=request.seed,
+            colorway=request.colorway,
+            candidate_count=request.candidate_count,
+        ),
+    )
+    return await respond_session_turn(request.session_id, result)
+
+
+async def respond_session_turn(session_id: str, result: dict) -> GenerateResponse:
+    """Turn a raw graph result into a slim response: `pending` when paused at the gate,
+    else render the committed candidates and persist their preview urls. Shared by the
+    session /generate branch and the select-motif/confirm resume endpoints."""
+    from app.sessions import graph as sg
+
+    request_id = get_request_id()
+    warnings = list(result.get("warnings") or [])
+    pending = sg.pending_of(result)
+    if pending is not None:
+        return GenerateResponse(
+            request_id=request_id,
+            session_id=session_id,
+            candidates=[],
+            warnings=warnings,
+            pending=pending,
+        )
+    # Edit that still failed validation after its one retry (spec §6.3) → 422 (semantic),
+    # same mapping as the stateless adapter path. No candidate was committed.
+    errors = result.get("validate_errors")
+    if errors:
+        raise HTTPException(status_code=422, detail=list(errors))
+    batch = result.get("render_batch") or []
+    png_urls = await render_previews(batch, request_id=request_id, warnings=warnings)
+    current = result.get("current_candidates") or []
+    sg.set_candidate_previews(
+        session_id,
+        [{**c, "png_url": url} for c, url in zip(current, png_urls, strict=False)],
+    )
+    warnings = list(dict.fromkeys(warnings))
+    log_metrics("session_turn", returned=len(batch), warnings=len(warnings))
+    return GenerateResponse(
+        request_id=request_id,
+        session_id=session_id,
+        candidates=[
+            CandidateResponse(id=b["id"], png_url=url)
+            for b, url in zip(batch, png_urls, strict=True)
+        ],
+        warnings=warnings,
+    )
+
 _GENERATE_DESCRIPTION = """
 `intent`, `reference_image`, `prompt` 중 하나로 seamless SVG candidate를 생성합니다.
 
@@ -169,6 +269,11 @@ async def generate_candidate(
     ],
     background_tasks: BackgroundTasks,
 ) -> GenerateResponse:
+    # Session 16: a session_id opts into the conversational graph (author/edit turn,
+    # confirm gate). Absent => the stateless path below runs unchanged (acceptance #6).
+    if request.session_id:
+        return await _session_generate(request)
+
     # Resolve the intent: direct > reference_image > prompt. The adapters live outside
     # the engine; they freeze/cache their (non-deterministic) output so the pipeline
     # below stays deterministic. Adapter IntentInvalid -> 422 (after its own one-shot
@@ -340,33 +445,11 @@ async def generate_candidate(
     # (the slimmed response no longer returns svg/intent/repro). Renders run in parallel
     # and are best-effort per candidate — a render/upload miss degrades to png_url=null.
     render_started = time.perf_counter()
-    if preview_configured():
-        rendered = await asyncio.gather(
-            *(
-                loop.run_in_executor(
-                    None,
-                    partial(
-                        make_preview,
-                        rc.candidate.svg,
-                        tile_mm=rc.intent.canvas.tile_mm,
-                        dpi=settings.preview_dpi,
-                        path=f"{request_id}/{rc.id}.png",
-                    ),
-                )
-                for rc in result.candidates
-            ),
-            return_exceptions=True,
-        )
-        png_urls: list[str | None] = []
-        for rc, res in zip(result.candidates, rendered, strict=True):
-            if isinstance(res, BaseException):
-                warnings.append(f"preview unavailable for candidate {rc.id}: {res}")
-                png_urls.append(None)
-            else:
-                png_urls.append(res)
-    else:
-        warnings.append("preview storage not configured; png_url is null")
-        png_urls = [None] * len(result.candidates)
+    items = [
+        {"id": rc.id, "svg": rc.candidate.svg, "tile_mm": rc.intent.canvas.tile_mm}
+        for rc in result.candidates
+    ]
+    png_urls = await render_previews(items, request_id=request_id, warnings=warnings)
     render_ms = round((time.perf_counter() - render_started) * 1000, 1)
 
     # Intent-level warnings (gamut, dpi clamp, ...) are emitted once per candidate by the
