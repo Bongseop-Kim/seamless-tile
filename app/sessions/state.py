@@ -30,7 +30,6 @@ class SessionState(TypedDict, total=False):
     turns: list[dict]  # {role, text, tool_calls?, gate?} — minimal history for edit summary
 
     # --- gate / in-flight (§8) ---
-    pending: dict | None  # surfaced to the client while awaiting a gate decision
     working_intent: dict | None  # in-progress intent before commit
     pending_specs: list[dict]  # motif specs still awaiting the resolve gate
     validate_errors: list[str]  # carried out to a 422 when the (retried) edit won't validate

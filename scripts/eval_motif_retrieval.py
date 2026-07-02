@@ -197,27 +197,14 @@ def metrics(scored: list[dict], tau: float) -> dict:
 
 
 def sweep(scored: list[dict]) -> None:
-    """Print a tau curve: coarse 0.05 steps, refined to 0.01 steps in the transition
-    region (the span of best_sim among vector-path rows) where metrics actually move."""
-    vector_sims = [r["best_sim"] for r in scored if r["path"] == "vector"]
-    if vector_sims:
-        lo, hi = min(vector_sims), max(vector_sims)
-    else:
-        lo, hi = 1.0, 0.0  # empty region -> no fine grid
-
-    taus: set[float] = {round(i / 100, 2) for i in range(0, 101, 5)}
-    for i in range(0, 101):
-        t = round(i / 100, 2)
-        if lo <= t <= hi:
-            taus.add(t)
-
+    """Print the tau curve at plain 0.01 steps — offline script, the full grid is free."""
     header = (
         f"{'tau':>6} {'precision':>10} {'recall':>8} {'gen_rate':>9} "
         f"{'false_reuse':>12} {'tp':>4} {'fp':>4} {'fn':>4} {'tn':>4}"
     )
     print(header)
-    for t in sorted(taus):
-        m = metrics(scored, t)
+    for i in range(0, 101):
+        m = metrics(scored, round(i / 100, 2))
         print(
             f"{m['tau']:>6.2f} {m['precision']:>10.3f} {m['recall']:>8.3f} "
             f"{m['generate_rate']:>9.3f} {m['false_reuse_rate']:>12.3f} "
@@ -251,46 +238,31 @@ def recommend(scored: list[dict]) -> tuple[float, str]:
     else:
         lines.append("margin (s_gen - s_imp)  = n/a")
 
-    if s_imp is not None and s_gen is not None and s_imp < s_gen:
-        margin = s_gen - s_imp
-        if margin < 0.05:
-            tau = round(s_imp + 0.75 * margin, 2)
-            lines.append(
-                f"clean gap but narrow margin ({margin:.4f} < 0.05) -> biased upward"
-            )
-        else:
-            tau = round((s_imp + s_gen) / 2, 2)
-            lines.append("clean gap -> midpoint")
-    else:
-        # Fall back: smallest tau on the 0.01 grid with zero false reuse.
-        best_recall_at_zero_fr = 0.0
-        tau = 1.0
-        found = False
-        for i in range(0, 101):
-            t = round(i / 100, 2)
-            m = metrics(scored, t)
-            if m["false_reuse_rate"] == 0.0:
-                if not found:
-                    tau = t
-                    found = True
-                best_recall_at_zero_fr = max(best_recall_at_zero_fr, m["recall"])
-        if not found:
-            tau = 1.0
-        best_overall_recall = max(
-            (metrics(scored, round(i / 100, 2))["recall"] for i in range(0, 101)),
-            default=0.0,
-        )
-        lines.append(
-            "no clean gap -> fallback to smallest tau on the 0.01 grid with "
-            "false_reuse_rate == 0.0"
-        )
-        lines.append(
-            f"recall sacrificed: {best_overall_recall - best_recall_at_zero_fr:.3f} "
-            f"(recall at this tau = {best_recall_at_zero_fr:.3f}, "
-            f"best achievable recall anywhere = {best_overall_recall:.3f})"
-        )
+    # Rule: smallest tau on the 0.01 grid with zero false reuse. (A clean-gap/midpoint
+    # rule only applies when impostor and genuine sims don't overlap -- this labelset
+    # never separates, so that branch was dead code; the margin above shows why.)
+    best_recall_at_zero_fr = 0.0
+    tau = 1.0
+    found = False
+    for i in range(0, 101):
+        t = round(i / 100, 2)
+        m = metrics(scored, t)
+        if m["false_reuse_rate"] == 0.0:
+            if not found:
+                tau = t
+                found = True
+            best_recall_at_zero_fr = max(best_recall_at_zero_fr, m["recall"])
+    best_overall_recall = max(
+        (metrics(scored, round(i / 100, 2))["recall"] for i in range(0, 101)),
+        default=0.0,
+    )
+    lines.append("smallest tau on the 0.01 grid with false_reuse_rate == 0.0")
+    lines.append(
+        f"recall sacrificed: {best_overall_recall - best_recall_at_zero_fr:.3f} "
+        f"(recall at this tau = {best_recall_at_zero_fr:.3f}, "
+        f"best achievable recall anywhere = {best_overall_recall:.3f})"
+    )
 
-    m_final = metrics(scored, tau)
     fp_names = [
         r["name"]
         for r in scored
@@ -312,18 +284,10 @@ def recommend(scored: list[dict]) -> tuple[float, str]:
 
 
 def _write_embeddings(cache: dict) -> None:
-    """Hand-assemble compact JSON: one vector per line, no ``indent=`` (which would put
-    one float per line and blow up the file size)."""
-    path = FIXTURE_DIR / "embeddings.json"
-    vectors = cache["vectors"]
-    lines = ["{", f'  "model": {json.dumps(cache["model"])},', '  "vectors": {']
-    for i, key in enumerate(sorted(vectors)):
-        comma = "," if i < len(vectors) - 1 else ""
-        vec_json = json.dumps(vectors[key], separators=(",", ":"))
-        lines.append(f"    {json.dumps(key)}: {vec_json}{comma}")
-    lines.append("  }")
-    lines.append("}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # sort_keys keeps regeneration byte-stable; compact separators keep the file small.
+    (FIXTURE_DIR / "embeddings.json").write_text(
+        json.dumps(cache, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _run_embed(labelset: dict, cache: dict) -> dict:

@@ -91,8 +91,36 @@ _YARN_MAP = {"ground": "solid", "band_a": "twill-45",
              "band_b": "twill-0", "band_c": "herringbone"}
 
 
+def _motif_intent() -> dict:
+    """The stripe design plus a registered "circle" motif layer (color slot ``ink``) —
+    exercises the MOTIF_WEAVE default-pin path, which the stripe-only ``_intent`` never
+    reaches."""
+    from tests.test_intent import mvp_intent  # noqa: F401  registers the circle motif
+
+    intent = _intent("yarn_dyed")
+    intent["palette"]["slots"].append({"id": "ink", "hex": "#f5ca57"})
+    intent["colorways"][0]["mapping"]["ink"] = "#f5ca57"
+    intent["layers"].append({
+        "id": "dots", "type": "motif", "z_order": 2,
+        "params": {"motif_id": "circle", "size_mm": 4, "color": "ink"},
+        "placement": {"type": "point_set", "point_set": {"points": [[24, 24]]}},
+    })
+    return intent
+
+
 def _seam_max(png: bytes) -> float:
     return max(edge_seam(Image.open(io.BytesIO(png)).convert("RGBA")))
+
+
+def _tiling_excess(png: bytes) -> tuple[float, float]:
+    """Repeat the tile 2x2 and measure the real internal seam (see tiling_seam)."""
+    tile = Image.open(io.BytesIO(png)).convert("RGBA")
+    w, h = tile.size
+    big = Image.new("RGBA", (w * 2, h * 2))
+    for i in (0, 1):
+        for j in (0, 1):
+            big.paste(tile, (i * w, j * h))
+    return tiling_seam(big, w)
 
 
 # --- 1. texture conversion --------------------------------------------------
@@ -195,13 +223,31 @@ def test_relief_keeps_seam():
     # tiling_seam: actually repeat the tile 2x2 and confirm the real internal seam has no
     # discontinuity beyond the interior baseline (rims come from wrap-around offset).
     fab = render_fabric(_intent("yarn_dyed"), material_map=_YARN_MAP, relief_strength=3.0)
-    tile = Image.open(io.BytesIO(fab)).convert("RGBA")
-    w, h = tile.size
-    big = Image.new("RGBA", (w * 2, h * 2))
-    for i in (0, 1):
-        for j in (0, 1):
-            big.paste(tile, (i * w, j * h))
-    excess_x, excess_y = tiling_seam(big, w)
+    excess_x, excess_y = _tiling_excess(fab)
+    assert excess_x <= TILING_SEAM_TOL
+    assert excess_y <= TILING_SEAM_TOL
+
+
+# --- 4c. MOTIF_WEAVE pin: a default for unmapped motif slots, not an override --
+
+@needs_renderer
+def test_motif_pin_defaults_and_user_map_wins():
+    intent = _motif_intent()
+    pinned = render_fabric(intent, weave="solid")  # ink unmapped -> MOTIF_WEAVE default
+    overridden = render_fabric(intent, weave="solid", material_map={"ink": "solid"})
+    explicit = render_fabric(intent, weave="solid", material_map={"ink": "twill-45"})
+    assert pinned != overridden  # the pin is real: unmapped motif slot got twill-45, not solid
+    assert pinned == explicit  # ...and it is only a default: an explicit entry matches it
+
+
+@needs_renderer
+def test_motif_intent_default_relief_deterministic_and_seamless():
+    # The default yarn-dyed path (pin + relief ON) with a motif present: still
+    # byte-deterministic and still tileable.
+    intent = _motif_intent()
+    a = render_fabric(intent, weave="solid")
+    assert a == render_fabric(intent, weave="solid")
+    excess_x, excess_y = _tiling_excess(a)
     assert excess_x <= TILING_SEAM_TOL
     assert excess_y <= TILING_SEAM_TOL
 

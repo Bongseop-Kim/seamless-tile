@@ -59,7 +59,6 @@ class ToolOutcome:
     intent: dict
     motif_specs: list[dict] = field(default_factory=list)  # need the resolve gate
     state_updates: dict = field(default_factory=dict)  # colorway/seed/material_map merge
-    recompose: bool = False  # regenerate: re-emit candidates from the same inputs
     warnings: list[str] = field(default_factory=list)
 
 
@@ -315,7 +314,7 @@ def apply_tools(intent_raw: dict, tool_calls: list[dict]) -> ToolOutcome:
             elif name == "set_material":
                 material_map.update(_set_material(intent, args))
             elif name == "regenerate":
-                out.recompose = True
+                pass  # valid no-op: commit re-emits candidates every turn anyway
         except ToolArgError as exc:
             out.warnings.append(f"tool {name!r} skipped: {exc}")
 

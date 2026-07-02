@@ -74,13 +74,12 @@ class GenerateResponse(BaseModel):
     # response stays byte-identical to the pre-session shape — without stripping the
     # candidates' own null ``png_url`` (which a blanket exclude_none would remove).
     session_id: str | None = None
-    turn_id: str | None = None
     pending: dict[str, Any] | None = None  # gate: motif candidates / awaiting confirm
 
     @model_serializer(mode="wrap")
     def _drop_null_session_fields(self, handler):
         data = handler(self)
-        for key in ("session_id", "turn_id", "pending"):
+        for key in ("session_id", "pending"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data

@@ -99,6 +99,21 @@ async def _session_generate(request: GenerateRequest) -> GenerateResponse:
     from app.sessions import graph as sg
     from app.sessions.budget import SessionBusy, session_inflight
 
+    # Session 18: a fork must target an existing commit checkpoint of THIS session. An
+    # unknown (or cross-session) id would otherwise restart the graph from an empty state
+    # and silently author a brand-new design at the head. Every checkpoint exposed by
+    # `list_turn_checkpoints` carries `current_intent`, so its absence means "not ours".
+    if request.from_checkpoint:
+        forked = sg.get_state(request.session_id, request.from_checkpoint)
+        if not forked.get("current_intent"):
+            raise HTTPException(
+                status_code=404,
+                detail=[
+                    f"unknown checkpoint {request.from_checkpoint!r} "
+                    f"for session {request.session_id!r}"
+                ],
+            )
+
     try:
         with session_inflight(request.session_id):
             result = await asyncio.to_thread(

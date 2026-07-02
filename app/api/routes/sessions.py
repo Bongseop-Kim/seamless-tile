@@ -36,6 +36,25 @@ from app.sessions.store import upsert_session_row
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+def _session_weave_map(state: dict, intent: dict) -> dict[str, str]:
+    """Translate the rich ``set_material`` session map (``{target: {fabric, finish,
+    lighting}}``, §7) into finalize's ``{slot: weave}`` form. Only entries whose target is
+    a palette slot and whose ``fabric`` names a known weave asset are renderable today;
+    finish/lighting and layer targets have no raster representation and are ignored.
+    Empty for ``print`` intents — finalize rejects material_map there (uniform ink)."""
+    if (intent.get("production") or {}).get("method") != "yarn_dyed":
+        return {}
+    from app.render.fabric import available_weaves
+
+    slots = {s["id"] for s in (intent.get("palette") or {}).get("slots") or []}
+    weaves = available_weaves()
+    return {
+        target: mat["fabric"]
+        for target, mat in (state.get("material_map") or {}).items()
+        if target in slots and mat.get("fabric") in weaves
+    }
+
+
 class SessionRestoreResponse(BaseModel):
     session_id: str
     turns: list[dict[str, Any]] = Field(default_factory=list)
@@ -224,12 +243,16 @@ async def confirm(session_id: str, request: Annotated[ConfirmRequest, Body()]):
             raise HTTPException(
                 status_code=404, detail=[f"unknown candidate {request.candidate_id!r}"]
             )
-    # ponytail: P0 forwards explicit finalize knobs (or defaults); translating the rich
-    # set_material session map into finalize's {slot: weave} form is session-15/P1 work.
+    # Conversational set_material flows into the fabric render here; an explicit
+    # material_map on the finalize request wins per slot.
+    material_map = {
+        **_session_weave_map(state, chosen["intent"]),
+        **(request.material_map or {}),
+    }
     fin = FinalizeRequest(
         intent=chosen["intent"],
         colorway_id=request.colorway_id or chosen.get("colorway_id"),
-        material_map=request.material_map,
+        material_map=material_map or None,
         **({"weave": request.weave} if request.weave else {}),
     )
     with _dedup(session_id):

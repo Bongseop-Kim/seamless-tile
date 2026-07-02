@@ -32,7 +32,6 @@ from app.validate.intent import validate_intent
 # Tileable weave photos, user-managed (made externally, dropped in). The app only READS
 # this directory; it never writes/generates here. Assets are part of the determinism input.
 _ASSETS = Path(__file__).parent / "assets" / "fabric"
-ASSETS_VERSION = "v2"
 
 # Texture strength: amplifies the weave's darkening in the multiply, pivoted at white so
 # highlights stay neutral and the weave shadows deepen -> the texture reads more strongly.
@@ -237,9 +236,9 @@ def render_fabric(
       (``twill-0``/``twill-45``) covers the whole tile; ``material_map`` is rejected.
     - **yarn_dyed**: woven from pre-dyed yarns -> ``material_map`` mixes weaves per color
       slot (``solid``/``twill-0``/``twill-45``/``herringbone``); unmapped slots fall back
-      to ``weave``. Motif color slots are always pinned to ``MOTIF_WEAVE`` (twill-45),
-      overriding ``material_map``, so a motif reads as one uniform fabric while
-      stripe/background slots keep their varied weaves. Color-slot boundaries are also
+      to ``weave``. Unmapped motif color slots default to ``MOTIF_WEAVE`` (twill-45) so a
+      motif reads as one uniform fabric, but an explicit ``material_map`` entry for a
+      motif slot wins. Color-slot boundaries are also
       embossed (``relief_strength``) so motifs read as raised threads; ``0`` disables.
       Relief/pin are ignored for print (flat ink).
 
@@ -276,13 +275,14 @@ def render_fabric(
             bad_weaves = sorted(set(material_map.values()) - set(weaves))
             if bad_weaves:
                 raise FabricError(f"material_map uses unknown weaves: {bad_weaves}")
-        # Motifs are woven in one uniform twill: pin their slots last so they win over any
-        # per-region weave. Slots come from the validated intent (already valid palette
-        # ids). Skipped if the twill asset is missing.
+        # Motifs default to one uniform twill so an unmapped motif reads as one fabric —
+        # but an explicit per-region weave (user's material_map) wins over the pin. Slots
+        # come from the validated intent (already valid palette ids). Skipped if the twill
+        # asset is missing.
         if MOTIF_WEAVE in weaves:
             motif_pins = {s: MOTIF_WEAVE for s in _motif_slots(intent)}
             if motif_pins:
-                material_map = {**(material_map or {}), **motif_pins}
+                material_map = {**motif_pins, **(material_map or {})}
 
     dpi = dpi or settings.fabric_dpi
     if dpi > settings.max_dpi:

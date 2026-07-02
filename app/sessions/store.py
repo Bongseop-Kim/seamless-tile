@@ -24,7 +24,7 @@ _UPSERT = (
     "ON CONFLICT (thread_id) DO UPDATE SET "
     "status = EXCLUDED.status, seed = EXCLUDED.seed, colorway = EXCLUDED.colorway, "
     "registry_version = EXCLUDED.registry_version, "
-    "current_intent = EXCLUDED.current_intent, updated_at = now()"
+    "current_intent = EXCLUDED.current_intent"  # updated_at: schema trigger owns it
 )
 
 

@@ -24,8 +24,9 @@ class FinalizeRequest(BaseModel):
     #   print     -> a single twill weave over the whole tile (material_map rejected).
     #   yarn_dyed -> per-region weave mix via material_map.
     production_method: Literal["print", "yarn_dyed"] | None = None
-    # Weave applied uniformly (print) or as the per-region fallback (yarn_dyed):
-    # solid | twill-0 | twill-45 | herringbone (print requires a twill-*).
+    # Weave applied uniformly (print) or as the per-region fallback (yarn_dyed). Valid
+    # names = assets/fabric PNG stems, e.g. check | herringbone | jacquard | pindot |
+    # solid | twill-0 | twill-45 (print requires a twill-*).
     weave: str = "twill-45"
     # yarn_dyed only: color-slot id -> weave. Slots absent here fall back to ``weave``.
     # An empty/omitted map yields the uniform result.

@@ -312,6 +312,52 @@ def test_finalize_only_on_explicit_confirm(fake_preview, monkeypatch):
     assert calls["n"] == 1  # fabric render ran only on the explicit finalize button
 
 
+# --- set_material flows into the finalize render (§7 -> fabric) ----------------
+
+
+def _finalize_with_session_material(sid, monkeypatch, confirm_body):
+    """Author a yarn_dyed stripe, set_material on the `accent` slot, then finalize.
+    Returns the kwargs the fabric render was called with."""
+    import app.api.routes.finalize as fin
+
+    captured: dict = {}
+
+    def spy(intent, **kwargs):
+        captured.update(kwargs)
+        return b"PNGDATA"
+
+    monkeypatch.setattr(fin, "render_fabric", spy)
+    yarn = copy.deepcopy(BASE_STRIPE)
+    yarn["production"]["method"] = "yarn_dyed"
+    _set_author(yarn)
+    client.post("/api/v1/generate", json={"session_id": sid, "prompt": "stripes"})
+    _set_edit(
+        [{"name": "set_material", "args": {"target": "accent", "fabric": "herringbone"}}]
+    )
+    client.post(
+        "/api/v1/generate", json={"session_id": sid, "prompt": "accent in herringbone"}
+    )
+    resp = client.post(f"/api/v1/sessions/{sid}/confirm", json=confirm_body)
+    assert resp.status_code == 200, resp.text
+    return captured
+
+
+def test_set_material_flows_into_finalize(fake_preview, monkeypatch):
+    captured = _finalize_with_session_material(
+        "fin-material", monkeypatch, {"action": "finalize"}
+    )
+    assert captured["material_map"] == {"accent": "herringbone"}
+
+
+def test_finalize_request_material_map_wins_over_session(fake_preview, monkeypatch):
+    captured = _finalize_with_session_material(
+        "fin-material-override",
+        monkeypatch,
+        {"action": "finalize", "material_map": {"accent": "pindot"}},
+    )
+    assert captured["material_map"] == {"accent": "pindot"}
+
+
 # --- acceptance #7: in-memory degrade -----------------------------------------
 
 

@@ -207,3 +207,39 @@ def test_from_checkpoint_without_session_is_422():
     resp = client.post("/api/v1/generate", json={"prompt": "x", "from_checkpoint": "some-id"})
     assert resp.status_code == 422
     assert "from_checkpoint" in str(resp.json()["detail"])
+
+
+def test_fork_unknown_checkpoint_is_404(fake_preview):
+    import app.sessions.graph as sg
+
+    _set_author(BASE_STRIPE)
+    sid = "tt-fork-bogus"
+    sg.run_turn(sid, prompt="stripes")
+    before = sg.list_turn_checkpoints(sid)
+
+    resp = client.post(
+        "/api/v1/generate",
+        json={"session_id": sid, "prompt": "again", "from_checkpoint": "not-a-real-id"},
+    )
+    assert resp.status_code == 404
+    assert "not-a-real-id" in str(resp.json()["detail"])
+    # no silent head move: the bogus fork must not have authored a new turn
+    assert sg.list_turn_checkpoints(sid) == before
+
+
+def test_fork_cross_session_checkpoint_is_404(fake_preview):
+    import app.sessions.graph as sg
+
+    _set_author(BASE_STRIPE)
+    sg.run_turn("tt-cross-a", prompt="stripes")
+    cp_a = sg.list_turn_checkpoints("tt-cross-a")[0]["checkpoint_id"]
+
+    sg.run_turn("tt-cross-b", prompt="stripes")
+    before = sg.list_turn_checkpoints("tt-cross-b")
+
+    resp = client.post(
+        "/api/v1/generate",
+        json={"session_id": "tt-cross-b", "prompt": "again", "from_checkpoint": cp_a},
+    )
+    assert resp.status_code == 404
+    assert sg.list_turn_checkpoints("tt-cross-b") == before

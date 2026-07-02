@@ -27,8 +27,9 @@ _FINALIZE_DESCRIPTION = """
 원단 텍스처를 Pillow로 합성해 "천 느낌" PNG를 만듭니다. 외부 생성 API를 호출하지 않는
 무료·로컬 파생 출력이며 seamless를 유지합니다.
 
-`weave`는 `solid | twill | jacquard`이고, `material_map`으로 color slot별 서로 다른 질감을
-지정할 수 있습니다(미지정 slot은 `weave`로 폴백, 비우면 균일). 결과 PNG는 Supabase Storage에
+`weave`는 assets/fabric의 PNG 파일명입니다(현재: `check | herringbone | jacquard | pindot |
+solid | twill-0 | twill-45`; print는 `twill-*`만). `material_map`으로 color slot별 서로 다른
+질감을 지정할 수 있습니다(미지정 slot은 `weave`로 폴백, 비우면 균일). 결과 PNG는 Supabase Storage에
 업로드되어 `image_url`로 반환되며, storage 미설정 시 `image_url`은 `null`이고 `warnings`에
 안내가 추가됩니다.
 """.strip()

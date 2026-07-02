@@ -115,7 +115,6 @@ def author_intent(state: SessionState) -> dict:
         "warnings": warnings,
         "material_map": state.get("material_map") or {},
         "budget": state.get("budget") or new_budget(),
-        "pending": None,
         "validate_errors": [],
         "edit_retried": False,
         "turns": (state.get("turns") or []) + [{"role": "user", "text": state["prompt"]}],
@@ -141,7 +140,6 @@ def edit_intent(state: SessionState) -> dict:
         "working_intent": outcome.intent,
         "pending_specs": list(outcome.motif_specs),
         "warnings": list(outcome.warnings),
-        "pending": None,
         "validate_errors": [],
         "edit_retried": bool(errors),  # this pass IS the retry when errors were fed in
         "turns": (state.get("turns") or [])
@@ -278,7 +276,6 @@ def commit(state: SessionState) -> dict:
         "render_batch": render_batch,
         "registry_version": reg,
         "warnings": list(state.get("warnings") or []) + list(result.warnings),
-        "pending": None,
         "pending_specs": [],
         "working_intent": None,
         "validate_errors": [],
@@ -411,7 +408,6 @@ def list_turn_checkpoints(session_id: str) -> list[dict]:
         and (snap.metadata or {}).get("source") == "loop"
         and snap.values.get("current_intent")
         and not snap.values.get("validate_errors")
-        and not snap.interrupts
     ]
     out = []
     for snap in reversed(snapshots):  # oldest first
