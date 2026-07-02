@@ -13,7 +13,7 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageChops
 
 from app.engine.composition import compose
 from app.main import app
@@ -93,7 +93,7 @@ _YARN_MAP = {"ground": "solid", "band_a": "twill-45",
 
 def _motif_intent() -> dict:
     """The stripe design plus a registered "circle" motif layer (color slot ``ink``) —
-    exercises the MOTIF_WEAVE default-pin path, which the stripe-only ``_intent`` never
+    exercises motif weave pinning/thread inlay, which stripe-only ``_intent`` never
     reaches."""
     from tests.test_intent import mvp_intent  # noqa: F401  registers the circle motif
 
@@ -228,16 +228,101 @@ def test_relief_keeps_seam():
     assert excess_y <= TILING_SEAM_TOL
 
 
-# --- 4c. MOTIF_WEAVE pin: a default for unmapped motif slots, not an override --
+# --- 4c. yarn-dyed diagonal thread inlay (motif yarn fixed to twill-45) -------
 
 @needs_renderer
-def test_motif_pin_defaults_and_user_map_wins():
+def test_motif_yarn_is_fixed_twill45_regardless_of_base_weave():
+    """Strand pixels are design x MOTIF_WEAVE (twill-45), no matter which weave photo
+    covers the base fabric — motif yarn is one fixed thread stock."""
+    from app.render.fabric import (
+        DEFAULT_TEXTURE_STRENGTH,
+        MOTIF_WEAVE,
+        _apply_weave,
+        _motif_slot_masks,
+        _motif_thread_mask,
+        _render_design,
+    )
+
     intent = _motif_intent()
-    pinned = render_fabric(intent, weave="solid")  # ink unmapped -> MOTIF_WEAVE default
-    overridden = render_fabric(intent, weave="solid", material_map={"ink": "solid"})
-    explicit = render_fabric(intent, weave="solid", material_map={"ink": "twill-45"})
-    assert pinned != overridden  # the pin is real: unmapped motif slot got twill-45, not solid
-    assert pinned == explicit  # ...and it is only a default: an explicit entry matches it
+    r = validate_intent(intent)
+    dpi, tile_mm = r.intent.canvas.dpi, r.intent.canvas.tile_mm
+    masks = _motif_slot_masks(r.intent, r.palette, dpi=dpi, tile_mm=tile_mm)
+    thread = _motif_thread_mask(masks["ink"], dpi=dpi)
+    interior = thread.point(lambda v: 255 if v == 255 else 0)  # fully-covered strand px
+    assert interior.getbbox() is not None
+
+    design = _render_design(r.intent, r.palette, None, dpi=dpi, tile_mm=tile_mm)
+    expected = _apply_weave(design, MOTIF_WEAVE, DEFAULT_TEXTURE_STRENGTH)
+    for weave in ("solid", "herringbone"):
+        woven = Image.open(
+            io.BytesIO(render_fabric(intent, weave=weave, relief_strength=0))
+        ).convert("RGB")
+        diff = ImageChops.difference(woven, expected).convert("L")
+        assert ImageChops.multiply(diff, interior).getbbox() is None
+
+
+def test_thread_step_near_target_even_for_prime_tile_sizes():
+    """787px/1181px (100mm @ 200/300dpi) are prime: an integer-divisor period would
+    collapse to one tile-wide strand. The rational step must stay near the mm target
+    and divide the tile exactly (seam phase)."""
+    from app.render.fabric import MOTIF_THREAD_PERIOD_MM, _thread_period_width
+
+    for dpi, w in ((150, 591), (200, 787), (300, 1181)):
+        target = MOTIF_THREAD_PERIOD_MM * dpi / 25.4
+        step, width = _thread_period_width((w, w), dpi=dpi)
+        assert abs(float(step) - target) <= 1.0
+        assert 1 <= width < step
+        assert (w / step).denominator == 1  # exact integer multiple -> seamless
+
+
+@needs_renderer
+def test_yarn_dyed_motif_uses_diagonal_thread_inlay():
+    from app.render.fabric import (
+        _motif_thread_mask,
+        _motif_slot_masks,
+    )
+
+    intent = _motif_intent()
+    base_intent = {
+        **intent,
+        "layers": [l for l in intent["layers"] if l["type"] != "motif"],
+    }
+    threaded = Image.open(
+        io.BytesIO(render_fabric(intent, weave="solid", relief_strength=0))
+    ).convert("RGB")
+    base = Image.open(
+        io.BytesIO(render_fabric(base_intent, weave="solid", relief_strength=0))
+    ).convert("RGB")
+
+    r = validate_intent(intent)
+    motif_mask = _motif_slot_masks(
+        r.intent,
+        r.palette,
+        dpi=r.intent.canvas.dpi,
+        tile_mm=r.intent.canvas.tile_mm,
+    )["ink"]
+    thread_mask = _motif_thread_mask(motif_mask, dpi=r.intent.canvas.dpi)
+    motif_binary = motif_mask.point(lambda v: 255 if v else 0)
+    thread_inside = ImageChops.multiply(
+        thread_mask.point(lambda v: 255 if v else 0), motif_binary
+    )
+    gap_mask = ImageChops.subtract(motif_binary, thread_inside)
+    assert thread_mask.getbbox() is not None
+    assert gap_mask.getbbox() is not None
+
+    diff_from_base = ImageChops.difference(threaded, base).convert("L")
+    assert (
+        ImageChops.multiply(
+            diff_from_base, gap_mask.point(lambda v: 255 if v else 0)
+        ).getbbox()
+        is None
+    )
+    assert (
+        ImageChops.multiply(
+            diff_from_base, thread_mask.point(lambda v: 255 if v else 0)
+        ).getbbox()
+        is not None
+    )
 
 
 @needs_renderer
