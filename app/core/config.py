@@ -67,11 +67,13 @@ class Settings(BaseSettings):
     # Embedding model (session 11, D12). app.main requires openai_api_key and installs an
     # OpenAIEmbeddingClient as the default. Unit tests can still call the resolver with no
     # client to exercise exact/hard-filter behavior.
-    # motif_similarity_tau is the cosine threshold for "reuse vs generate"; it is a
-    # reuse-first start value (spec §6.1/D13) pending empirical calibration (spec §12).
+    # motif_similarity_tau is the cosine threshold for "reuse vs generate"; calibrated
+    # in S19 via the scripts/eval_motif_retrieval.py sweep against the labelset (zero-
+    # false-reuse rule; impostor ceiling 0.832) -- re-run --embed + recalibrate if
+    # EMBEDDING_MODEL or the labelset changes (tests/test_retrieval_eval.py pins this).
     openai_api_key: str | None = None  # env: OPENAI_API_KEY
     embedding_model: str = "text-embedding-3-small"  # env: EMBEDDING_MODEL
-    motif_similarity_tau: float = Field(0.60, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
+    motif_similarity_tau: float = Field(0.84, ge=0.0, le=1.0)  # env: MOTIF_SIMILARITY_TAU
 
     # Conversational sessions (session 16). Interactive motif reuse presents this many
     # free candidates before offering "generate new" (Recraft) behind a confirm gate.
